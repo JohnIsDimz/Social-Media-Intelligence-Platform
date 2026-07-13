@@ -2832,7 +2832,7 @@ export default function App() {
                   <input
                     type="text"
                     required
-                    placeholder={newTrackerType === 'brand' ? "Contoh: Gojek Indonesia" : "Contoh: AiStudio"}
+                    placeholder={newTrackerType === 'brand' ? "Contoh: Gojek Indonesia" : "Contoh: MediaTrend"}
                     value={newTrackerQuery}
                     onChange={(e) => setNewTrackerQuery(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 text-sm"
