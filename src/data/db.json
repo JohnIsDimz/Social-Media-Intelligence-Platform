@@ -1,0 +1,169 @@
+{
+  "trackers": [
+    {
+      "id": "t-1",
+      "type": "brand",
+      "query": "Gojek Indonesia",
+      "platforms": ["tiktok", "instagram", "facebook", "whatsapp"],
+      "createdAt": "2026-07-01T10:00:00.000Z"
+    },
+    {
+      "id": "t-2",
+      "type": "hashtag",
+      "query": "AiStudio",
+      "platforms": ["tiktok", "instagram"],
+      "createdAt": "2026-07-02T11:30:00.000Z"
+    },
+    {
+      "id": "t-3",
+      "type": "brand",
+      "query": "Kopi Kenangan",
+      "platforms": ["instagram", "tiktok"],
+      "createdAt": "2026-07-05T08:15:00.000Z"
+    }
+  ],
+  "analyzedPosts": [
+    {
+      "id": "ap-1",
+      "url": "https://www.instagram.com/p/C-example1",
+      "platform": "instagram",
+      "title": "Gojek Kolaborasi dengan BTS",
+      "description": "Kolaborasi terbaru Gojek menghadirkan merch eksklusif BTS di Indonesia! Pecinta Army wajib merapat dan pesan GoFood sekarang juga.",
+      "imageUrl": "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=300&q=80",
+      "sentiment": "positive",
+      "sentimentScore": 0.85,
+      "emotion": "Joy",
+      "engagement": "High",
+      "hashtags": ["Gojek", "BTS", "GoFood", "ArmyIndo"],
+      "analyzedAt": "2026-07-10T14:30:00.000Z"
+    },
+    {
+      "id": "ap-2",
+      "url": "https://www.tiktok.com/@tiktokid/video/738291039",
+      "platform": "tiktok",
+      "title": "Unboxing Merch Eksklusif Kopi Kenangan",
+      "description": "Beli kopi dapet tumbler super estetik! Desainnya minimalis abis, buruan diserbu sebelum kehabisan guys.",
+      "imageUrl": "https://images.unsplash.com/photo-1507133750040-4a8f57021571?w=300&q=80",
+      "sentiment": "positive",
+      "sentimentScore": 0.9,
+      "emotion": "Love",
+      "engagement": "High",
+      "hashtags": ["KopiKenangan", "TumblerAesthetic", "KopiLover"],
+      "analyzedAt": "2026-07-11T09:15:00.000Z"
+    },
+    {
+      "id": "ap-3",
+      "url": "https://www.facebook.com/groups/techid/posts/9210",
+      "platform": "facebook",
+      "title": "Keluhan Aplikasi Driver Gojek Sering Log Out",
+      "description": "Ada yang ngalamin aplikasi driver Gojek sering log out sendiri hari ini? Mengganggu banget pas lagi narik orderan siang-siang gini.",
+      "imageUrl": "https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=300&q=80",
+      "sentiment": "negative",
+      "sentimentScore": -0.75,
+      "emotion": "Anger",
+      "engagement": "Medium",
+      "hashtags": ["GojekDriver", "ErrorSystem", "DriverOnline"],
+      "analyzedAt": "2026-07-12T12:00:00.000Z"
+    },
+    {
+      "id": "ap-4",
+      "url": "https://chat.whatsapp.com/invite/group-dummy",
+      "platform": "whatsapp",
+      "title": "WhatsApp Channel: Komunitas Saham Indonesia",
+      "description": "Analisis teknikal IHSG pagi ini menunjukkan penguatan tipis. Perhatikan saham-saham perbankan big cap untuk swing trading minggu ini.",
+      "imageUrl": "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=300&q=80",
+      "sentiment": "neutral",
+      "sentimentScore": 0.1,
+      "emotion": "Neutral",
+      "engagement": "Low",
+      "hashtags": ["IHSG", "TradingSaham", "SahamID"],
+      "analyzedAt": "2026-07-13T01:45:00.000Z"
+    }
+  ],
+  "monitorResults": [
+    {
+      "id": "mr-1",
+      "trackerId": "t-1",
+      "platform": "instagram",
+      "url": "https://www.instagram.com/p/C-gojek1",
+      "author": "@kemal.reza",
+      "title": "Review Layanan GoCar Instant di Bandara",
+      "content": "Sangat membantu! Ga perlu nunggu lama di bandara Soekarno-Hatta. GoCar Instant langsung dateng ga sampe 3 menit. Drivernya juga ramah bgt.",
+      "sentiment": "positive",
+      "sentimentScore": 0.85,
+      "emotion": "Joy",
+      "engagement": "High",
+      "date": "2026-07-12T04:20:00.000Z"
+    },
+    {
+      "id": "mr-2",
+      "trackerId": "t-1",
+      "platform": "tiktok",
+      "url": "https://www.tiktok.com/@gofoodfan/video/102930",
+      "author": "@gofoodfan",
+      "title": "Makan Hemat GoFood Mode Hemat",
+      "content": "Cobain makan siang pake GoFood mode hemat cuma abis 15 ribu udah sama ongkir! Beneran hemat dan makanannya dateng anget-anget.",
+      "sentiment": "positive",
+      "sentimentScore": 0.95,
+      "emotion": "Joy",
+      "engagement": "High",
+      "date": "2026-07-12T16:45:00.000Z"
+    },
+    {
+      "id": "mr-3",
+      "trackerId": "t-1",
+      "platform": "facebook",
+      "url": "https://www.facebook.com/photo.php?fbid=839103",
+      "author": "Komunitas Pengguna Jaksel",
+      "title": "Sinyal GPS Driver Gojek Sering Melompat",
+      "content": "Kenapa ya map Gojek belakangan ini agak ngaco? Sering dapet driver yang posisinya jauh padahal di aplikasi keliatan deket banget.",
+      "sentiment": "negative",
+      "sentimentScore": -0.4,
+      "emotion": "Sadness",
+      "engagement": "Medium",
+      "date": "2026-07-13T02:10:00.000Z"
+    },
+    {
+      "id": "mr-4",
+      "trackerId": "t-2",
+      "platform": "tiktok",
+      "url": "https://www.tiktok.com/@codermantap/video/829103",
+      "author": "@codermantap",
+      "title": "Bikin App Fullstack Cepat Pakai AiStudio",
+      "content": "Gokil bgt platform AiStudio ini. Cuma ketik prompt dlm bahasa Indonesia, langsung dibuatin server Express + React lengkap ga pake ribet! #AiStudio",
+      "sentiment": "positive",
+      "sentimentScore": 0.98,
+      "emotion": "Joy",
+      "engagement": "High",
+      "date": "2026-07-11T13:20:00.000Z"
+    },
+    {
+      "id": "mr-5",
+      "trackerId": "t-3",
+      "platform": "instagram",
+      "url": "https://www.instagram.com/p/C-kopi1",
+      "author": "@coffee.geek",
+      "title": "Kopi Susu Kenangan Mantan Rasa Berubah?",
+      "content": "Kalian ngerasa ga sih rasa Kopi Susu Kenangan Mantan akhir-akhir ini agak hambar dibanding biasanya? Apa takarannya diganti ya?",
+      "sentiment": "negative",
+      "sentimentScore": -0.3,
+      "emotion": "Sadness",
+      "engagement": "Medium",
+      "date": "2026-07-12T10:15:00.000Z"
+    },
+    {
+      "id": "mr-6",
+      "trackerId": "t-1",
+      "platform": "whatsapp",
+      "url": "https://chat.whatsapp.com/invite/group-gojek",
+      "author": "Gojek Promo Hunter",
+      "title": "Kode Voucher GoRide & GoCar Terbaru",
+      "content": "Gunakan kode voucher GOBANDARA buat potongan harga GoCar ke Bandara diskon up to 50%! Terbatas ya buruan dipake.",
+      "sentiment": "positive",
+      "sentimentScore": 0.7,
+      "emotion": "Surprise",
+      "engagement": "Medium",
+      "date": "2026-07-13T05:00:00.000Z"
+    }
+  ]
+}
