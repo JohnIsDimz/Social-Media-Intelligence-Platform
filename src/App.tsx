@@ -45,7 +45,7 @@ import {
   Bar,
   Legend
 } from "recharts";
-import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport } from "./types";
+import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport, Competitor } from "./types";
 
 const fallbackPredictions: AIPredictionReport = {
   summary: "Berdasarkan analisis tren sentimen 7 hari terakhir, brand Anda menunjukkan tingkat kepuasan publik yang cukup stabil dengan sedikit fluktuasi negatif akibat keluhan teknis. AI memperkirakan adanya perbaikan sentimen dalam 3 hari ke depan seiring respons tim yang cepat.",
@@ -156,6 +156,13 @@ export default function App() {
   const [predictions, setPredictions] = useState<AIPredictionReport | null>(null);
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
 
+  // Competitor Monitoring State
+  const [competitors, setCompetitors] = useState<Competitor[]>([]);
+  const [newCompetitorName, setNewCompetitorName] = useState("");
+  const [isAddingCompetitor, setIsAddingCompetitor] = useState(false);
+  const [isLoadingCompetitors, setIsLoadingCompetitors] = useState(false);
+  const [hoveredBrandId, setHoveredBrandId] = useState<string | null>(null);
+
   // Real-Time WebSocket and Live Telemetry State
   const [liveUpdates, setLiveUpdates] = useState<any[]>([]);
   const [webSocketStatus, setWebSocketStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'polling'>('connecting');
@@ -186,23 +193,26 @@ export default function App() {
 
   const fetchInitialDataSilent = async () => {
     try {
-      const [trackersRes, analyzedRes, statsRes, allMonitoredRes] = await Promise.all([
+      const [trackersRes, analyzedRes, statsRes, allMonitoredRes, competitorsRes] = await Promise.all([
         fetch("/api/trackers"),
         fetch("/api/analyzed-posts"),
         fetch(`/api/dashboard-stats?range=${timeRange}`),
-        fetch("/api/monitor-results")
+        fetch("/api/monitor-results"),
+        fetch("/api/competitors")
       ]);
 
-      if (trackersRes.ok && analyzedRes.ok && statsRes.ok && allMonitoredRes.ok) {
+      if (trackersRes.ok && analyzedRes.ok && statsRes.ok && allMonitoredRes.ok && competitorsRes.ok) {
         const trackersData = await trackersRes.json();
         const analyzedData = await analyzedRes.json();
         const statsData = await statsRes.json();
         const allMonitoredData = await allMonitoredRes.json();
+        const competitorsData = await competitorsRes.json();
 
         setTrackers(trackersData);
         setAnalyzedPosts(analyzedData);
         setStats(statsData);
         setAllMonitorResults(allMonitoredData);
+        setCompetitors(competitorsData);
 
         if (selectedTrackerIdRef.current) {
           const res = await fetch(`/api/monitor-results?trackerId=${selectedTrackerIdRef.current}`);
@@ -507,18 +517,113 @@ export default function App() {
     };
   };
 
+  const getMainBrandSentimentBreakdown = () => {
+    const cutoffDate = new Date();
+    const rangeDays = parseInt(timeRange) || 7;
+    cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
+
+    const combined = [
+      ...analyzedPosts.map(p => ({ ...p, date: p.analyzedAt })),
+      ...allMonitorResults
+    ].filter(item => {
+      const dateStr = item.date;
+      if (!dateStr) return true;
+      return new Date(dateStr) >= cutoffDate;
+    });
+
+    const total = combined.length || 1;
+    let posCount = 0;
+    let neuCount = 0;
+    let negCount = 0;
+
+    combined.forEach(item => {
+      if (item.sentiment === "positive") posCount++;
+      else if (item.sentiment === "negative") negCount++;
+      else neuCount++;
+    });
+
+    const positive = Math.round((posCount / total) * 100);
+    const negative = Math.round((negCount / total) * 100);
+    const neutral = Math.max(0, 100 - positive - negative);
+
+    return {
+      positive,
+      neutral,
+      negative,
+      totalCount: combined.length
+    };
+  };
+
+  const fetchCompetitors = async () => {
+    setIsLoadingCompetitors(true);
+    try {
+      const res = await fetch("/api/competitors");
+      if (res.ok) {
+        const data = await res.json();
+        setCompetitors(data);
+      }
+    } catch (err) {
+      console.error("Gagal mengambil data kompetitor:", err);
+    } finally {
+      setIsLoadingCompetitors(false);
+    }
+  };
+
+  const addCompetitor = async (name: string) => {
+    if (!name.trim()) return;
+    setIsAddingCompetitor(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/competitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Gagal menambahkan kompetitor.");
+      }
+      const newComp = await res.json();
+      setCompetitors(prev => [...prev, newComp]);
+      setNewCompetitorName("");
+      setSuccessMessage(`Berhasil menambahkan kompetitor "${newComp.name}" dengan analisis sentimen.`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsAddingCompetitor(false);
+    }
+  };
+
+  const deleteCompetitor = async (id: string, name: string) => {
+    if (!confirm(`Apakah Anda yakin ingin menghapus kompetitor "${name}"?`)) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/competitors/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error("Gagal menghapus kompetitor.");
+      }
+      setCompetitors(prev => prev.filter(c => c.id !== id));
+      setSuccessMessage(`Kompetitor "${name}" berhasil dihapus.`);
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const fetchInitialData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [trackersRes, analyzedRes, statsRes, allMonitoredRes] = await Promise.all([
+      const [trackersRes, analyzedRes, statsRes, allMonitoredRes, competitorsRes] = await Promise.all([
         fetch("/api/trackers"),
         fetch("/api/analyzed-posts"),
         fetch(`/api/dashboard-stats?range=${timeRange}`),
-        fetch("/api/monitor-results")
+        fetch("/api/monitor-results"),
+        fetch("/api/competitors")
       ]);
 
-      if (!trackersRes.ok || !analyzedRes.ok || !statsRes.ok || !allMonitoredRes.ok) {
+      if (!trackersRes.ok || !analyzedRes.ok || !statsRes.ok || !allMonitoredRes.ok || !competitorsRes.ok) {
         throw new Error("Gagal mengambil data dari server.");
       }
 
@@ -526,11 +631,13 @@ export default function App() {
       const analyzedData = await analyzedRes.json();
       const statsData = await statsRes.json();
       const allMonitoredData = await allMonitoredRes.json();
+      const competitorsData = await competitorsRes.json();
 
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
       setAllMonitorResults(allMonitoredData);
+      setCompetitors(competitorsData);
 
       if (trackersData.length > 0) {
         setSelectedTrackerId(trackersData[0].id);
@@ -1725,6 +1832,327 @@ export default function App() {
                     </button>
                   </motion.div>
                 </div>
+
+                {/* 1.3 Competitor Monitoring Section */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, ease: "easeOut", delay: 0.4 }}
+                  className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-6"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                          <Activity className="h-5 w-5" />
+                        </span>
+                        <h3 className="text-base font-bold text-slate-900 font-display">Kompetitor Monitoring</h3>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">Bandingkan skor sentimen brand Anda dengan pesaing utama di pasar secara langsung.</p>
+                    </div>
+
+                    <form 
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!newCompetitorName.trim()) return;
+                        addCompetitor(newCompetitorName);
+                      }}
+                      className="flex items-center gap-2 max-w-md w-full md:w-auto"
+                    >
+                      <input
+                        type="text"
+                        value={newCompetitorName}
+                        onChange={(e) => setNewCompetitorName(e.target.value)}
+                        placeholder="Masukkan nama brand kompetitor..."
+                        disabled={isAddingCompetitor}
+                        className="flex-1 bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white text-xs px-3.5 py-2.5 rounded-xl outline-none transition-all disabled:opacity-60"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isAddingCompetitor || !newCompetitorName.trim()}
+                        className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
+                      >
+                        {isAddingCompetitor ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <span>Menganalisis...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="h-4 w-4" />
+                            <span>Tambah Brand</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Sentiment Bar Comparison */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="lg:col-span-7 flex flex-col gap-4">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Grafik Perbandingan Skor Sentimen</h4>
+                      
+                      <div className="flex flex-col gap-4.5 bg-slate-50/50 p-5 rounded-2xl border border-slate-100">
+                        {/* Active Brand Row */}
+                        <div 
+                          className="relative flex flex-col gap-1.5 group cursor-help select-none"
+                          onMouseEnter={() => setHoveredBrandId("main-brand")}
+                          onMouseLeave={() => setHoveredBrandId(null)}
+                        >
+                          <div className="flex items-center justify-between text-xs transition-colors group-hover:text-indigo-900">
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2.5 w-2.5 rounded-full bg-indigo-600 group-hover:scale-125 transition-transform duration-200" />
+                              <span className="font-bold text-indigo-950">
+                                {trackers.find(t => t.id === selectedTrackerId)?.query || "Brand Utama Anda"} (Brand Utama)
+                              </span>
+                            </div>
+                            <span className={`font-mono font-bold ${(stats?.averageScore || 0) > 0 ? "text-emerald-600" : (stats?.averageScore || 0) < 0 ? "text-rose-600" : "text-slate-600"}`}>
+                              {(stats?.averageScore || 0) > 0 ? "+" : ""}{(stats?.averageScore || 0).toFixed(2)}
+                            </span>
+                          </div>
+                          
+                          {/* Progress bar container */}
+                          <div className="h-7 w-full bg-slate-100 rounded-lg overflow-hidden flex relative border border-slate-200 shadow-inner group-hover:border-indigo-400 group-hover:shadow-md transition-all duration-300">
+                            {/* Positive portion */}
+                            <div 
+                              style={{ width: `${stats ? Math.max(0, (stats.averageScore + 1) / 2 * 100) : 50}%` }}
+                              className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-full transition-all duration-500 group-hover:brightness-110"
+                            />
+                            {/* Center divider line */}
+                            <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-slate-300" />
+                          </div>
+                          
+                          <div className="flex justify-between text-[10px] text-slate-400 font-mono px-0.5">
+                            <span>Sangat Negatif (-1.0)</span>
+                            <span className="font-semibold text-slate-500">Netral (0.0)</span>
+                            <span>Sangat Positif (+1.0)</span>
+                          </div>
+
+                          {/* Floating Detailed Tooltip */}
+                          <AnimatePresence>
+                            {hoveredBrandId === "main-brand" && (
+                              <motion.div
+                                initial={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
+                                animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+                                exit={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
+                                transition={{ duration: 0.15, ease: "easeOut" }}
+                                className="absolute bottom-full left-1/2 mb-3 z-40 w-68 bg-slate-950/95 backdrop-blur-md text-white border border-slate-800 p-4 rounded-2xl shadow-2xl pointer-events-none"
+                              >
+                                <div className="flex flex-col gap-2">
+                                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                    <span className="text-xs font-bold text-indigo-400">
+                                      {trackers.find(t => t.id === selectedTrackerId)?.query || "Brand Utama Anda"}
+                                    </span>
+                                    <span className="text-[10px] font-semibold text-slate-400 font-mono">Brand Utama</span>
+                                  </div>
+
+                                  <div className="flex items-center justify-between my-1">
+                                    <span className="text-[11px] text-slate-400">Skor Sentimen AI:</span>
+                                    <span className={`text-xs font-bold font-mono ${(stats?.averageScore || 0) > 0 ? "text-emerald-400" : (stats?.averageScore || 0) < 0 ? "text-rose-400" : "text-slate-400"}`}>
+                                      {(stats?.averageScore || 0) > 0 ? "+" : ""}{(stats?.averageScore || 0).toFixed(2)}
+                                    </span>
+                                  </div>
+
+                                  {/* Mini segment bars */}
+                                  <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden flex my-1.5">
+                                    <div style={{ width: `${getMainBrandSentimentBreakdown().positive}%` }} className="bg-emerald-500 h-full transition-all" />
+                                    <div style={{ width: `${getMainBrandSentimentBreakdown().neutral}%` }} className="bg-slate-400 h-full transition-all" />
+                                    <div style={{ width: `${getMainBrandSentimentBreakdown().negative}%` }} className="bg-rose-500 h-full transition-all" />
+                                  </div>
+
+                                  <div className="flex flex-col gap-1 text-[11px]">
+                                    <div className="flex items-center justify-between text-emerald-400">
+                                      <div className="flex items-center gap-1">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                        <span>Sentimen Positif</span>
+                                      </div>
+                                      <span className="font-mono font-bold">+{getMainBrandSentimentBreakdown().positive}%</span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-slate-300">
+                                      <div className="flex items-center gap-1">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                                        <span>Sentimen Netral</span>
+                                      </div>
+                                      <span className="font-mono font-bold">{getMainBrandSentimentBreakdown().neutral}%</span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-rose-400">
+                                      <div className="flex items-center gap-1">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                                        <span>Sentimen Negatif</span>
+                                      </div>
+                                      <span className="font-mono font-bold">-{getMainBrandSentimentBreakdown().negative}%</span>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="text-[9px] text-slate-500 border-t border-slate-800 pt-1.5 text-center font-mono">
+                                    Berdasarkan {getMainBrandSentimentBreakdown().totalCount} total analisis
+                                  </div>
+                                </div>
+
+                                {/* Tooltip Arrow */}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-950" />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+
+                        {/* Competitor Brands Rows */}
+                        {competitors.length > 0 ? (
+                          competitors.map((comp) => (
+                            <div 
+                              key={comp.id} 
+                              className="relative flex flex-col gap-1.5 border-t border-slate-100/80 pt-4.5 group cursor-help select-none"
+                              onMouseEnter={() => setHoveredBrandId(comp.id)}
+                              onMouseLeave={() => setHoveredBrandId(null)}
+                            >
+                              <div className="flex items-center justify-between text-xs transition-colors group-hover:text-slate-900">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="h-2.5 w-2.5 rounded-full bg-slate-400 group-hover:scale-125 transition-transform duration-200" />
+                                  <span className="font-semibold text-slate-700">{comp.name}</span>
+                                </div>
+                                <span className={`font-mono font-bold ${comp.sentimentScore > 0 ? "text-emerald-600" : comp.sentimentScore < 0 ? "text-rose-600" : "text-slate-600"}`}>
+                                  {comp.sentimentScore > 0 ? "+" : ""}{comp.sentimentScore.toFixed(2)}
+                                </span>
+                              </div>
+                              <div className="h-7 w-full bg-slate-100 rounded-lg overflow-hidden flex relative border border-slate-200 group-hover:border-slate-400 group-hover:shadow-md transition-all duration-300">
+                                <div 
+                                  style={{ width: `${Math.max(0, (comp.sentimentScore + 1) / 2 * 100)}%` }}
+                                  className="bg-gradient-to-r from-slate-400 to-slate-500 h-full transition-all duration-500 group-hover:brightness-110"
+                                />
+                                <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-slate-300" />
+                              </div>
+
+                              {/* Floating Detailed Tooltip */}
+                              <AnimatePresence>
+                                {hoveredBrandId === comp.id && (
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
+                                    animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+                                    exit={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
+                                    transition={{ duration: 0.15, ease: "easeOut" }}
+                                    className="absolute bottom-full left-1/2 mb-3 z-40 w-68 bg-slate-950/95 backdrop-blur-md text-white border border-slate-800 p-4 rounded-2xl shadow-2xl pointer-events-none"
+                                  >
+                                    <div className="flex flex-col gap-2">
+                                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                        <span className="text-xs font-bold text-amber-400">
+                                          {comp.name}
+                                        </span>
+                                        <span className="text-[10px] font-semibold text-slate-400 font-mono">Pesaing</span>
+                                      </div>
+
+                                      <div className="flex items-center justify-between my-1">
+                                        <span className="text-[11px] text-slate-400">Skor Sentimen AI:</span>
+                                        <span className={`text-xs font-bold font-mono ${comp.sentimentScore > 0 ? "text-emerald-400" : comp.sentimentScore < 0 ? "text-rose-400" : "text-slate-400"}`}>
+                                          {comp.sentimentScore > 0 ? "+" : ""}{comp.sentimentScore.toFixed(2)}
+                                        </span>
+                                      </div>
+
+                                      {/* Mini segment bars */}
+                                      <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden flex my-1.5">
+                                        <div style={{ width: `${comp.positive}%` }} className="bg-emerald-500 h-full transition-all" />
+                                        <div style={{ width: `${comp.neutral}%` }} className="bg-slate-400 h-full transition-all" />
+                                        <div style={{ width: `${comp.negative}%` }} className="bg-rose-500 h-full transition-all" />
+                                      </div>
+
+                                      <div className="flex flex-col gap-1 text-[11px]">
+                                        <div className="flex items-center justify-between text-emerald-400">
+                                          <div className="flex items-center gap-1">
+                                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                            <span>Sentimen Positif</span>
+                                          </div>
+                                          <span className="font-mono font-bold">+{comp.positive}%</span>
+                                        </div>
+                                        <div className="flex items-center justify-between text-slate-300">
+                                          <div className="flex items-center gap-1">
+                                            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                                            <span>Sentimen Netral</span>
+                                          </div>
+                                          <span className="font-mono font-bold">{comp.neutral}%</span>
+                                        </div>
+                                        <div className="flex items-center justify-between text-rose-400">
+                                          <div className="flex items-center gap-1">
+                                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                                            <span>Sentimen Negatif</span>
+                                          </div>
+                                          <span className="font-mono font-bold">-{comp.negative}%</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="text-[9px] text-slate-500 border-t border-slate-800 pt-1.5 text-center font-mono">
+                                        Dianalisis secara real-time via AI
+                                      </div>
+                                    </div>
+
+                                    {/* Tooltip Arrow */}
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-950" />
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="h-24 flex items-center justify-center text-xs text-slate-400 italic">
+                            Belum ada brand kompetitor terdaftar. Masukkan nama brand di atas untuk membandingkan.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-5 flex flex-col gap-4">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Sebaran Sentimen Kompetitor</h4>
+                      
+                      <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto pr-1">
+                        {competitors.map((comp) => {
+                          const total = comp.positive + comp.neutral + comp.negative;
+                          return (
+                            <div key={comp.id} className="bg-slate-50 p-3.5 rounded-xl border border-slate-100/80 flex flex-col gap-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-slate-800">{comp.name}</span>
+                                <button
+                                  onClick={() => deleteCompetitor(comp.id, comp.name)}
+                                  className="text-slate-400 hover:text-rose-600 p-1 rounded-md hover:bg-rose-50 transition-all cursor-pointer"
+                                  title="Hapus Kompetitor"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+
+                              {/* Mini Percentage Bar */}
+                              <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                                <div style={{ width: `${comp.positive}%` }} className="bg-emerald-500 h-full" title={`Positif: ${comp.positive}%`} />
+                                <div style={{ width: `${comp.neutral}%` }} className="bg-slate-400 h-full" title={`Netral: ${comp.neutral}%`} />
+                                <div style={{ width: `${comp.negative}%` }} className="bg-rose-500 h-full" title={`Negatif: ${comp.negative}%`} />
+                              </div>
+
+                              {/* Percent breakdown labels */}
+                              <div className="grid grid-cols-3 gap-2 text-[10px] text-center font-semibold font-mono">
+                                <div className="text-emerald-700 bg-emerald-50 py-0.5 px-1.5 rounded-md">
+                                  +{comp.positive}% Positif
+                                </div>
+                                <div className="text-slate-700 bg-slate-100 py-0.5 px-1.5 rounded-md">
+                                  {comp.neutral}% Netral
+                                </div>
+                                <div className="text-rose-700 bg-rose-50 py-0.5 px-1.5 rounded-md">
+                                  -{comp.negative}% Negatif
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {competitors.length === 0 && (
+                          <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                            <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-1.5" />
+                            <p className="text-xs font-bold text-slate-500">Analisis Kosong</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5 max-w-[200px]">
+                              Belum ada sebaran data. Tambahkan brand pesaing Anda sekarang.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
               </motion.div>
             )}
 

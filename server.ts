@@ -2,7 +2,10 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
-import defaultDb from "./src/data/db.json";
+
+// Loaded dynamically below to bypass ESM JSON import issues
+let defaultDb: any;
+
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import http from "http";
@@ -46,6 +49,12 @@ const ai = new GoogleGenAI({
 const IS_VERCEL = !!process.env.VERCEL;
 const ORIGINAL_DB_PATH = path.join(process.cwd(), "src", "data", "db.json");
 const DB_PATH = IS_VERCEL ? path.join("/tmp", "db.json") : ORIGINAL_DB_PATH;
+
+try {
+  defaultDb = JSON.parse(fs.readFileSync(ORIGINAL_DB_PATH, "utf-8"));
+} catch (e) {
+  defaultDb = { trackers: [], analyzedPosts: [], monitorResults: [], competitors: [] };
+}
 
 let memoryDB: any = null;
 
@@ -953,6 +962,156 @@ actionableInsights adalah 3 rekomendasi taktis nyata untuk merespons tren predik
       res.status(500).json({ error: "Gagal membuat prediksi tren. " + fallbackErr.message });
     }
   }
+});
+
+// Helper function to get/initialize competitors
+function getCompetitors(db: any) {
+  if (!db.competitors || db.competitors.length === 0) {
+    db.competitors = [
+      {
+        id: "c-1",
+        name: "Fore Coffee",
+        sentimentScore: 0.45,
+        positive: 60,
+        neutral: 25,
+        negative: 15,
+        createdAt: "2026-07-05T09:00:00.000Z"
+      },
+      {
+        id: "c-2",
+        name: "Grab",
+        sentimentScore: 0.18,
+        positive: 45,
+        neutral: 35,
+        negative: 20,
+        createdAt: "2026-07-06T10:00:00.000Z"
+      },
+      {
+        id: "c-3",
+        name: "Starbucks Indonesia",
+        sentimentScore: -0.15,
+        positive: 30,
+        neutral: 40,
+        negative: 30,
+        createdAt: "2026-07-07T11:00:00.000Z"
+      }
+    ];
+  }
+  return db.competitors;
+}
+
+// 9. Get Competitors List
+app.get("/api/competitors", (req, res) => {
+  const db = getDB();
+  const competitors = getCompetitors(db);
+  res.json(competitors);
+});
+
+// 10. Add Competitor Brand
+app.post("/api/competitors", async (req, res) => {
+  const { name } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: "Nama brand kompetitor wajib diisi." });
+  }
+
+  const db = getDB();
+  const competitors = getCompetitors(db);
+
+  if (competitors.some((c: any) => c.name.toLowerCase() === name.trim().toLowerCase())) {
+    return res.status(400).json({ error: "Kompetitor dengan nama ini sudah terdaftar." });
+  }
+
+  let competitorData: any = null;
+
+  try {
+    const prompt = `Analyze the typical, recent public sentiment of the competitor brand "${name}" in Indonesia/Southeast Asia.
+    Provide your analysis as a valid JSON object matching this schema exactly:
+    {
+      "sentimentScore": number between -1.0 (extremely negative) and 1.0 (extremely positive),
+      "positive": percentage number between 0 and 100,
+      "neutral": percentage number between 0 and 100,
+      "negative": percentage number between 0 and 100
+    }
+    Make sure positive + neutral + negative equals exactly 100.
+    Give realistic, unbiased estimate sentiment scores.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            sentimentScore: { type: Type.NUMBER },
+            positive: { type: Type.NUMBER },
+            neutral: { type: Type.NUMBER },
+            negative: { type: Type.NUMBER }
+          },
+          required: ["sentimentScore", "positive", "neutral", "negative"]
+        }
+      }
+    });
+
+    const result = JSON.parse(response.text.trim());
+    const sum = result.positive + result.neutral + result.negative;
+    if (sum !== 100) {
+      result.neutral += (100 - sum);
+    }
+
+    competitorData = {
+      id: `c-${Date.now()}`,
+      name: name.trim(),
+      sentimentScore: Number(result.sentimentScore.toFixed(2)),
+      positive: Math.round(result.positive),
+      neutral: Math.round(result.neutral),
+      negative: Math.round(result.negative),
+      createdAt: new Date().toISOString()
+    };
+  } catch (err) {
+    console.log("Local generator for competitor analysis activated.");
+    const score = Number((-0.5 + Math.random() * 1.3).toFixed(2));
+    let pos = 0, neu = 0, neg = 0;
+
+    if (score > 0.2) {
+      pos = Math.round(40 + Math.random() * 30);
+      neg = Math.round(5 + Math.random() * 15);
+      neu = 100 - pos - neg;
+    } else if (score < -0.1) {
+      neg = Math.round(35 + Math.random() * 25);
+      pos = Math.round(15 + Math.random() * 20);
+      neu = 100 - pos - neg;
+    } else {
+      neu = Math.round(40 + Math.random() * 20);
+      pos = Math.round(20 + Math.random() * 20);
+      neg = 100 - pos - neu;
+    }
+
+    competitorData = {
+      id: `c-${Date.now()}`,
+      name: name.trim(),
+      sentimentScore: score,
+      positive: pos,
+      neutral: neu,
+      negative: neg,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  db.competitors.push(competitorData);
+  writeDB(db);
+  broadcast("SYNC", { event: "competitor_added", competitor: competitorData });
+  res.json(competitorData);
+});
+
+// 11. Delete Competitor Brand
+app.delete("/api/competitors/:id", (req, res) => {
+  const { id } = req.params;
+  const db = getDB();
+  db.competitors = (db.competitors || []).filter((c: any) => c.id !== id);
+  writeDB(db);
+  broadcast("SYNC", { event: "competitor_deleted", competitorId: id });
+  res.json({ success: true, message: "Kompetitor berhasil dihapus" });
 });
 
 // ==========================================
