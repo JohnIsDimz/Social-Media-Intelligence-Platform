@@ -28,7 +28,8 @@ import {
   Sparkles,
   Brain,
   Menu,
-  X
+  X,
+  Zap
 } from "lucide-react";
 import {
   AreaChart,
@@ -117,6 +118,34 @@ const platformStyles: Record<string, { bg: string, text: string, border: string,
     border: "border-emerald-200",
     color: "#25D366",
     badge: "bg-emerald-100 text-emerald-800"
+  },
+  twitter: {
+    bg: "from-sky-50 to-sky-100/30",
+    text: "text-sky-700",
+    border: "border-sky-200",
+    color: "#1DA1F2",
+    badge: "bg-sky-100 text-sky-800"
+  },
+  youtube: {
+    bg: "from-red-50 to-red-100/30",
+    text: "text-red-700",
+    border: "border-red-200",
+    color: "#FF0000",
+    badge: "bg-red-100 text-red-800"
+  },
+  linkedin: {
+    bg: "from-indigo-50 to-indigo-100/30",
+    text: "text-indigo-700",
+    border: "border-indigo-200",
+    color: "#0A66C2",
+    badge: "bg-indigo-100 text-indigo-800"
+  },
+  reddit: {
+    bg: "from-orange-50 to-orange-100/30",
+    text: "text-orange-700",
+    border: "border-orange-200",
+    color: "#FF4500",
+    badge: "bg-orange-100 text-orange-800"
   }
 };
 
@@ -131,19 +160,19 @@ export default function App() {
   const [monitorResults, setMonitorResults] = useState<MonitorResult[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [allMonitorResults, setAllMonitorResults] = useState<MonitorResult[]>([]);
-  const [comparePlatformA, setComparePlatformA] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp'>('instagram');
-  const [comparePlatformB, setComparePlatformB] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp'>('tiktok');
+  const [comparePlatformA, setComparePlatformA] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit'>('instagram');
+  const [comparePlatformB, setComparePlatformB] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit'>('tiktok');
   
   // Interaction State
   const [urlInput, setUrlInput] = useState("");
   const [textInput, setTextInput] = useState("");
-  const [manualPlatform, setManualPlatform] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'other'>('tiktok');
+  const [manualPlatform, setManualPlatform] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other'>('tiktok');
   const [selectedTrackerId, setSelectedTrackerId] = useState<string>("");
   
   // New Tracker Form State
   const [newTrackerQuery, setNewTrackerQuery] = useState("");
   const [newTrackerType, setNewTrackerType] = useState<'brand' | 'hashtag'>('brand');
-  const [newTrackerPlatforms, setNewTrackerPlatforms] = useState<('tiktok' | 'instagram' | 'facebook' | 'whatsapp')[]>(["tiktok", "instagram"]);
+  const [newTrackerPlatforms, setNewTrackerPlatforms] = useState<('tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit')[]>(["tiktok", "instagram"]);
   const [showAddTrackerModal, setShowAddTrackerModal] = useState(false);
   
   // Loading & Error States
@@ -164,6 +193,27 @@ export default function App() {
   const [isLoadingCompetitors, setIsLoadingCompetitors] = useState(false);
   const [hoveredBrandId, setHoveredBrandId] = useState<string | null>(null);
   const [competitorTimeRange, setCompetitorTimeRange] = useState<'7' | '30' | '90'>('7');
+
+  // Universal Social Signal Aggregator State
+  const [socialSignals, setSocialSignals] = useState<{
+    platformSignals: {
+      platform: string;
+      buzzVolume: number;
+      sentimentScore: number;
+      velocity: number;
+      signalStrength: number;
+      activeUsersCount: number;
+    }[];
+    aggregateIndex: {
+      globalBuzzIndex: number;
+      globalSentimentIndex: number;
+      crossPlatformCoherence: number;
+      dominantPlatform: string;
+      totalSignalsDetected: number;
+      lastAggregatedAt: string;
+    };
+  } | null>(null);
+  const [isLoadingSignals, setIsLoadingSignals] = useState(false);
 
   // Real-Time WebSocket and Live Telemetry State
   const [liveUpdates, setLiveUpdates] = useState<any[]>([]);
@@ -192,12 +242,13 @@ export default function App() {
 
   const fetchInitialDataSilent = async () => {
     try {
-      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData] = await Promise.all([
+      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData, signalsData] = await Promise.all([
         api.get<Tracker[]>("/api/trackers"),
         api.get<AnalyzedPost[]>("/api/analyzed-posts"),
         api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
         api.get<MonitorResult[]>("/api/monitor-results"),
-        api.get<Competitor[]>("/api/competitors")
+        api.get<Competitor[]>("/api/competitors"),
+        api.get<any>("/api/social-signals").catch(() => null)
       ]);
 
       setTrackers(trackersData);
@@ -205,6 +256,9 @@ export default function App() {
       setStats(statsData);
       setAllMonitorResults(allMonitoredData);
       setCompetitors(competitorsData);
+      if (signalsData) {
+        setSocialSignals(signalsData);
+      }
 
       if (selectedTrackerIdRef.current) {
         try {
@@ -366,7 +420,7 @@ export default function App() {
           const randomTracker = trackers[Math.floor(Math.random() * trackers.length)];
           const platforms = randomTracker.platforms && randomTracker.platforms.length > 0 
             ? randomTracker.platforms 
-            : ["tiktok", "instagram", "facebook", "whatsapp"];
+            : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
           const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
           
           const sampleKeywords = ["promo", "produk", "layanan", "viral", "tren", "bagus", "kecewa", "mantap"];
@@ -649,12 +703,13 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData] = await Promise.all([
+      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData, signalsData] = await Promise.all([
         api.get<Tracker[]>("/api/trackers"),
         api.get<AnalyzedPost[]>("/api/analyzed-posts"),
         api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
         api.get<MonitorResult[]>("/api/monitor-results"),
-        api.get<Competitor[]>("/api/competitors")
+        api.get<Competitor[]>("/api/competitors"),
+        api.get<any>("/api/social-signals").catch(() => null)
       ]);
 
       setTrackers(trackersData);
@@ -662,6 +717,9 @@ export default function App() {
       setStats(statsData);
       setAllMonitorResults(allMonitoredData);
       setCompetitors(competitorsData);
+      if (signalsData) {
+        setSocialSignals(signalsData);
+      }
 
       if (trackersData.length > 0) {
         setSelectedTrackerId(trackersData[0].id);
@@ -930,6 +988,10 @@ export default function App() {
       case "instagram": return "bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500 text-white";
       case "facebook": return "bg-blue-600 text-white hover:bg-blue-700";
       case "whatsapp": return "bg-green-500 text-white hover:bg-green-600";
+      case "twitter": return "bg-sky-500 text-white hover:bg-sky-600";
+      case "youtube": return "bg-red-600 text-white hover:bg-red-700";
+      case "linkedin": return "bg-indigo-700 text-white hover:bg-indigo-800";
+      case "reddit": return "bg-orange-600 text-white hover:bg-orange-700";
       default: return "bg-slate-500 text-white hover:bg-slate-600";
     }
   };
@@ -1236,20 +1298,6 @@ export default function App() {
                     <p className="text-sm text-slate-500 mt-1">Laporan komprehensif data sentimen, tagar, dan monitoring media sosial secara live.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-3 shrink-0">
-                    {/* Time Range Filter Dropdown */}
-                    <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-2.5 rounded-xl shadow-xs">
-                      <span className="text-xs font-bold text-slate-400 font-sans uppercase tracking-wider">Rentang:</span>
-                      <select
-                        value={timeRange}
-                        onChange={(e) => setTimeRange(e.target.value as '7' | '30' | '90')}
-                        className="text-xs font-bold text-slate-700 bg-transparent border-none outline-none cursor-pointer pr-1 focus:ring-0 focus:outline-hidden"
-                      >
-                        <option value="7">7 Hari Terakhir</option>
-                        <option value="30">30 Hari Terakhir</option>
-                        <option value="90">90 Hari Terakhir</option>
-                      </select>
-                    </div>
-
                     {stats && (
                       <button
                         onClick={exportDashboardReport}
@@ -1305,65 +1353,135 @@ export default function App() {
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Saluran Dipantau</p>
-                      <h3 className="text-lg font-bold text-slate-900 mt-0.5">4 Platform</h3>
+                      <h3 className="text-lg font-bold text-slate-900 mt-0.5">8 Platform</h3>
                     </div>
                   </div>
                 </div>
 
-                {/* Charts Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Left Column: Sentiment Trends Chart + AI Prediction (Spans 2 columns) */}
-                  <div className="md:col-span-2 flex flex-col gap-6">
-                    {/* Chart 1: Sentiment Trends (Area Chart) */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.6, ease: "easeOut" }}
-                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"
-                    >
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-semibold text-slate-900">Tren Sentimen Publik ({timeRange} Hari Terakhir)</h3>
-                        <div className="flex gap-4 text-xs font-medium">
-                          <span className="flex items-center gap-1.5 text-emerald-600">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500"></span>Positif
-                          </span>
-                          <span className="flex items-center gap-1.5 text-slate-500">
-                            <span className="h-2 w-2 rounded-full bg-slate-400"></span>Netral
-                          </span>
-                          <span className="flex items-center gap-1.5 text-rose-600">
-                            <span className="h-2 w-2 rounded-full bg-rose-500"></span>Negatif
+                {/* ─── NEW TECHNOLOGY: UNIVERSAL SOCIAL SIGNAL INTELLIGENCE (S.S.E) ─── */}
+                {socialSignals && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.1 }}
+                    className="bg-slate-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 relative overflow-hidden"
+                  >
+                    {/* Glowing Accent Background */}
+                    <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+                    <div className="absolute bottom-0 left-0 w-80 h-80 bg-rose-600/5 rounded-full blur-3xl pointer-events-none" />
+
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-800">
+                      <div>
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] font-mono font-bold tracking-wider uppercase mb-2">
+                          <Zap className="h-3 w-3 animate-pulse text-indigo-400" /> NEW: UNIVERSAL SOCIAL SIGNAL ENGINE
+                        </div>
+                        <h3 className="text-xl font-bold font-display tracking-tight text-slate-100">
+                          Cross-Platform Intelligence Aggregator
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                          Sistem agregasi dinamis mendeteksi volume dengungan, sentimen, kecepatan percakapan, dan koherensi sinyal sosial di 8 platform utama.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-4 lg:w-auto w-full">
+                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Buzz Index</span>
+                          <div className="flex items-baseline gap-1 mt-1">
+                            <span className="text-lg font-extrabold text-indigo-400">{socialSignals.aggregateIndex.globalBuzzIndex}</span>
+                            <span className="text-[10px] text-slate-500 font-medium">/100</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Koherensi</span>
+                          <div className="flex items-baseline gap-1 mt-1">
+                            <span className="text-lg font-extrabold text-emerald-400">{socialSignals.aggregateIndex.crossPlatformCoherence}%</span>
+                            <span className="text-[10px] text-slate-500 font-medium">Align</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Dominan</span>
+                          <span className="text-xs font-bold text-slate-200 mt-1.5 uppercase tracking-wide truncate bg-slate-800/80 px-2 py-0.5 rounded-lg border border-slate-700 text-center">
+                            {socialSignals.aggregateIndex.dominantPlatform}
                           </span>
                         </div>
                       </div>
-                      
-                      <div className="h-72">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={stats?.sentimentTrend || []} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                            <defs>
-                              <linearGradient id="colorPos" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                              </linearGradient>
-                              <linearGradient id="colorNeu" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
-                                <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                              </linearGradient>
-                              <linearGradient id="colorNeg" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                                <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                              </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                            <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                            <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                            <Tooltip contentStyle={{ borderRadius: '12px', borderColor: '#e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }} />
-                            <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorPos)" isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
-                            <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={2} fillOpacity={1} fill="url(#colorNeu)" isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
-                            <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={2} fillOpacity={1} fill="url(#colorNeg)" isAnimationActive={true} animationDuration={1200} animationEasing="ease-out" />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </motion.div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                      {socialSignals.platformSignals.map((signal) => {
+                        const style = platformStyles[signal.platform] || {
+                          bg: "from-slate-800 to-slate-900",
+                          text: "text-slate-300",
+                          border: "border-slate-700",
+                          color: "#94a3b8",
+                          badge: "bg-slate-800 text-slate-300"
+                        };
+                        const isPositive = signal.sentimentScore > 0.05;
+                        const isNegative = signal.sentimentScore < -0.05;
+
+                        return (
+                          <div 
+                            key={signal.platform}
+                            className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 flex flex-col justify-between hover:bg-slate-900/60 transition-all group"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
+                                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: style.color }} />
+                                {signal.platform}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                {signal.velocity > 45 ? (
+                                  <TrendingUp className="h-3 w-3 text-emerald-400" />
+                                ) : (
+                                  <TrendingUp className="h-3 w-3 text-slate-500" />
+                                )}
+                                <span className="text-[10px] font-mono text-slate-300 font-bold">+{signal.velocity}%</span>
+                              </div>
+                            </div>
+
+                            <div className="my-3.5">
+                              <div className="flex justify-between items-baseline mb-1">
+                                <span className="text-[10px] text-slate-400 font-semibold">Kekuatan Sinyal</span>
+                                <span className="text-xs font-bold text-indigo-400">{signal.signalStrength}%</span>
+                              </div>
+                              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-indigo-500 rounded-full transition-all duration-1000"
+                                  style={{ width: `${signal.signalStrength}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-2.5 border-t border-slate-800/80">
+                              <div className="flex flex-col">
+                                <span className="text-[8px] uppercase tracking-wider font-semibold text-slate-500">Volume</span>
+                                <span className="font-mono text-slate-300 font-bold">{signal.buzzVolume} posts</span>
+                              </div>
+                              
+                              <div className="flex flex-col items-end">
+                                <span className="text-[8px] uppercase tracking-wider font-semibold text-slate-500">Sentimen</span>
+                                <span className={`font-mono font-bold ${
+                                  isPositive ? "text-emerald-400" :
+                                  isNegative ? "text-rose-400" : "text-slate-300"
+                                }`}>
+                                  {signal.sentimentScore > 0 ? "+" : ""}{signal.sentimentScore}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+                {/* ───────────────────────────────────────────────────────────────── */}
+
+                {/* Charts Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Left Column: AI Prediction (Spans 2 columns) */}
+                  <div className="md:col-span-2 flex flex-col gap-6">
 
                     {/* AI Prediction Component */}
                     <motion.div
@@ -1578,6 +1696,10 @@ export default function App() {
                           <option value="tiktok">TikTok</option>
                           <option value="facebook">Facebook</option>
                           <option value="whatsapp">WhatsApp</option>
+                          <option value="twitter">Twitter / X</option>
+                          <option value="youtube">YouTube</option>
+                          <option value="linkedin">LinkedIn</option>
+                          <option value="reddit">Reddit</option>
                         </select>
                       </div>
 
@@ -1594,6 +1716,10 @@ export default function App() {
                           <option value="tiktok">TikTok</option>
                           <option value="facebook">Facebook</option>
                           <option value="whatsapp">WhatsApp</option>
+                          <option value="twitter">Twitter / X</option>
+                          <option value="youtube">YouTube</option>
+                          <option value="linkedin">LinkedIn</option>
+                          <option value="reddit">Reddit</option>
                         </select>
                       </div>
                     </div>
@@ -2237,6 +2363,10 @@ export default function App() {
                           <option value="instagram">Instagram</option>
                           <option value="facebook">Facebook</option>
                           <option value="whatsapp">WhatsApp</option>
+                          <option value="twitter">Twitter / X</option>
+                          <option value="youtube">YouTube</option>
+                          <option value="linkedin">LinkedIn</option>
+                          <option value="reddit">Reddit</option>
                           <option value="other">Saluran Lain</option>
                         </select>
                         <p className="text-[10px] text-slate-400 mt-2 leading-tight">Digunakan untuk menyesuaikan visualisasi analisis.</p>
@@ -2712,7 +2842,7 @@ export default function App() {
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Saluran Platform untuk Scan</label>
                   <div className="flex flex-wrap gap-2">
-                    {['tiktok', 'instagram', 'facebook', 'whatsapp'].map((plat) => {
+                    {['tiktok', 'instagram', 'facebook', 'whatsapp', 'twitter', 'youtube', 'linkedin', 'reddit'].map((plat) => {
                       const isActive = newTrackerPlatforms.includes(plat as any);
                       return (
                         <button

@@ -2,14 +2,14 @@ export interface Tracker {
   id: string;
   type: 'brand' | 'hashtag' | 'url';
   query: string;
-  platforms: ('tiktok' | 'instagram' | 'facebook' | 'whatsapp')[];
+  platforms: ('tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit')[];
   createdAt: string;
 }
 
 export interface AnalyzedPost {
   id: string;
   url: string;
-  platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'other';
+  platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other';
   title: string;
   description: string;
   imageUrl?: string;
@@ -24,7 +24,7 @@ export interface AnalyzedPost {
 export interface MonitorResult {
   id: string;
   trackerId: string;
-  platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'other';
+  platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other';
   url: string;
   author: string;
   title: string;
