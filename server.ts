@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
+import defaultDb from "./src/data/db.json";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import http from "http";
@@ -52,26 +53,19 @@ function getDB() {
   if (memoryDB) return memoryDB;
   try {
     if (IS_VERCEL && !fs.existsSync(DB_PATH)) {
-      // Copy from read-only project source to writable /tmp
-      if (fs.existsSync(ORIGINAL_DB_PATH)) {
-        const originalData = fs.readFileSync(ORIGINAL_DB_PATH, "utf-8");
-        fs.writeFileSync(DB_PATH, originalData, "utf-8");
-      } else {
-        const initialDB = { trackers: [], analyzedPosts: [], monitorResults: [] };
-        fs.writeFileSync(DB_PATH, JSON.stringify(initialDB, null, 2), "utf-8");
-      }
+      // Use imported defaultDb to initialize in /tmp
+      fs.writeFileSync(DB_PATH, JSON.stringify(defaultDb, null, 2), "utf-8");
     } else if (!fs.existsSync(DB_PATH)) {
       // Create directories if they don't exist
       fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-      const initialDB = { trackers: [], analyzedPosts: [], monitorResults: [] };
-      fs.writeFileSync(DB_PATH, JSON.stringify(initialDB, null, 2), "utf-8");
-      return initialDB;
+      fs.writeFileSync(DB_PATH, JSON.stringify(defaultDb, null, 2), "utf-8");
+      return defaultDb;
     }
     const data = fs.readFileSync(DB_PATH, "utf-8");
     return JSON.parse(data);
   } catch (err) {
     console.error("Error reading database:", err);
-    return { trackers: [], analyzedPosts: [], monitorResults: [] };
+    return defaultDb || { trackers: [], analyzedPosts: [], monitorResults: [] };
   }
 }
 
@@ -154,8 +148,10 @@ function detectPlatform(url: string): 'tiktok' | 'instagram' | 'facebook' | 'wha
 }
 
 // Local Fallback Heuristics for Sentiment Analysis (Used when external API keys or scopes are limited)
-function localAnalyzeSentiment(title: string, content: string) {
-  const text = (title + " " + content).toLowerCase();
+function localAnalyzeSentiment(title?: string, content?: string) {
+  const safeTitle = title || "";
+  const safeContent = content || "";
+  const text = (safeTitle + " " + safeContent).toLowerCase();
   
   const posWords = ["bagus", "keren", "mantap", "hebat", "suka", "cinta", "puas", "rekomendasi", "juara", "enak", "bintang", "murah", "cepat", "ramah", "good", "love", "awesome", "perfect", "satisfied", "best", "hemat", "memuaskan", "terbaik"];
   const negWords = ["jelek", "kecewa", "lambat", "mahal", "buruk", "kesal", "marah", "rugi", "penipu", "ngaco", "gagal", "error", "rusak", "benci", "bad", "slow", "fail", "broken", "worst", "parah", "lelet", "sulit", "kapok"];
@@ -201,14 +197,14 @@ function localAnalyzeSentiment(title: string, content: string) {
     hashtags = ["#brandmonitoring", "#analisissentimen", "#sosmed"];
   }
   
-  const refinedTitle = title.length > 50 ? title.substring(0, 47) + "..." : title || "Analisis Konten Sosmed";
-  const refinedDescription = content.length > 150 ? content.substring(0, 147) + "..." : content || "Tidak ada deskripsi konten tambahan.";
+  const refinedTitle = safeTitle.length > 50 ? safeTitle.substring(0, 47) + "..." : safeTitle || "Analisis Konten Sosmed";
+  const refinedDescription = safeContent.length > 150 ? safeContent.substring(0, 147) + "..." : safeContent || "Tidak ada deskripsi konten tambahan.";
   
   return {
     sentiment,
     sentimentScore,
     emotion,
-    engagement: content.length > 100 ? "High" : (content.length > 30 ? "Medium" : "Low"),
+    engagement: safeContent.length > 100 ? "High" : (safeContent.length > 30 ? "Medium" : "Low"),
     hashtags,
     refinedTitle,
     refinedDescription
@@ -458,6 +454,7 @@ app.post("/api/analyze-url", async (req, res) => {
 
     res.json(newAnalysis);
   } catch (err: any) {
+    console.warn("[Gemini API] Analysis API call failed with error details:", err?.message || err);
     console.log("Analysis API failed via Gemini API. Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
     
     try {

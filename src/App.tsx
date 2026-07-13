@@ -28,9 +28,7 @@ import {
   Sparkles,
   Brain,
   Menu,
-  X,
-  Mic,
-  MicOff
+  X
 } from "lucide-react";
 import {
   AreaChart,
@@ -90,6 +88,37 @@ const fallbackPredictions: AIPredictionReport = {
   ]
 };
 
+const platformStyles: Record<string, { bg: string, text: string, border: string, color: string, badge: string }> = {
+  instagram: {
+    bg: "from-pink-50 to-rose-50/30",
+    text: "text-rose-700",
+    border: "border-pink-200",
+    color: "#E1306C",
+    badge: "bg-rose-100 text-rose-800"
+  },
+  tiktok: {
+    bg: "from-slate-50 to-slate-100/30",
+    text: "text-slate-900",
+    border: "border-slate-300",
+    color: "#0f172a",
+    badge: "bg-slate-200 text-slate-800"
+  },
+  facebook: {
+    bg: "from-blue-50 to-blue-50/20",
+    text: "text-blue-700",
+    border: "border-blue-200",
+    color: "#1877F2",
+    badge: "bg-blue-100 text-blue-800"
+  },
+  whatsapp: {
+    bg: "from-emerald-50 to-emerald-50/20",
+    text: "text-emerald-700",
+    border: "border-emerald-200",
+    color: "#25D366",
+    badge: "bg-emerald-100 text-emerald-800"
+  }
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analyzer' | 'monitoring' | 'hashtags'>('dashboard');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -100,6 +129,9 @@ export default function App() {
   const [analyzedPosts, setAnalyzedPosts] = useState<AnalyzedPost[]>([]);
   const [monitorResults, setMonitorResults] = useState<MonitorResult[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [allMonitorResults, setAllMonitorResults] = useState<MonitorResult[]>([]);
+  const [comparePlatformA, setComparePlatformA] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp'>('instagram');
+  const [comparePlatformB, setComparePlatformB] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp'>('tiktok');
   
   // Interaction State
   const [urlInput, setUrlInput] = useState("");
@@ -124,143 +156,9 @@ export default function App() {
   const [predictions, setPredictions] = useState<AIPredictionReport | null>(null);
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
 
-  // Web Speech API State
-  const [isListening, setIsListening] = useState(false);
-  const [speechTranscript, setSpeechTranscript] = useState("");
-  const [speechError, setSpeechError] = useState<string | null>(null);
-  const [speechCommandMatched, setSpeechCommandMatched] = useState<string | null>(null);
-  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
-  const recognitionRef = React.useRef<any>(null);
-
   // Real-Time WebSocket and Live Telemetry State
   const [liveUpdates, setLiveUpdates] = useState<any[]>([]);
   const [webSocketStatus, setWebSocketStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'polling'>('connecting');
-
-  // Check if Web Speech API is supported
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      setIsSpeechSupported(true);
-    }
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
-  }, []);
-
-  // Voice Command Processor
-  const processVoiceCommand = (transcript: string) => {
-    const cleanText = transcript.toLowerCase().trim();
-    console.log("Memproses perintah suara:", cleanText);
-
-    if (cleanText.includes("dashboard") || cleanText.includes("tampilkan dashboard") || cleanText.includes("ke dashboard") || cleanText.includes("buka dashboard")) {
-      setActiveTab('dashboard');
-      setSpeechCommandMatched("Membuka Dashboard Analitik");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("tren terbaru") || cleanText.includes("cari tren") || cleanText.includes("analisis sentimen") || cleanText.includes("sentimen") || cleanText.includes("analisis") || cleanText.includes("ke analisis") || cleanText.includes("buka analisis")) {
-      setActiveTab('analyzer');
-      setSpeechCommandMatched("Membuka Analisis Sentimen AI");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("monitoring brand") || cleanText.includes("monitoring") || cleanText.includes("pantau brand") || cleanText.includes("buka monitoring") || cleanText.includes("ke monitoring")) {
-      setActiveTab('monitoring');
-      setSpeechCommandMatched("Membuka Monitoring Brand");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("lacak tagar") || cleanText.includes("tagar") || cleanText.includes("hashtags") || cleanText.includes("lacak") || cleanText.includes("buka tagar") || cleanText.includes("ke tagar")) {
-      setActiveTab('hashtags');
-      setSpeechCommandMatched("Membuka Pelacak Tagar");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("buka menu") || cleanText.includes("tampilkan menu") || cleanText.includes("buka navigasi")) {
-      setIsDrawerOpen(true);
-      setSpeechCommandMatched("Membuka Menu Navigasi");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("tutup menu") || cleanText.includes("sembunyikan menu") || cleanText.includes("tutup navigasi")) {
-      setIsDrawerOpen(false);
-      setSpeechCommandMatched("Menutup Menu Navigasi");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-    
-    if (cleanText.includes("ekspor laporan") || cleanText.includes("download laporan") || cleanText.includes("unduh laporan")) {
-      exportDashboardReport();
-      setSpeechCommandMatched("Mengekspor Laporan CSV");
-      setTimeout(() => setSpeechCommandMatched(null), 3000);
-      return true;
-    }
-
-    return false;
-  };
-
-  const toggleListening = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      setIsListening(false);
-    } else {
-      setSpeechError(null);
-      setSpeechTranscript("");
-      setSpeechCommandMatched(null);
-
-      const rec = new SpeechRecognition();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = "id-ID";
-
-      rec.onstart = () => {
-        setIsListening(true);
-      };
-
-      rec.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setSpeechTranscript(transcript);
-        const matched = processVoiceCommand(transcript);
-        if (!matched) {
-          setSpeechCommandMatched(`Perintah tidak dikenal: "${transcript}"`);
-          setTimeout(() => setSpeechCommandMatched(null), 4000);
-        }
-      };
-
-      rec.onerror = (event: any) => {
-        console.error("Speech Recognition Error:", event.error);
-        if (event.error === 'not-allowed') {
-          setSpeechError(
-            "Izin mikrofon diblokir oleh browser. Hal ini umum terjadi di dalam sandbox preview iframe. Silakan buka aplikasi di TAB BARU (menggunakan tombol di atas kanan editor), atau klik daftar perintah di bawah ini untuk mencoba simulasi navigasi instan."
-          );
-        } else if (event.error === 'no-speech') {
-          setSpeechError("Tidak ada suara terdeteksi. Silakan coba lagi.");
-        } else {
-          setSpeechError(`Gagal mengakses Web Speech API: ${event.error}`);
-        }
-        setIsListening(false);
-      };
-
-      rec.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = rec;
-      rec.start();
-    }
-  };
 
   // Initial Fetch
   useEffect(() => {
@@ -288,20 +186,23 @@ export default function App() {
 
   const fetchInitialDataSilent = async () => {
     try {
-      const [trackersRes, analyzedRes, statsRes] = await Promise.all([
+      const [trackersRes, analyzedRes, statsRes, allMonitoredRes] = await Promise.all([
         fetch("/api/trackers"),
         fetch("/api/analyzed-posts"),
-        fetch(`/api/dashboard-stats?range=${timeRange}`)
+        fetch(`/api/dashboard-stats?range=${timeRange}`),
+        fetch("/api/monitor-results")
       ]);
 
-      if (trackersRes.ok && analyzedRes.ok && statsRes.ok) {
-        const trackersData = await trackersRes.ok ? await trackersRes.json() : null;
-        const analyzedData = await analyzedRes.ok ? await analyzedRes.json() : null;
-        const statsData = await statsRes.ok ? await statsRes.json() : null;
+      if (trackersRes.ok && analyzedRes.ok && statsRes.ok && allMonitoredRes.ok) {
+        const trackersData = await trackersRes.json();
+        const analyzedData = await analyzedRes.json();
+        const statsData = await statsRes.json();
+        const allMonitoredData = await allMonitoredRes.json();
 
-        if (trackersData) setTrackers(trackersData);
-        if (analyzedData) setAnalyzedPosts(analyzedData);
-        if (statsData) setStats(statsData);
+        setTrackers(trackersData);
+        setAnalyzedPosts(analyzedData);
+        setStats(statsData);
+        setAllMonitorResults(allMonitoredData);
 
         if (selectedTrackerIdRef.current) {
           const res = await fetch(`/api/monitor-results?trackerId=${selectedTrackerIdRef.current}`);
@@ -527,27 +428,109 @@ export default function App() {
     }
   }, [timeRange]);
 
+  // Helper function to calculate stats and sentiment trend per platform
+  const getPlatformStats = (platform: string) => {
+    const cutoffDate = new Date();
+    const rangeDays = parseInt(timeRange) || 7;
+    cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
+
+    const combined = [
+      ...analyzedPosts.map(p => ({ ...p, date: p.analyzedAt })),
+      ...allMonitorResults
+    ].filter(item => {
+      if (item.platform !== platform) return false;
+      const dateStr = item.date;
+      if (!dateStr) return true;
+      return new Date(dateStr) >= cutoffDate;
+    });
+
+    const total = combined.length;
+    let posCount = 0;
+    let neuCount = 0;
+    let negCount = 0;
+    let totalScore = 0;
+
+    combined.forEach(item => {
+      if (item.sentiment === "positive") posCount++;
+      else if (item.sentiment === "negative") negCount++;
+      else neuCount++;
+      totalScore += (item.sentimentScore ?? 0);
+    });
+
+    const avgScore = total > 0 ? Number((totalScore / total).toFixed(2)) : 0;
+    
+    // Compute Trend points for each day in range
+    const dateGroups: Record<string, { pos: number; neu: number; neg: number }> = {};
+    for (let i = rangeDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dayStr = d.toISOString().split("T")[0];
+      dateGroups[dayStr] = { pos: 0, neu: 0, neg: 0 };
+    }
+
+    combined.forEach(item => {
+      if (!item.date) return;
+      const dayStr = item.date.split("T")[0];
+      if (dateGroups[dayStr]) {
+        if (item.sentiment === "positive") dateGroups[dayStr].pos++;
+        else if (item.sentiment === "negative") dateGroups[dayStr].neg++;
+        else dateGroups[dayStr].neu++;
+      }
+    });
+
+    const trendData = Object.entries(dateGroups)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, counts]) => ({
+        date: new Date(date).toLocaleDateString("id-ID", { day: "numeric", month: "short" }),
+        positive: counts.pos,
+        neutral: counts.neu,
+        negative: counts.neg
+      }));
+
+    // Top emotion
+    const emotionCounts: Record<string, number> = {};
+    combined.forEach(item => {
+      const emotion = item.emotion || "Neutral";
+      emotionCounts[emotion] = (emotionCounts[emotion] || 0) + 1;
+    });
+    const topEmotion = Object.entries(emotionCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || "Neutral";
+
+    return {
+      total,
+      posCount,
+      neuCount,
+      negCount,
+      avgScore,
+      trendData,
+      topEmotion
+    };
+  };
+
   const fetchInitialData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [trackersRes, analyzedRes, statsRes] = await Promise.all([
+      const [trackersRes, analyzedRes, statsRes, allMonitoredRes] = await Promise.all([
         fetch("/api/trackers"),
         fetch("/api/analyzed-posts"),
-        fetch(`/api/dashboard-stats?range=${timeRange}`)
+        fetch(`/api/dashboard-stats?range=${timeRange}`),
+        fetch("/api/monitor-results")
       ]);
 
-      if (!trackersRes.ok || !analyzedRes.ok || !statsRes.ok) {
+      if (!trackersRes.ok || !analyzedRes.ok || !statsRes.ok || !allMonitoredRes.ok) {
         throw new Error("Gagal mengambil data dari server.");
       }
 
       const trackersData = await trackersRes.json();
       const analyzedData = await analyzedRes.json();
       const statsData = await statsRes.json();
+      const allMonitoredData = await allMonitoredRes.json();
 
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
+      setAllMonitorResults(allMonitoredData);
 
       if (trackersData.length > 0) {
         setSelectedTrackerId(trackersData[0].id);
@@ -898,41 +881,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            {/* Voice Control Assistant */}
-            {isSpeechSupported ? (
-              <div className="relative flex items-center">
-                {/* Active listening ripple/indicator */}
-                {isListening && (
-                  <span className="absolute -inset-1 rounded-full bg-red-400/20 animate-pulse"></span>
-                )}
-                <button
-                  onClick={toggleListening}
-                  className={`flex items-center justify-center h-10 px-3.5 gap-1.5 border transition-all rounded-xl cursor-pointer select-none active:scale-95 shadow-xs hover:shadow-md ${
-                    isListening
-                      ? "bg-red-50 border-red-200 text-red-600 font-bold"
-                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                  }`}
-                  title={isListening ? "Hentikan mendengarkan" : "Aktifkan Kontrol Suara"}
-                >
-                  {isListening ? (
-                    <>
-                      <Mic className="h-4.5 w-4.5 animate-bounce" />
-                      <span className="text-[10px] font-mono tracking-wider font-bold animate-pulse">MIC_ON</span>
-                    </>
-                  ) : (
-                    <>
-                      <MicOff className="h-4.5 w-4.5 opacity-80" />
-                      <span className="text-[10px] font-mono tracking-wider font-bold">MIC_OFF</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            ) : (
-              <div className="hidden sm:block text-[10px] text-slate-400 italic bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">
-                Speech Not Supported
-              </div>
-            )}
-
             {/* Real-time WebSocket Connection Badge */}
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
               <span className={`h-2 w-2 rounded-full ${
@@ -1506,6 +1454,208 @@ export default function App() {
                     </div>
                   </motion.div>
                 </div>
+
+                {/* INTERACTIVE CROSS-PLATFORM SENTIMEN COMPARISON */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, ease: "easeOut", delay: 0.15 }}
+                  className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-100 pb-4 mb-6 gap-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                        <BarChart3 className="h-4.5 w-4.5 text-indigo-600" />
+                        <span>Pembanding Sentimen Antar Platform</span>
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Pilih dua platform untuk membandingkan statistik &amp; grafik perkembangan sentimen secara berdampingan.
+                      </p>
+                    </div>
+
+                    {/* Selectors */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
+                        <span className="text-slate-400">Platform A:</span>
+                        <select
+                          value={comparePlatformA}
+                          onChange={(e) => setComparePlatformA(e.target.value as any)}
+                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0"
+                        >
+                          <option value="instagram">Instagram</option>
+                          <option value="tiktok">TikTok</option>
+                          <option value="facebook">Facebook</option>
+                          <option value="whatsapp">WhatsApp</option>
+                        </select>
+                      </div>
+
+                      <div className="text-slate-400 font-bold text-xs">VS</div>
+
+                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
+                        <span className="text-slate-400">Platform B:</span>
+                        <select
+                          value={comparePlatformB}
+                          onChange={(e) => setComparePlatformB(e.target.value as any)}
+                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0"
+                        >
+                          <option value="instagram">Instagram</option>
+                          <option value="tiktok">TikTok</option>
+                          <option value="facebook">Facebook</option>
+                          <option value="whatsapp">WhatsApp</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Comparison Side-by-Side Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Platform A View */}
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4">
+                      {/* Header Platform A */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
+                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
+                          Platform A
+                        </span>
+                      </div>
+
+                      {/* Stats Overview */}
+                      {getPlatformStats(comparePlatformA).total > 0 ? (
+                        <>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
+                              <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformA).total}</p>
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
+                              <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                                {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
+                              </p>
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
+                              <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
+                            </div>
+                          </div>
+
+                          {/* Mini AreaChart */}
+                          <div className="h-48 mt-2">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={getPlatformStats(comparePlatformA).trendData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                                <defs>
+                                  <linearGradient id={`colorPos-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id={`colorNeu-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id={`colorNeg-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
+                                <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
+                                <Tooltip />
+                                <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformA})`} />
+                                <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformA})`} />
+                                <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformA})`} />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="h-60 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-dashed border-slate-200">
+                          <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-2" />
+                          <p className="text-xs font-semibold text-slate-500">Belum Ada Data</p>
+                          <p className="text-[11px] text-slate-400 mt-1 max-w-[200px]">
+                            Lakukan analisis sentimen atau scan live untuk platform {comparePlatformA} agar grafik tampil di sini.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Platform B View */}
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4">
+                      {/* Header Platform B */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
+                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
+                          Platform B
+                        </span>
+                      </div>
+
+                      {/* Stats Overview */}
+                      {getPlatformStats(comparePlatformB).total > 0 ? (
+                        <>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
+                              <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformB).total}</p>
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
+                              <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                                {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
+                              </p>
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
+                              <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
+                            </div>
+                          </div>
+
+                          {/* Mini AreaChart */}
+                          <div className="h-48 mt-2">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={getPlatformStats(comparePlatformB).trendData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                                <defs>
+                                  <linearGradient id={`colorPos-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id={`colorNeu-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                  </linearGradient>
+                                  <linearGradient id={`colorNeg-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
+                                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
+                                <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
+                                <Tooltip />
+                                <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformB})`} />
+                                <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformB})`} />
+                                <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformB})`} />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="h-60 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-dashed border-slate-200">
+                          <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-2" />
+                          <p className="text-xs font-semibold text-slate-500">Belum Ada Data</p>
+                          <p className="text-[11px] text-slate-400 mt-1 max-w-[200px]">
+                            Lakukan analisis sentimen atau scan live untuk platform {comparePlatformB} agar grafik tampil di sini.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
 
                 {/* Bottom Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2164,156 +2314,6 @@ export default function App() {
               </form>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
-
-      {/* Floating Voice Assistant Status */}
-      <AnimatePresence>
-        {(isListening || speechCommandMatched || speechError) && (
-          <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 50, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="fixed bottom-6 right-6 z-50 max-w-sm w-full bg-slate-900/95 backdrop-blur-md text-white border border-slate-800 p-5 rounded-2xl shadow-2xl"
-          >
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <div className={`p-1.5 rounded-lg ${isListening ? 'bg-red-500/10 text-red-400 animate-pulse' : 'bg-indigo-500/10 text-indigo-400'}`}>
-                  <Mic className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-100">Asisten Suara S.I.P</h4>
-                  <p className="text-[10px] text-slate-400 font-sans">Navigasi Hands-Free Aktif</p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  if (isListening && recognitionRef.current) recognitionRef.current.stop();
-                  setIsListening(false);
-                  setSpeechCommandMatched(null);
-                  setSpeechError(null);
-                }}
-                className="text-slate-400 hover:text-white transition-colors cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {isListening && (
-                <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-800/40">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <span className="flex h-1.5 w-1.5 relative">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500"></span>
-                    </span>
-                    <span className="text-[10px] font-bold text-red-400 font-mono tracking-wider uppercase">Mendengarkan...</span>
-                  </div>
-                  <p className="text-xs text-slate-200 font-sans italic min-h-[1.5rem]">
-                    {speechTranscript || '"Katakan perintah Anda..."'}
-                  </p>
-                </div>
-              )}
-
-              {speechCommandMatched && (
-                <div className="bg-indigo-500/10 border border-indigo-500/20 p-3 rounded-xl">
-                  <div className="flex items-center gap-1.5 text-indigo-400 text-[10px] font-bold font-mono tracking-wider uppercase mb-1">
-                    <Sparkles className="h-3 w-3 animate-pulse" />
-                    <span>Perintah Terdeteksi</span>
-                  </div>
-                  <p className="text-xs text-indigo-200 font-sans font-medium">
-                    {speechCommandMatched}
-                  </p>
-                </div>
-              )}
-
-              {speechError && (
-                <div className="bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl">
-                  <span className="text-[10px] font-bold text-rose-400 font-mono tracking-wider uppercase block mb-1">Error</span>
-                  <p className="text-xs text-rose-200 font-sans">
-                    {speechError}
-                  </p>
-                </div>
-              )}
-
-              {/* Interactive Simulation / List of Available Commands Helper */}
-              <div className="border-t border-slate-800 pt-3 text-[10px] text-slate-400">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-semibold text-slate-300 font-mono">Daftar / Simulasi Perintah:</span>
-                  <span className="text-[9px] text-indigo-400 font-medium animate-pulse">Klik untuk mencoba</span>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-1.5 font-mono text-[9px] leading-relaxed mb-3">
-                  {[
-                    "tampilkan dashboard",
-                    "cari tren terbaru",
-                    "monitoring brand",
-                    "lacak tagar",
-                    "buka menu",
-                    "tutup menu",
-                    "ekspor laporan"
-                  ].map((cmd) => (
-                    <button
-                      key={cmd}
-                      onClick={() => {
-                        setSpeechTranscript(cmd);
-                        const matched = processVoiceCommand(cmd);
-                        if (!matched) {
-                          setSpeechCommandMatched(`Perintah tidak dikenal: "${cmd}"`);
-                          setTimeout(() => setSpeechCommandMatched(null), 4000);
-                        }
-                      }}
-                      className="text-left text-slate-300 hover:text-indigo-200 bg-slate-800/40 hover:bg-slate-800/80 px-2 py-1.5 rounded-lg border border-slate-800/60 transition-colors cursor-pointer active:scale-[0.98] select-none"
-                    >
-                      🗣️ "{cmd}"
-                    </button>
-                  ))}
-                </div>
-
-                {/* Manual Text Command Input */}
-                <div className="flex gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
-                  <input
-                    type="text"
-                    placeholder="Ketik perintah simulasi di sini..."
-                    className="flex-1 bg-transparent text-xs text-white border-none outline-none px-2 py-1 placeholder:text-slate-600 focus:ring-0 focus:outline-hidden"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const val = e.currentTarget.value;
-                        if (val) {
-                          setSpeechTranscript(val);
-                          const matched = processVoiceCommand(val);
-                          if (!matched) {
-                            setSpeechCommandMatched(`Perintah tidak dikenal: "${val}"`);
-                            setTimeout(() => setSpeechCommandMatched(null), 4000);
-                          }
-                          e.currentTarget.value = '';
-                        }
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={(e) => {
-                      const input = e.currentTarget.previousElementSibling as HTMLInputElement;
-                      if (input && input.value) {
-                        const val = input.value;
-                        setSpeechTranscript(val);
-                        const matched = processVoiceCommand(val);
-                        if (!matched) {
-                          setSpeechCommandMatched(`Perintah tidak dikenal: "${val}"`);
-                          setTimeout(() => setSpeechCommandMatched(null), 4000);
-                        }
-                        input.value = '';
-                      }
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition-colors cursor-pointer select-none"
-                  >
-                    Kirim
-                  </button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
         )}
       </AnimatePresence>
 
