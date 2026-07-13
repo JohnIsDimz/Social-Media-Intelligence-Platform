@@ -891,7 +891,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight font-display text-indigo-950">
-                S.I.P <span className="text-indigo-600 font-medium">Social Intelligence Platform</span>
+                S.M.I.P
               </h1>
               <p className="text-[10px] text-slate-400 font-mono tracking-wider uppercase">Active AI Decision Engine</p>
             </div>

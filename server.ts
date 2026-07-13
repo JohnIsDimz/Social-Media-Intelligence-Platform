@@ -42,11 +42,25 @@ const ai = new GoogleGenAI({
 });
 
 // Database Helper Functions
-const DB_PATH = path.join(process.cwd(), "src", "data", "db.json");
+const IS_VERCEL = !!process.env.VERCEL;
+const ORIGINAL_DB_PATH = path.join(process.cwd(), "src", "data", "db.json");
+const DB_PATH = IS_VERCEL ? path.join("/tmp", "db.json") : ORIGINAL_DB_PATH;
+
+let memoryDB: any = null;
 
 function getDB() {
+  if (memoryDB) return memoryDB;
   try {
-    if (!fs.existsSync(DB_PATH)) {
+    if (IS_VERCEL && !fs.existsSync(DB_PATH)) {
+      // Copy from read-only project source to writable /tmp
+      if (fs.existsSync(ORIGINAL_DB_PATH)) {
+        const originalData = fs.readFileSync(ORIGINAL_DB_PATH, "utf-8");
+        fs.writeFileSync(DB_PATH, originalData, "utf-8");
+      } else {
+        const initialDB = { trackers: [], analyzedPosts: [], monitorResults: [] };
+        fs.writeFileSync(DB_PATH, JSON.stringify(initialDB, null, 2), "utf-8");
+      }
+    } else if (!fs.existsSync(DB_PATH)) {
       // Create directories if they don't exist
       fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
       const initialDB = { trackers: [], analyzedPosts: [], monitorResults: [] };
@@ -63,10 +77,15 @@ function getDB() {
 
 function writeDB(data: any) {
   try {
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+    if (IS_VERCEL) {
+      fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+    } else {
+      fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+      fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+    }
   } catch (err) {
-    console.error("Error writing database:", err);
+    console.error("Error writing database, falling back to memory:", err);
+    memoryDB = data;
   }
 }
 
@@ -1019,23 +1038,29 @@ async function startServer() {
     }
   }, 20000); // Dynamic real-time ingestion every 20 seconds!
 
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+  if (!IS_VERCEL) {
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
     });
   }
-
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
-  });
 }
 
-startServer();
+if (!IS_VERCEL) {
+  startServer();
+}
+
+export default app;
