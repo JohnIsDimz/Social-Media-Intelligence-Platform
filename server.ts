@@ -4,6 +4,8 @@ import fs from "fs";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
 
 dotenv.config();
 
@@ -11,6 +13,23 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Global WebSocket server and broadcast utility
+let wss: WebSocketServer | null = null;
+
+function broadcast(type: string, data: any) {
+  if (wss) {
+    wss.clients.forEach((client) => {
+      if (client.readyState === 1) { // WebSocket.OPEN
+        try {
+          client.send(JSON.stringify({ type, data }));
+        } catch (err) {
+          console.error("Error sending WebSocket message:", err);
+        }
+      }
+    });
+  }
+}
 
 // Initialize Gemini SDK with telemetry header
 const ai = new GoogleGenAI({
@@ -294,6 +313,7 @@ app.post("/api/trackers", (req, res) => {
 
   db.trackers.push(newTracker);
   writeDB(db);
+  broadcast("SYNC", { event: "tracker_added", tracker: newTracker });
   res.json(newTracker);
 });
 
@@ -306,6 +326,7 @@ app.delete("/api/trackers/:id", (req, res) => {
   db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== id);
   
   writeDB(db);
+  broadcast("SYNC", { event: "tracker_deleted", trackerId: id });
   res.json({ success: true, message: "Tracker deleted successfully" });
 });
 
@@ -414,6 +435,7 @@ app.post("/api/analyze-url", async (req, res) => {
 
     db.analyzedPosts.unshift(newAnalysis);
     writeDB(db);
+    broadcast("SYNC", { event: "post_analyzed", post: newAnalysis });
 
     res.json(newAnalysis);
   } catch (err: any) {
@@ -440,6 +462,7 @@ app.post("/api/analyze-url", async (req, res) => {
 
       db.analyzedPosts.unshift(newAnalysis);
       writeDB(db);
+      broadcast("SYNC", { event: "post_analyzed", post: newAnalysis });
 
       res.json(newAnalysis);
     } catch (fallbackErr: any) {
@@ -531,6 +554,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
     db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== trackerId);
     db.monitorResults.unshift(...formattedResults);
     writeDB(db);
+    broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
 
     res.json(formattedResults);
   } catch (err: any) {
@@ -547,6 +571,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
       db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== trackerId);
       db.monitorResults.unshift(...formattedResults);
       writeDB(db);
+      broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
 
       res.json(formattedResults);
     } catch (fallbackErr: any) {
@@ -915,9 +940,85 @@ actionableInsights adalah 3 rekomendasi taktis nyata untuk merespons tren predik
 });
 
 // ==========================================
-// VITE DEV SERVER / PRODUCTION SERVING
+// VITE DEV SERVER / PRODUCTION SERVING WITH WEBSOCKETS
 // ==========================================
 async function startServer() {
+  const server = http.createServer(app);
+
+  // Initialize WebSocket Server
+  wss = new WebSocketServer({ server });
+
+  wss.on("connection", (ws) => {
+    console.log("[WebSocket] Client connected for real-time monitoring");
+    
+    // Send immediate confirmation
+    ws.send(JSON.stringify({ 
+      type: "SYSTEM_CONNECTED", 
+      data: { message: "Connected to real-time Social Media Intelligence WebSocket" } 
+    }));
+
+    ws.on("message", (message) => {
+      try {
+        const parsed = JSON.parse(message.toString());
+        console.log("[WebSocket] Received client action:", parsed);
+        if (parsed.type === "PING") {
+          ws.send(JSON.stringify({ type: "PONG" }));
+        }
+      } catch (err) {
+        console.error("Failed to parse socket message:", err);
+      }
+    });
+
+    ws.on("close", () => {
+      console.log("[WebSocket] Client disconnected");
+    });
+  });
+
+  // Start real-time background ingestion simulation (auto-polling & live feeds simulation)
+  setInterval(() => {
+    try {
+      const db = getDB();
+      if (!db.trackers || db.trackers.length === 0) return;
+
+      // Pick a random tracker to generate new mention
+      const randomTracker = db.trackers[Math.floor(Math.random() * db.trackers.length)];
+      const platforms = randomTracker.platforms && randomTracker.platforms.length > 0 
+        ? randomTracker.platforms 
+        : ["tiktok", "instagram", "facebook", "whatsapp"];
+      const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
+
+      const rawResults = localGenerateMonitorResults(randomTracker.query, [randomPlatform]);
+      if (rawResults && rawResults.length > 0) {
+        const freshMention = {
+          ...rawResults[0],
+          id: `mr-${Date.now()}-bg`,
+          trackerId: randomTracker.id,
+          date: new Date().toISOString() // Brand new timestamp
+        };
+
+        // Insert at the beginning of monitor results
+        db.monitorResults = db.monitorResults || [];
+        db.monitorResults.unshift(freshMention);
+
+        // Limit database size to prevent excessive memory/storage usage
+        if (db.monitorResults.length > 150) {
+          db.monitorResults = db.monitorResults.slice(0, 150);
+        }
+
+        writeDB(db);
+        console.log(`[Real-time Ingest] New live brand post: "${randomTracker.query}" on ${randomPlatform}`);
+
+        // Broadcast to all active clients for real-time UI injection
+        broadcast("LIVE_POST_INGESTED", {
+          post: freshMention,
+          tracker: randomTracker
+        });
+      }
+    } catch (err) {
+      console.error("Error in real-time background ingestion service:", err);
+    }
+  }, 20000); // Dynamic real-time ingestion every 20 seconds!
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -932,8 +1033,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Social Intelligence Engine] Running on port ${PORT}`);
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
   });
 }
 
