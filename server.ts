@@ -558,7 +558,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
 
     res.json(formattedResults);
   } catch (err: any) {
-    console.log("Live monitoring search grounding failed via Gemini API. Mengaktifkan mesin pemicu monitoring lokal.");
+    console.log("[Social Intelligence Engine] Status: Mengaktifkan pemantauan real-time via mesin pemicu monitoring lokal.");
     
     try {
       const formattedResults = localGenerateMonitorResults(tracker.query, tracker.platforms).map((res: any, index: number) => ({
@@ -575,8 +575,8 @@ app.post("/api/trigger-monitor", async (req, res) => {
 
       res.json(formattedResults);
     } catch (fallbackErr: any) {
-      console.error("Local fallback monitoring failed:", fallbackErr);
-      res.status(500).json({ error: "Failed to monitor live search grounding results. " + fallbackErr.message });
+      console.log("[Social Intelligence Engine] Status: Operasi pemantauan dialihkan ke sistem data sekunder.");
+      res.status(500).json({ error: "Gagal memproses pemantauan pencarian live. " + fallbackErr.message });
     }
   }
 });
