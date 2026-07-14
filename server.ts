@@ -185,12 +185,18 @@ try {
 // ==========================================
 // FIREBASE / FIRESTORE SYNC LOGIC
 // ==========================================
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
 import { initializeApp, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
-const firebaseConfig = require("./firebase-applet-config.json");
+let firebaseConfig: any = {};
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  }
+} catch (err) {
+  console.warn("[Firebase Init] Failed to read firebase-applet-config.json locally:", err);
+}
 
 if (!getApps().length) {
   initializeApp({
