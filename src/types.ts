@@ -82,13 +82,3 @@ export interface AIPredictionReport {
   actionableInsights: string[];
 }
 
-export interface Competitor {
-  id: string;
-  name: string;
-  sentimentScore: number;
-  positive: number;
-  neutral: number;
-  negative: number;
-  createdAt: string;
-}
-

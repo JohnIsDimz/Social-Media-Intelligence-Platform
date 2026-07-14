@@ -46,7 +46,7 @@ import {
   Bar,
   Legend
 } from "recharts";
-import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport, Competitor } from "./types";
+import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport } from "./types";
 import { api } from "./apiService";
 
 const fallbackPredictions: AIPredictionReport = {
@@ -150,7 +150,7 @@ const platformStyles: Record<string, { bg: string, text: string, border: string,
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analyzer' | 'monitoring' | 'hashtags'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analyzer' | 'monitoring'>('dashboard');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
   
@@ -185,14 +185,6 @@ export default function App() {
   // AI Prediction State
   const [predictions, setPredictions] = useState<AIPredictionReport | null>(null);
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
-
-  // Competitor Monitoring State
-  const [competitors, setCompetitors] = useState<Competitor[]>([]);
-  const [newCompetitorName, setNewCompetitorName] = useState("");
-  const [isAddingCompetitor, setIsAddingCompetitor] = useState(false);
-  const [isLoadingCompetitors, setIsLoadingCompetitors] = useState(false);
-  const [hoveredBrandId, setHoveredBrandId] = useState<string | null>(null);
-  const [competitorTimeRange, setCompetitorTimeRange] = useState<'7' | '30' | '90'>('7');
 
   // Universal Social Signal Aggregator State
   const [socialSignals, setSocialSignals] = useState<{
@@ -242,20 +234,21 @@ export default function App() {
 
   const fetchInitialDataSilent = async () => {
     try {
-      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData, signalsData] = await Promise.all([
+      const signalsUrl = selectedTrackerIdRef.current
+        ? `/api/social-signals?trackerId=${selectedTrackerIdRef.current}`
+        : "/api/social-signals";
+      const [trackersData, analyzedData, statsData, allMonitoredData, signalsData] = await Promise.all([
         api.get<Tracker[]>("/api/trackers"),
         api.get<AnalyzedPost[]>("/api/analyzed-posts"),
         api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
         api.get<MonitorResult[]>("/api/monitor-results"),
-        api.get<Competitor[]>("/api/competitors"),
-        api.get<any>("/api/social-signals").catch(() => null)
+        api.get<any>(signalsUrl).catch(() => null)
       ]);
 
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
       setAllMonitorResults(allMonitoredData);
-      setCompetitors(competitorsData);
       if (signalsData) {
         setSocialSignals(signalsData);
       }
@@ -555,168 +548,25 @@ export default function App() {
     };
   };
 
-  const getMainBrandSentimentBreakdown = (rangeToUse?: '7' | '30' | '90') => {
-    const cutoffDate = new Date();
-    const rangeDays = parseInt(rangeToUse || competitorTimeRange) || 7;
-    cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
-
-    const combined = [
-      ...analyzedPosts.map(p => ({ ...p, date: p.analyzedAt })),
-      ...allMonitorResults
-    ].filter(item => {
-      const dateStr = item.date;
-      if (!dateStr) return true;
-      return new Date(dateStr) >= cutoffDate;
-    });
-
-    const total = combined.length || 1;
-    let posCount = 0;
-    let neuCount = 0;
-    let negCount = 0;
-
-    combined.forEach(item => {
-      if (item.sentiment === "positive") posCount++;
-      else if (item.sentiment === "negative") negCount++;
-      else neuCount++;
-    });
-
-    const positive = Math.round((posCount / total) * 100);
-    const negative = Math.round((negCount / total) * 100);
-    const neutral = Math.max(0, 100 - positive - negative);
-
-    return {
-      positive,
-      neutral,
-      negative,
-      totalCount: combined.length
-    };
-  };
-
-  const getMainBrandScoreForRange = (rangeToUse: '7' | '30' | '90') => {
-    const cutoffDate = new Date();
-    const rangeDays = parseInt(rangeToUse) || 7;
-    cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
-
-    const combined = [
-      ...analyzedPosts.map(p => ({ ...p, date: p.analyzedAt })),
-      ...allMonitorResults
-    ].filter(item => {
-      const dateStr = item.date;
-      if (!dateStr) return true;
-      return new Date(dateStr) >= cutoffDate;
-    });
-
-    const total = combined.length;
-    let totalScore = 0;
-    combined.forEach(item => {
-      totalScore += (item.sentimentScore ?? 0);
-    });
-
-    return total > 0 ? Number((totalScore / total).toFixed(2)) : 0;
-  };
-
-  const getCompetitorStatsForRange = (comp: Competitor, range: '7' | '30' | '90') => {
-    // Deterministic seed based on id
-    let seed = 0;
-    for (let i = 0; i < comp.id.length; i++) {
-      seed += comp.id.charCodeAt(i);
-    }
-    
-    // Create deterministic offsets based on seed and range
-    let scoreOffset = 0;
-    let posOffset = 0;
-    let negOffset = 0;
-    
-    if (range === "7") {
-      scoreOffset = ((seed % 7) - 3) / 50; // -0.06 to +0.06
-      posOffset = (seed % 5) - 2; // -2% to +2%
-      negOffset = (seed % 4) - 2; // -2% to +1%
-    } else if (range === "30") {
-      scoreOffset = 0; // baseline
-      posOffset = 0;
-      negOffset = 0;
-    } else if (range === "90") {
-      scoreOffset = ((seed % 9) - 4) / 40; // -0.10 to +0.10
-      posOffset = (seed % 7) - 3; // -3% to +3%
-      negOffset = (seed % 6) - 3; // -3% to +2%
-    }
-
-    let sentimentScore = Math.max(-1, Math.min(1, comp.sentimentScore + scoreOffset));
-    sentimentScore = Number(sentimentScore.toFixed(2));
-    
-    let positive = Math.max(0, Math.min(100, comp.positive + posOffset));
-    let negative = Math.max(0, Math.min(100 - positive, comp.negative + negOffset));
-    let neutral = 100 - positive - negative;
-    
-    return {
-      ...comp,
-      sentimentScore,
-      positive,
-      neutral,
-      negative
-    };
-  };
-
-  const fetchCompetitors = async () => {
-    setIsLoadingCompetitors(true);
-    try {
-      const data = await api.get<Competitor[]>("/api/competitors");
-      setCompetitors(data);
-    } catch (err) {
-      console.error("Gagal mengambil data kompetitor:", err);
-    } finally {
-      setIsLoadingCompetitors(false);
-    }
-  };
-
-  const addCompetitor = async (name: string) => {
-    if (!name.trim()) return;
-    setIsAddingCompetitor(true);
-    setError(null);
-    try {
-      const newComp = await api.post<Competitor>("/api/competitors", { name: name.trim() });
-      setCompetitors(prev => [...prev, newComp]);
-      setNewCompetitorName("");
-      setSuccessMessage(`Berhasil menambahkan kompetitor "${newComp.name}" dengan analisis sentimen.`);
-      setTimeout(() => setSuccessMessage(null), 5000);
-    } catch (err: any) {
-      setError(err.message || "Gagal menambahkan kompetitor.");
-    } finally {
-      setIsAddingCompetitor(false);
-    }
-  };
-
-  const deleteCompetitor = async (id: string, name: string) => {
-    if (!confirm(`Apakah Anda yakin ingin menghapus kompetitor "${name}"?`)) return;
-    setError(null);
-    try {
-      await api.delete(`/api/competitors/${id}`);
-      setCompetitors(prev => prev.filter(c => c.id !== id));
-      setSuccessMessage(`Kompetitor "${name}" berhasil dihapus.`);
-      setTimeout(() => setSuccessMessage(null), 4000);
-    } catch (err: any) {
-      setError(err.message || "Gagal menghapus kompetitor.");
-    }
-  };
-
   const fetchInitialData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [trackersData, analyzedData, statsData, allMonitoredData, competitorsData, signalsData] = await Promise.all([
+      const signalsUrl = selectedTrackerId
+        ? `/api/social-signals?trackerId=${selectedTrackerId}`
+        : "/api/social-signals";
+      const [trackersData, analyzedData, statsData, allMonitoredData, signalsData] = await Promise.all([
         api.get<Tracker[]>("/api/trackers"),
         api.get<AnalyzedPost[]>("/api/analyzed-posts"),
         api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
         api.get<MonitorResult[]>("/api/monitor-results"),
-        api.get<Competitor[]>("/api/competitors"),
-        api.get<any>("/api/social-signals").catch(() => null)
+        api.get<any>(signalsUrl).catch(() => null)
       ]);
 
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
       setAllMonitorResults(allMonitoredData);
-      setCompetitors(competitorsData);
       if (signalsData) {
         setSocialSignals(signalsData);
       }
@@ -741,9 +591,15 @@ export default function App() {
       const data = await api.get<MonitorResult[]>(`/api/monitor-results?trackerId=${trackerId}`);
       setMonitorResults(data);
       
-      // Also update general stats
-      const statsData = await api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`);
+      // Also update general stats and social signals
+      const [statsData, signalsData] = await Promise.all([
+        api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
+        api.get<any>(`/api/social-signals?trackerId=${trackerId}`).catch(() => null)
+      ]);
       setStats(statsData);
+      if (signalsData) {
+        setSocialSignals(signalsData);
+      }
     } catch (err) {
       console.error("Gagal mengambil hasil monitoring:", err);
     }
@@ -757,9 +613,15 @@ export default function App() {
       const data = await api.post<MonitorResult[]>("/api/trigger-monitor", { trackerId });
       setMonitorResults(data);
 
-      // Update stats and alert message
-      const statsData = await api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`);
+      // Update stats, alert message, and social signals
+      const [statsData, signalsData] = await Promise.all([
+        api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
+        api.get<any>(`/api/social-signals?trackerId=${trackerId}`).catch(() => null)
+      ]);
       setStats(statsData);
+      if (signalsData) {
+        setSocialSignals(signalsData);
+      }
 
       showNotification("Sistem memproses " + data.length + " mention live dari Google Search Grounding!");
     } catch (err: any) {
@@ -1139,21 +1001,6 @@ export default function App() {
                 >
                   <Search className="h-5 w-5" />
                   <span>Monitoring Brand</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveTab('hashtags');
-                    setIsDrawerOpen(false);
-                  }}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
-                    activeTab === 'hashtags'
-                      ? 'bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100'
-                      : 'text-slate-600 hover:bg-slate-50 border border-transparent hover:text-slate-900'
-                  }`}
-                >
-                  <Hash className="h-5 w-5" />
-                  <span>Lacak Tagar</span>
                 </button>
               </div>
 
@@ -1876,7 +1723,7 @@ export default function App() {
                 </motion.div>
 
                 {/* Bottom Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="w-full">
                   {/* Chart 3: Emotion breakdown */}
                   <motion.div 
                     initial={{ opacity: 0, y: 20 }}
@@ -1901,400 +1748,9 @@ export default function App() {
                       )}
                     </div>
                   </motion.div>
-
-                  {/* Hashtag List cloud layout */}
-                  <motion.div 
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6, ease: "easeOut", delay: 0.3 }}
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between"
-                  >
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900 mb-1">Tagar Populer Terdeteksi</h3>
-                      <p className="text-xs text-slate-400 mb-4">Tagar paling sering dianalisis oleh AI di platform.</p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2.5 max-h-48 overflow-y-auto">
-                      {stats && stats.topHashtags.length > 0 ? (
-                        stats.topHashtags.map((tag) => (
-                          <div 
-                            key={tag.text} 
-                            onClick={() => {
-                              setActiveTab('hashtags');
-                            }}
-                            className="bg-indigo-50 border border-indigo-100 hover:border-indigo-300 text-indigo-700 px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all"
-                          >
-                            <span className="text-indigo-400">#</span>
-                            <span>{tag.text}</span>
-                            <span className="bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold">{tag.value}</span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-slate-400 italic">Tidak ada tagar populer yang tercatat.</p>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={() => setActiveTab('hashtags')}
-                      className="mt-6 flex items-center justify-center gap-1.5 text-xs text-indigo-600 font-semibold hover:text-indigo-800"
-                    >
-                      <span>Lihat Analisis Tagar Selengkapnya</span>
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                  </motion.div>
                 </div>
 
-                {/* 1.3 Competitor Monitoring Section */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, ease: "easeOut", delay: 0.4 }}
-                  className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-6"
-                >
-                  <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-b border-slate-100 pb-5">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
-                          <Activity className="h-5 w-5" />
-                        </span>
-                        <h3 className="text-base font-bold text-slate-900 font-display">Kompetitor Monitoring</h3>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1">Bandingkan skor sentimen brand Anda dengan pesaing utama di pasar secara langsung.</p>
-                    </div>
 
-                    <div className="flex flex-wrap items-center gap-3.5 w-full xl:w-auto">
-                      {/* Competitor Time Range Toggle */}
-                      <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl shadow-inner shrink-0">
-                        {(['7', '30', '90'] as const).map((r) => (
-                          <button
-                            key={r}
-                            type="button"
-                            onClick={() => setCompetitorTimeRange(r)}
-                            className={`text-[11px] font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer select-none ${
-                              competitorTimeRange === r
-                                ? "bg-white text-indigo-700 shadow-sm"
-                                : "text-slate-500 hover:text-slate-800 hover:bg-slate-50/50"
-                            }`}
-                          >
-                            {r === '7' ? '7 Hari' : r === '30' ? '30 Hari' : '90 Hari'}
-                          </button>
-                        ))}
-                      </div>
-
-                      <form 
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          if (!newCompetitorName.trim()) return;
-                          addCompetitor(newCompetitorName);
-                        }}
-                        className="flex items-center gap-2 max-w-md w-full xl:w-auto flex-1 xl:flex-initial"
-                      >
-                        <input
-                          type="text"
-                          value={newCompetitorName}
-                          onChange={(e) => setNewCompetitorName(e.target.value)}
-                          placeholder="Masukkan nama brand kompetitor..."
-                          disabled={isAddingCompetitor}
-                          className="flex-1 bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:bg-white text-xs px-3.5 py-2.5 rounded-xl outline-none transition-all disabled:opacity-60"
-                        />
-                        <button
-                          type="submit"
-                          disabled={isAddingCompetitor || !newCompetitorName.trim()}
-                          className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap"
-                        >
-                          {isAddingCompetitor ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              <span>Menganalisis...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="h-4 w-4" />
-                              <span>Tambah Brand</span>
-                            </>
-                          )}
-                        </button>
-                      </form>
-                    </div>
-                  </div>
-
-                  {/* Sentiment Bar Comparison */}
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                    <div className="lg:col-span-7 flex flex-col gap-4">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Grafik Perbandingan Skor Sentimen</h4>
-                      
-                      <div className="flex flex-col gap-4.5 bg-slate-50/50 p-5 rounded-2xl border border-slate-100">
-                        {/* Active Brand Row */}
-                        {(() => {
-                          const mainBrandScore = getMainBrandScoreForRange(competitorTimeRange);
-                          const mainBrandBreakdown = getMainBrandSentimentBreakdown(competitorTimeRange);
-                          return (
-                            <div 
-                              className="relative flex flex-col gap-1.5 group cursor-help select-none"
-                              onMouseEnter={() => setHoveredBrandId("main-brand")}
-                              onMouseLeave={() => setHoveredBrandId(null)}
-                            >
-                              <div className="flex items-center justify-between text-xs transition-colors group-hover:text-indigo-900">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="h-2.5 w-2.5 rounded-full bg-indigo-600 group-hover:scale-125 transition-transform duration-200" />
-                                  <span className="font-bold text-indigo-950">
-                                    {trackers.find(t => t.id === selectedTrackerId)?.query || "Brand Utama Anda"} (Brand Utama)
-                                  </span>
-                                </div>
-                                <span className={`font-mono font-bold ${mainBrandScore > 0 ? "text-emerald-600" : mainBrandScore < 0 ? "text-rose-600" : "text-slate-600"}`}>
-                                  {mainBrandScore > 0 ? "+" : ""}{mainBrandScore.toFixed(2)}
-                                </span>
-                              </div>
-                              
-                              {/* Progress bar container */}
-                              <div className="h-7 w-full bg-slate-100 rounded-lg overflow-hidden flex relative border border-slate-200 shadow-inner group-hover:border-indigo-400 group-hover:shadow-md transition-all duration-300">
-                                {/* Positive portion */}
-                                <div 
-                                  style={{ width: `${Math.max(0, (mainBrandScore + 1) / 2 * 100)}%` }}
-                                  className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-full transition-all duration-500 group-hover:brightness-110"
-                                />
-                                {/* Center divider line */}
-                                <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-slate-300" />
-                              </div>
-                              
-                              <div className="flex justify-between text-[10px] text-slate-400 font-mono px-0.5">
-                                <span>Sangat Negatif (-1.0)</span>
-                                <span className="font-semibold text-slate-500">Netral (0.0)</span>
-                                <span>Sangat Positif (+1.0)</span>
-                              </div>
-
-                              {/* Floating Detailed Tooltip */}
-                              <AnimatePresence>
-                                {hoveredBrandId === "main-brand" && (
-                                  <motion.div
-                                    initial={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
-                                    animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
-                                    exit={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
-                                    transition={{ duration: 0.15, ease: "easeOut" }}
-                                    className="absolute bottom-full left-1/2 mb-3 z-40 w-68 bg-slate-950/95 backdrop-blur-md text-white border border-slate-800 p-4 rounded-2xl shadow-2xl pointer-events-none"
-                                  >
-                                    <div className="flex flex-col gap-2">
-                                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                                        <span className="text-xs font-bold text-indigo-400">
-                                          {trackers.find(t => t.id === selectedTrackerId)?.query || "Brand Utama Anda"}
-                                        </span>
-                                        <span className="text-[10px] font-semibold text-slate-400 font-mono">Brand Utama</span>
-                                      </div>
-
-                                      <div className="flex items-center justify-between my-1">
-                                        <span className="text-[11px] text-slate-400">Skor Sentimen AI:</span>
-                                        <span className={`text-xs font-bold font-mono ${mainBrandScore > 0 ? "text-emerald-400" : mainBrandScore < 0 ? "text-rose-400" : "text-slate-400"}`}>
-                                          {mainBrandScore > 0 ? "+" : ""}{mainBrandScore.toFixed(2)}
-                                        </span>
-                                      </div>
-
-                                      {/* Mini segment bars */}
-                                      <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden flex my-1.5">
-                                        <div style={{ width: `${mainBrandBreakdown.positive}%` }} className="bg-emerald-500 h-full transition-all" />
-                                        <div style={{ width: `${mainBrandBreakdown.neutral}%` }} className="bg-slate-400 h-full transition-all" />
-                                        <div style={{ width: `${mainBrandBreakdown.negative}%` }} className="bg-rose-500 h-full transition-all" />
-                                      </div>
-
-                                      <div className="flex flex-col gap-1 text-[11px]">
-                                        <div className="flex items-center justify-between text-emerald-400">
-                                          <div className="flex items-center gap-1">
-                                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                            <span>Sentimen Positif</span>
-                                          </div>
-                                          <span className="font-mono font-bold">+{mainBrandBreakdown.positive}%</span>
-                                        </div>
-                                        <div className="flex items-center justify-between text-slate-300">
-                                          <div className="flex items-center gap-1">
-                                            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                                            <span>Sentimen Netral</span>
-                                          </div>
-                                          <span className="font-mono font-bold">{mainBrandBreakdown.neutral}%</span>
-                                        </div>
-                                        <div className="flex items-center justify-between text-rose-400">
-                                          <div className="flex items-center gap-1">
-                                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                                            <span>Sentimen Negatif</span>
-                                          </div>
-                                          <span className="font-mono font-bold">-{mainBrandBreakdown.negative}%</span>
-                                        </div>
-                                      </div>
-                                      
-                                      <div className="text-[9px] text-slate-500 border-t border-slate-800 pt-1.5 text-center font-mono">
-                                        Berdasarkan {mainBrandBreakdown.totalCount} total analisis
-                                      </div>
-                                    </div>
-
-                                    {/* Tooltip Arrow */}
-                                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-950" />
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Competitor Brands Rows */}
-                      <div className="flex flex-col gap-4.5 bg-slate-50/50 p-5 rounded-2xl border border-slate-100">
-                        {competitors.length > 0 ? (
-                          competitors.map((rawComp) => {
-                            const comp = getCompetitorStatsForRange(rawComp, competitorTimeRange);
-                            return (
-                              <div 
-                                key={comp.id} 
-                                className="relative flex flex-col gap-1.5 border-t border-slate-100/80 first:border-none pt-4.5 first:pt-0 group cursor-help select-none"
-                                onMouseEnter={() => setHoveredBrandId(comp.id)}
-                                onMouseLeave={() => setHoveredBrandId(null)}
-                              >
-                                <div className="flex items-center justify-between text-xs transition-colors group-hover:text-slate-900">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="h-2.5 w-2.5 rounded-full bg-slate-400 group-hover:scale-125 transition-transform duration-200" />
-                                    <span className="font-semibold text-slate-700">{comp.name}</span>
-                                  </div>
-                                  <span className={`font-mono font-bold ${comp.sentimentScore > 0 ? "text-emerald-600" : comp.sentimentScore < 0 ? "text-rose-600" : "text-slate-600"}`}>
-                                    {comp.sentimentScore > 0 ? "+" : ""}{comp.sentimentScore.toFixed(2)}
-                                  </span>
-                                </div>
-                                <div className="h-7 w-full bg-slate-100 rounded-lg overflow-hidden flex relative border border-slate-200 group-hover:border-slate-400 group-hover:shadow-md transition-all duration-300">
-                                  <div 
-                                    style={{ width: `${Math.max(0, (comp.sentimentScore + 1) / 2 * 100)}%` }}
-                                    className="bg-gradient-to-r from-slate-400 to-slate-500 h-full transition-all duration-500 group-hover:brightness-110"
-                                  />
-                                  <div className="absolute left-1/2 top-0 bottom-0 w-0.5 bg-slate-300" />
-                                </div>
-
-                                {/* Floating Detailed Tooltip */}
-                                <AnimatePresence>
-                                  {hoveredBrandId === comp.id && (
-                                    <motion.div
-                                      initial={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
-                                      animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
-                                      exit={{ opacity: 0, y: 10, scale: 0.95, x: "-50%" }}
-                                      transition={{ duration: 0.15, ease: "easeOut" }}
-                                      className="absolute bottom-full left-1/2 mb-3 z-40 w-68 bg-slate-950/95 backdrop-blur-md text-white border border-slate-800 p-4 rounded-2xl shadow-2xl pointer-events-none"
-                                    >
-                                      <div className="flex flex-col gap-2">
-                                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                                          <span className="text-xs font-bold text-amber-400">
-                                            {comp.name}
-                                          </span>
-                                          <span className="text-[10px] font-semibold text-slate-400 font-mono">Pesaing</span>
-                                        </div>
-
-                                        <div className="flex items-center justify-between my-1">
-                                          <span className="text-[11px] text-slate-400">Skor Sentimen AI:</span>
-                                          <span className={`text-xs font-bold font-mono ${comp.sentimentScore > 0 ? "text-emerald-400" : comp.sentimentScore < 0 ? "text-rose-400" : "text-slate-400"}`}>
-                                            {comp.sentimentScore > 0 ? "+" : ""}{comp.sentimentScore.toFixed(2)}
-                                          </span>
-                                        </div>
-
-                                        {/* Mini segment bars */}
-                                        <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden flex my-1.5">
-                                          <div style={{ width: `${comp.positive}%` }} className="bg-emerald-500 h-full transition-all" />
-                                          <div style={{ width: `${comp.neutral}%` }} className="bg-slate-400 h-full transition-all" />
-                                          <div style={{ width: `${comp.negative}%` }} className="bg-rose-500 h-full transition-all" />
-                                        </div>
-
-                                        <div className="flex flex-col gap-1 text-[11px]">
-                                          <div className="flex items-center justify-between text-emerald-400">
-                                            <div className="flex items-center gap-1">
-                                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                              <span>Sentimen Positif</span>
-                                            </div>
-                                            <span className="font-mono font-bold">+{comp.positive}%</span>
-                                          </div>
-                                          <div className="flex items-center justify-between text-slate-300">
-                                            <div className="flex items-center gap-1">
-                                              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                                              <span>Sentimen Netral</span>
-                                            </div>
-                                            <span className="font-mono font-bold">{comp.neutral}%</span>
-                                          </div>
-                                          <div className="flex items-center justify-between text-rose-400">
-                                            <div className="flex items-center gap-1">
-                                              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                                              <span>Sentimen Negatif</span>
-                                            </div>
-                                            <span className="font-mono font-bold">-{comp.negative}%</span>
-                                          </div>
-                                        </div>
-
-                                        <div className="text-[9px] text-slate-500 border-t border-slate-800 pt-1.5 text-center font-mono">
-                                          Dianalisis secara real-time via AI
-                                        </div>
-                                      </div>
-
-                                      {/* Tooltip Arrow */}
-                                      <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-950" />
-                                    </motion.div>
-                                  )}
-                                </AnimatePresence>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="h-24 flex items-center justify-center text-xs text-slate-400 italic">
-                            Belum ada brand kompetitor terdaftar. Masukkan nama brand di atas untuk membandingkan.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-5 flex flex-col gap-4">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Sebaran Sentimen Kompetitor</h4>
-                      
-                      <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto pr-1">
-                        {competitors.map((rawComp) => {
-                          const comp = getCompetitorStatsForRange(rawComp, competitorTimeRange);
-                          return (
-                            <div key={comp.id} className="bg-slate-50 p-3.5 rounded-xl border border-slate-100/80 flex flex-col gap-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-bold text-slate-800">{comp.name}</span>
-                                <button
-                                  onClick={() => deleteCompetitor(comp.id, comp.name)}
-                                  className="text-slate-400 hover:text-rose-600 p-1 rounded-md hover:bg-rose-50 transition-all cursor-pointer"
-                                  title="Hapus Kompetitor"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-
-                              {/* Mini Percentage Bar */}
-                              <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                                <div style={{ width: `${comp.positive}%` }} className="bg-emerald-500 h-full" title={`Positif: ${comp.positive}%`} />
-                                <div style={{ width: `${comp.neutral}%` }} className="bg-slate-400 h-full" title={`Netral: ${comp.neutral}%`} />
-                                <div style={{ width: `${comp.negative}%` }} className="bg-rose-500 h-full" title={`Negatif: ${comp.negative}%`} />
-                              </div>
-
-                              {/* Percent breakdown labels */}
-                              <div className="grid grid-cols-3 gap-2 text-[10px] text-center font-semibold font-mono">
-                                <div className="text-emerald-700 bg-emerald-50 py-0.5 px-1.5 rounded-md">
-                                  +{comp.positive}% Positif
-                                </div>
-                                <div className="text-slate-700 bg-slate-100 py-0.5 px-1.5 rounded-md">
-                                  {comp.neutral}% Netral
-                                </div>
-                                <div className="text-rose-700 bg-rose-50 py-0.5 px-1.5 rounded-md">
-                                  -{comp.negative}% Negatif
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                        {competitors.length === 0 && (
-                          <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
-                            <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-1.5" />
-                            <p className="text-xs font-bold text-slate-500">Analisis Kosong</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5 max-w-[200px]">
-                              Belum ada sebaran data. Tambahkan brand pesaing Anda sekarang.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
               </motion.div>
             )}
 
@@ -2537,7 +1993,7 @@ export default function App() {
                       <h3 className="text-lg font-bold text-slate-900 mt-2 truncate font-display">{t.query}</h3>
                       
                       {/* Active Platforms */}
-                      <div className="flex gap-1.5 mt-3">
+                      <div className="flex flex-wrap gap-1.5 mt-3">
                         {t.platforms.map((plat) => (
                           <span key={plat} className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md font-medium uppercase font-mono">
                             {plat}
@@ -2670,108 +2126,7 @@ export default function App() {
               </motion.div>
             )}
 
-            {/* 4. HASHTAGS ANALYSIS */}
-            {activeTab === 'hashtags' && (
-              <motion.div
-                key="hashtags-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 15 }}
-                className="flex flex-col gap-6"
-              >
-                <div>
-                  <h2 className="text-2xl font-bold font-display text-indigo-950">Analisis Tagar Populer</h2>
-                  <p className="text-sm text-slate-500 mt-1">Lacak jangkauan tagar di seluruh saluran media sosial Anda dan temukan tren konten yang sedang populer.</p>
-                </div>
 
-                {/* Hashtag volume dashboard card */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Left stats summary */}
-                  <motion.div 
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6, ease: "easeOut" }}
-                    className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-xs"
-                  >
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900 mb-2">Sebaran Tagar Teratas</h3>
-                      <p className="text-xs text-slate-400">Total volume tagar yang terdeteksi dalam analisis sistem.</p>
-                    </div>
-
-                    <div className="flex flex-col gap-3 my-4">
-                      {stats && stats.topHashtags.length > 0 ? (
-                        stats.topHashtags.map((tag, index) => (
-                          <div key={tag.text} className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-slate-400 font-bold">#{index + 1}</span>
-                              <span className="text-xs font-semibold text-slate-900">#{tag.text}</span>
-                            </div>
-                            <span className="bg-indigo-50 text-indigo-700 font-mono text-xs font-bold px-2.5 py-1 rounded-md">
-                              {tag.value} kali
-                            </span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-xs text-slate-400 italic">Belum ada sebaran tagar.</p>
-                      )}
-                    </div>
-                  </motion.div>
-
-                  {/* Horizontal Bar Chart representation */}
-                  <motion.div 
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
-                    className="bg-white rounded-2xl border border-slate-200 p-6 md:col-span-2 shadow-xs flex flex-col justify-between"
-                  >
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900 mb-1">Frekuensi Penggunaan Tagar</h3>
-                      <p className="text-xs text-slate-400 mb-4">Grafik frekuensi tagar pada kiriman yang dianalisis oleh AI.</p>
-                    </div>
-
-                    <div className="h-56">
-                      {stats && stats.topHashtags.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={stats.topHashtags} layout="vertical" margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                            <XAxis type="number" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                            <YAxis dataKey="text" type="category" stroke="#0f172a" fontSize={11} tickLine={false} axisLine={false} width={80} />
-                            <Tooltip />
-                            <Bar dataKey="value" fill="#4f46e5" radius={[0, 4, 4, 0]} barSize={14} isAnimationActive={true} animationDuration={1200} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Belum ada grafik frekuensi tagar.</div>
-                      )}
-                    </div>
-                  </motion.div>
-                </div>
-
-                {/* Hashtag insights with Gemini */}
-                <div className="bg-indigo-900 text-white rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-center gap-6 relative overflow-hidden">
-                  <div className="absolute right-0 bottom-0 opacity-10 translate-x-1/4 translate-y-1/4">
-                    <Hash className="h-44 w-44 text-white" />
-                  </div>
-                  
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold font-display text-indigo-100">Rekomendasi Tagar AI & Strategi Konten</h3>
-                    <p className="text-xs text-indigo-200 mt-1.5 leading-relaxed">
-                      Berdasarkan performa sentimen digital brand Anda akhir-akhir ini, model AI merekomendasikan penulisan tagar berbasis emosi positif seperti <span className="underline font-mono">#GojekBTS</span> dan <span className="underline font-mono">#KopiKenanganAesthetic</span> untuk memperluas jangkauan pemirsa di media sosial.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setActiveTab('analyzer');
-                    }}
-                    className="bg-white text-indigo-950 font-semibold hover:bg-indigo-50 px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shrink-0 transition-all cursor-pointer shadow-sm"
-                  >
-                    <span>Analisis Postingan Baru</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
           </AnimatePresence>
         </main>
       </div>
@@ -2779,7 +2134,7 @@ export default function App() {
       {/* Footer credits and information */}
       <footer className="bg-white border-t border-slate-200 mt-12 py-6 text-center text-xs text-slate-400" id="app-footer">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p>© 2026 Social Media Intelligence Platform. Ditenagai oleh Google Gemini 3.5 & Node.js Web Scraping.</p>
+          <p>© 2026 Social Media Intelligence Platform.</p>
         </div>
       </footer>
 
@@ -2832,7 +2187,7 @@ export default function App() {
                   <input
                     type="text"
                     required
-                    placeholder={newTrackerType === 'brand' ? "Contoh: Gojek Indonesia" : "Contoh: MediaTrend"}
+                    placeholder={newTrackerType === 'brand' ? "Contoh: Google, Nike, Apple" : "Contoh: #GenerativeAI, #Sustainability"}
                     value={newTrackerQuery}
                     onChange={(e) => setNewTrackerQuery(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 text-sm"
