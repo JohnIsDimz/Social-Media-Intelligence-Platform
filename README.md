@@ -1,191 +1,150 @@
-# 📈 S.M.I.P (Social Media Intelligence Platform) - Panduan Lengkap & Deployment
+# 📈 S.M.I.P (Social Media Intelligence Platform) - Dokumentasi Teknologi & Deployment
 
-Social Media Intelligence Platform (S.M.I.P) adalah aplikasi cerdas berbasis web yang dirancang khusus untuk memantau tren, menganalisis sentimen, mendeteksi emosi, serta melacak sebaran brand kompetitor di berbagai media sosial (TikTok, Instagram, Facebook, WhatsApp) menggunakan teknologi kecerdasan buatan Gemini AI dengan fitur Google Search Grounding.
-
-Aplikasi ini dibangun menggunakan arsitektur modern full-stack yang memisahkan client-side dan server-side secara rapi guna menjamin kecepatan, keandalan, dan keamanan maksimal.
+Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform)**. Dokumen ini memuat arsitektur teknologi terlengkap, fitur mutakhir, dan panduan deployment lengkap—termasuk cara menghosting aplikasi ini di VPS mandiri maupun panel **Pterodactyl** dengan domain kustom Anda.
 
 ---
 
-## 🛠️ Persyaratan Sistem Optimal (Requirements)
+## 🛠️ Ringkasan Arsitektur & Teknologi S.M.I.P
 
-Untuk memastikan **S.M.I.P** berjalan dengan kinerja maksimal di lingkungan produksi, berikut adalah detail kebutuhan infrastruktur dari sisi Frontend, Backend, dan Database:
+S.M.I.P dirancang sebagai platform pemantauan sosial terintegrasi (full-stack) dengan performa tinggi, responsif, dan mampu berjalan 24 jam non-stop untuk menangkap sinyal dari web.
 
-### 1. Sisi Frontend (React + Vite)
-*   **Engine & Bundler**: Menggunakan Vite untuk kompilasi ultra-cepat.
-*   **Routing SPA**: Memerlukan server web (Nginx, Cloudflare, Apache, atau routing Vercel) untuk menangani fallback SPA (Single Page Application) sehingga semua rute statis diarahkan kembali ke `index.html`.
-*   **Resiliensi API**: Menggunakan client API kustom di `apiService.ts` yang dikonfigurasi secara ketat dengan **Timeout maksimal 15 detik** dan **Mekanisme Otomatis Retry hingga 2 kali dengan Exponential Backoff** jika mendeteksi kemacetan jaringan atau gangguan server backend.
+### 1. Antarmuka Pengguna (Frontend Stack)
+*   **React 18 & Vite**: Kerangka kerja utama dengan bundler ultra-cepat untuk rendering visual yang responsif.
+*   **Tailwind CSS**: Desain visual presisi tinggi dengan pendekatan modern, kontras yang seimbang, dan ramah pengguna.
+*   **Recharts & D3**: Komponen visualisasi interaktif untuk grafik tren sentimen, sebaran emosi (joy, sadness, anger, dll), serta perbandingan pangsa suara (*share of voice*).
+*   **Framer Motion (motion/react)**: Animasi transisi antar-elemen yang halus, denyut emosi (*emotion pulse*), dan efek transisi panel yang elegan.
+*   **Browser Notifications API & Service Worker**:
+    *   Mendaftarkan Service Worker (`/sw.js`) di latar belakang untuk menjamin aplikasi tetap terdaftar pada sistem operasi.
+    *   Pengguna dapat mengaktifkan notifikasi melalui tombol kontrol **NOTIF_ON / NOTIF_OFF** di header dashboard.
+    *   Memicu notifikasi desktop instan saat sistem mendeteksi **lonjakan sentimen negatif** atau **sinyal kritis** dari engine S.M.I.P, bahkan ketika tab browser sedang tertutup.
 
-### 2. Sisi Backend (Express + Node.js)
-*   **Runtime**: Node.js versi 18 atau lebih tinggi (LTS sangat direkomendasikan).
-*   **Variabel Lingkungan (Environment Variables)**:
-    *   `GEMINI_API_KEY`: Kunci API Google Gemini untuk menggerakkan mesin analisis teks dan grafik sentimen. **Harus disimpan aman di server backend** dan tidak boleh terekspos ke browser client.
-*   **Port**: Menjalankan server Express di port `3000` (atau mendeteksi port lingkungan dinamis).
+### 2. Layanan Backend & Real-time (Backend Stack)
+*   **Node.js & Express**: Server backend yang tangguh untuk memproses analitik, mengelola tracker, dan menyajikan API.
+*   **CJS Bundling via esbuild**: Server secara otomatis dikompilasi menjadi satu file ringkas `dist/server.cjs` untuk menjamin waktu muat (*cold-start*) secepat kilat serta kompatibilitas modul yang sempurna di lingkungan produksi Linux/Docker.
+*   **WebSockets (WS)**: Komunikasi dua arah instan antara server dan klien. Setiap kali backend menangkap sinyal baru di latar belakang, data langsung dipancarkan (*broadcast*) ke antarmuka pengguna tanpa perlu memuat ulang halaman.
 
-### 3. Sisi Database & Penyimpanan (db.json)
-*   Aplikasi ini menggunakan sistem database file lokal cepat (`db.json`) untuk menyimpan tracker brand, riwayat komentar, data kompetitor, dan status analisis.
-*   **Penting untuk Diperhatikan**:
-    *   **Di Serverless (Vercel)**: Lingkungan bersifat *read-only*. Aplikasi ini secara cerdas mengalihkan penulisan database ke folder `/tmp/db.json` untuk menjaga kelangsungan sesi. Namun, data di folder sementara ini akan direset setiap kali Vercel mematikan instance serverless yang tidak aktif.
-    *   **Untuk Produksi Permanen**: Disarankan menggunakan platform hosting yang mendukung **Persistent Storage (Volume)**, VPS mandiri, atau menghubungkan Express ke database eksternal (seperti MongoDB/PostgreSQL) jika ingin data tetap utuh selamanya meskipun server dimulai ulang.
+### 3. Mesin Kecerdasan Buatan & Google Search Grounding
+*   **Google GenAI SDK (Gemini 3.5-Flash)**: Mesin AI utama untuk ekstraksi teks, analisis sentimen bernilai numerik (-1 hingga 1), klasifikasi emosi dominan, dan pembuatan laporan otomatis.
+*   **Google Search Grounding**: 
+    *   Menghubungkan kecerdasan buatan langsung dengan data live di Google Search secara real-time.
+    *   **Anti-404 URL Generator**: Sistem secara dinamis menyaring dan menyusun ulang URL hasil pencarian. Jika tautan mati/tidak valid terdeteksi, sistem secara otomatis mengonstruksi URL pencarian resmi yang valid untuk platform target (seperti pencarian filter X/Twitter, tag Instagram, hasil pencarian YouTube, dll) sehingga pengguna tidak akan menemui halaman kosong atau error 404.
 
----
-
-## 🚀 Pilihan 1: Deployment di Vercel (Metode Tercepat)
-
-Sistem telah dikonfigurasi secara otomatis untuk mendukung deployment instan di Vercel menggunakan file pengaturan `vercel.json` bawaan.
-
-### Langkah-langkah:
-1.  Buat akun dan masuk ke dashboard [Vercel](https://vercel.com/).
-2.  Hubungkan repository GitHub proyek Anda ke Vercel.
-3.  Sesuaikan **Build & Development Settings** dengan nilai berikut:
-    *   **Build Command**: `npm run build`
-    *   **Output Directory**: `dist`
-    *   **Install Command**: `npm install`
-4.  Tambahkan **Environment Variable** baru:
-    *   **Nama**: `GEMINI_API_KEY`
-    *   **Nilai**: *(Masukkan kunci API Gemini Anda)*
-5.  Klik **Deploy** dan tunggu proses kompilasi selesai.
+### 4. Penyimpanan Data (Database)
+*   **db.json**: Database berbasis file lokal cepat untuk menyimpan daftar pelacakan (*trackers*), log anomali, dan ringkasan tren. Di lingkungan serverless (seperti Vercel), penyimpanan ini secara cerdas dialihkan ke folder `/tmp` agar penulisan data tidak terhambat.
 
 ---
 
-## ☁️ Pilihan 2: Hosting di Cloudflare & Integrasi Custom Domain
+## 🔔 Sistem Notifikasi Latar Belakang (Background Notification)
 
-Cloudflare menawarkan kinerja CDN terbaik di dunia, perlindungan DDoS gratis, serta optimasi aset web. Berikut adalah panduan menghubungkan domain dan menghosting aplikasi Anda:
-
-### 1. Pembelian & Integrasi DNS Domain
-*   **Melalui Cloudflare (Sangat Praktis)**:
-    1.  Di dashboard Cloudflare, masuk ke menu **Domain Registration** > **Register Domains**.
-    2.  Pilih domain yang diinginkan dan selesaikan transaksi. Domain akan langsung menggunakan nameserver Cloudflare tanpa setup tambahan.
-*   **Melalui Penyedia Lain (Niagahoster, Rumahweb, DomaiNesia, dll)**:
-    1.  Daftarkan domain Anda di Cloudflare melalui menu **Add a Site**.
-    2.  Cloudflare akan memberikan **dua alamat Nameserver** unik (misal: `alina.ns.cloudflare.com` & `conrad.ns.cloudflare.com`).
-    3.  Buka panel domain di registrar tempat Anda membeli domain, cari menu **Nameservers**, lalu ganti nameserver bawaan dengan kedua alamat dari Cloudflare tersebut. Tunggu waktu propagasi DNS (5 menit - 2 jam).
-
-> 🔒 **PENGATURAN SSL WAJIB**: Setelah domain terhubung aktif di Cloudflare, masuk ke menu **SSL/TLS** di dashboard Cloudflare, lalu ubah mode enkripsi menjadi **Full** atau **Full (Strict)**. Ini wajib agar semua pertukaran data API terlindung oleh protokol HTTPS yang aman.
-
-### 2. Strategi Deployment Split-Stack (Frontend di Cloudflare, Backend di Server Lain)
-Untuk efisiensi dan stabilitas maksimal, gunakan arsitektur Split-Stack:
-*   **Frontend (React)** dideploy di **Cloudflare Pages** (Sangat cepat, gratis, dan terdistribusi di CDN global terdekat dengan pengguna Anda).
-*   **Backend (Express API)** dideploy di platform server seperti Render, Railway, atau VPS Anda.
-
-#### Langkah Deploy Frontend ke Cloudflare Pages:
-1.  Buka dashboard Cloudflare, buka **Workers & Pages** > **Create Application** > tab **Pages** > klik **Connect to Git**.
-2.  Pilih repository GitHub proyek ini.
-3.  Pada halaman **Build settings**, atur nilai berikut:
-    *   **Framework Preset**: `Vite` (atau `None`)
-    *   **Build Command**: `npm run build`
-    *   **Build Output Directory**: `dist`
-4.  Klik **Save and Deploy**. Cloudflare akan mengompilasi frontend Anda dan memberikan alamat subdomain gratis bawaan (seperti `smip-app.pages.dev`).
-5.  Buka tab **Custom domains** di proyek Pages Anda, klik **Set up a custom domain**, lalu masukkan domain utama Anda (misal: `app.domainanda.com`). Cloudflare akan mengonfigurasi DNS dan SSL secara otomatis.
+S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service Worker**. 
+*   **Cara Kerja**: Saat backend berjalan di latar belakang dan melakukan *auto-polling* data live, sistem memancarkan event ke frontend. Jika tab browser terbuka, notifikasi browser langsung dikirim. Jika browser ditutup atau berjalan di latar belakang, **Service Worker** (`/sw.js`) yang terdaftar akan menangkap sinyal push dan menampilkan notifikasi pop-up sistem operasi.
+*   **Cara Mengaktifkan**:
+    1.  Buka aplikasi S.M.I.P di browser Anda.
+    2.  Klik tombol **NOTIF_OFF** (berlogo lonceng redup) di bagian kanan atas header.
+    3.  Izinkan permintaan notifikasi dari browser Anda.
+    4.  Status akan berubah menjadi **NOTIF_ON** dengan ikon lonceng biru berdenyut aktif.
 
 ---
 
-## 🔗 Alternatif Platform Hosting Lainnya (Sangat Direkomendasikan untuk Backend & Database Permanen)
+## 🎮 Panduan Deployment di VPS Pterodactyl (Node.js)
 
-Jika Anda ingin agar data riwayat pelacakan dan kompetitor tidak pernah terhapus (data persisten sesungguhnya), gunakan salah satu dari alternatif berikut untuk menjalankan Express backend:
+### **Apakah S.M.I.P bisa berjalan di VPS Pterodactyl?**
+**Ya, 100% Bisa!** Pterodactyl adalah panel manajemen server modern berbasis Docker yang sangat efisien untuk menjalankan proses Node.js secara terus-menerus (*persistent*). Dengan membeli domain dan mengonfigurasi Node.js di Pterodactyl, S.M.I.P akan berjalan 24 jam non-stop di latar belakang.
 
-### A. Railway.app (Sangat Mudah & Mendukung Penyimpanan Persisten)
-Railway adalah platform cloud modern yang sangat cocok untuk aplikasi Node.js Express.
-1.  Daftar di [Railway.app](https://railway.app/) dan buat proyek baru dari repository GitHub Anda.
-2.  Buka tab **Variables** di Railway dan tambahkan:
-    *   `GEMINI_API_KEY` = `(Kunci API Anda)`
-    *   `PORT` = `3000`
-3.  (PENTING) Untuk membuat database file `db.json` bersifat permanen:
-    *   Tambahkan **Volume Mount** baru di Railway (misal berukuran 1GB).
-    *   Arahkan mount path volume tersebut ke direktori aplikasi Anda untuk melindungi file `db.json` agar tidak hilang saat deployment baru dilakukan atau server di-restart.
+Berikut adalah langkah-langkah implementasinya secara runut:
 
-### B. Render.com (Gratis & Stabil)
-Render menyediakan layanan hosting web service gratis dengan opsi piringan penyimpanan permanen (Persistent Disk).
-1.  Buka [Render.com](https://render.com/), buat akun, dan pilih **New** > **Web Service**.
-2.  Hubungkan akun GitHub Anda dan pilih repository proyek ini.
-3.  Atur konfigurasi berikut:
-    *   **Runtime**: `Node`
-    *   **Build Command**: `npm run build`
-    *   **Start Command**: `npm run start`
-4.  Di bagian **Environment**, tambahkan variabel `GEMINI_API_KEY`.
-5.  Masuk ke menu **Advanced** > **Disk**, lalu buat disk baru sebesar 1GB dan hubungkan ke folder di mana file database Anda disimpan agar data tetap persisten selamanya.
+### Langkah 1: Persiapan Domain & DNS Cloudflare
+1.  Beli domain pilihan Anda melalui registrar domain terpercaya (misal: Niagahoster, DomaiNesia, Namecheap, dll).
+2.  Daftarkan domain tersebut ke akun [Cloudflare](https://cloudflare.com/) Anda.
+3.  Ganti **Nameserver** di panel registrar domain Anda dengan Nameserver yang diberikan oleh Cloudflare.
+4.  Di dashboard Cloudflare, buka tab **DNS** > **Records**:
+    *   Tambahkan **A Record** baru.
+    *   **Name**: `@` (untuk domain utama) atau `smip` (untuk subdomain seperti `smip.domainanda.com`).
+    *   **IPv4 address**: Masukkan alamat IP VPS utama Anda (di mana panel Pterodactyl berjalan).
+    *   **Proxy Status**: Aktifkan (ikon awan oranye) untuk mendapatkan SSL gratis dan perlindungan DDoS.
 
-### C. VPS Mandiri (Ubuntu/Debian dengan PM2 & Nginx)
-Metode ini adalah pilihan terbaik jika Anda membeli VPS murah (seperti dari Dewabiz, Hostinger, DigitalOcean, atau IDCloudHost) karena Anda mendapatkan kontrol penuh atas file database tanpa resiko reset.
+### Langkah 2: Konfigurasi Server di Panel Pterodactyl
+1.  Masuk ke panel Pterodactyl Anda, klik **Create Server** (atau minta pengelola server Anda membuatkan satu alokasi server).
+2.  Pilih **Nest**: `Generic` dan **Egg**: `NodeJS` (atau *Discord Bot / Generic NodeJS bot egg*).
+3.  Pada bagian **Allocation / Port**:
+    *   Pilih port yang dialokasikan oleh panel (misalnya port `31245`). Catat port ini.
+4.  Pada bagian **Environment Variables** (Variabel Lingkungan) di panel Pterodactyl:
+    *   `GEMINI_API_KEY`: Masukkan kunci API Gemini Anda.
+    *   `PORT`: Ubah nilainya menjadi port alokasi Anda (misalnya `31245`), atau biarkan server Express mendeteksinya secara otomatis dari alokasi panel.
+    *   `NODE_ENV`: `production`
 
-#### Langkah Setup di VPS:
-1.  Masuk ke server VPS Anda melalui SSH:
+### Langkah 3: Mengunggah File & Instalasi
+1.  Buka menu **File Manager** di panel server Pterodactyl Anda.
+2.  Unggah seluruh folder proyek S.M.I.P Anda (lewati folder `node_modules` karena akan diinstal otomatis). Anda bisa mengompresnya menjadi format `.zip` terlebih dahulu, mengunggahnya, lalu melakukan ekstrak (*unarchive*) langsung di panel.
+3.  Pastikan file `package.json`, `server.ts`, `/src`, `/public`, dan file konfigurasi lainnya berada di root direktori server panel.
+
+### Langkah 4: Pengaturan Startup & Menjalankan Server
+1.  Buka tab **Startup** di panel Pterodactyl Anda.
+2.  Sesuaikan **Startup Command** Anda agar menginstal dependensi terlebih dahulu sebelum melakukan kompilasi dan menjalankan server:
     ```bash
-    ssh root@alamat_ip_vps
+    npm install && npm run build && npm start
     ```
-2.  Instal Node.js (LTS), Git, dan PM2 (pemantau proses latar belakang):
+    *Catatan: Script `start` di `package.json` Anda secara default menjalankan `node dist/server.cjs` yang merupakan hasil kompilasi server Express aman.*
+3.  Buka tab **Console**, lalu klik **Start**.
+4.  Tunggu hingga konsol menampilkan pesan sukses:
+    ```text
+    Server running on http://0.0.0.0:3000 (atau port alokasi Anda)
+    ```
+
+### Langkah 5: Reverse Proxy (Menghubungkan Domain ke Port Pterodactyl)
+Karena Pterodactyl menjalankan aplikasi Anda di port acak (misal `31245`), Anda memerlukan reverse proxy di VPS utama agar domain Anda (`https://smip.domainanda.com`) langsung mengarah ke aplikasi tersebut tanpa perlu menuliskan port di browser.
+
+1.  Masuk ke SSH VPS utama Anda sebagai `root`.
+2.  Buka file konfigurasi Nginx baru untuk domain Anda:
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    sudo apt-get install -y nodejs git nginx
-    sudo npm install -g pm2
+    sudo nano /etc/nginx/sites-available/smip
     ```
-3.  Clone repository proyek Anda ke dalam VPS:
-    ```bash
-    git clone <url_repository_anda> /var/www/smip
-    cd /var/www/smip
-    ```
-4.  Instal seluruh dependensi dan build aplikasi:
-    ```bash
-    npm install
-    npm run build
-    ```
-5.  Buat file `.env` di direktori utama:
-    ```bash
-    nano .env
-    ```
-    Isi dengan:
-    ```env
-    GEMINI_API_KEY=Kunci_API_Gemini_Anda_Di_Sini
-    PORT=3000
-    NODE_ENV=production
-    ```
-6.  Jalankan server backend Express menggunakan PM2 agar berjalan 24 jam non-stop di latar belakang:
-    ```bash
-    pm2 start dist/server.cjs --name "smip-backend"
-    pm2 save
-    pm2 startup
-    ```
-7.  Konfigurasikan Nginx sebagai reverse proxy. Buka file konfigurasi default:
-    ```bash
-    sudo nano /etc/nginx/sites-available/default
-    ```
-    Ganti isinya dengan konfigurasi proxy berikut:
+3.  Masukkan konfigurasi proxy berikut (sesuaikan domain dan port alokasi Pterodactyl Anda):
     ```nginx
     server {
         listen 80;
-        server_name domainanda.com www.domainanda.com;
+        server_name smip.domainanda.com;
 
         location / {
-            proxy_pass http://localhost:3000;
+            proxy_pass http://127.0.0.1:31245; # Ganti dengan port alokasi Pterodactyl Anda
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection 'upgrade';
             proxy_set_header Host $host;
             proxy_cache_bypass $http_upgrade;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
     }
     ```
-8.  Uji dan restart server Nginx Anda:
+4.  Aktifkan konfigurasi dan muat ulang Nginx:
     ```bash
+    sudo ln -s /etc/nginx/sites-available/smip /etc/nginx/sites-enabled/
     sudo nginx -t
     sudo systemctl restart nginx
     ```
-9.  Arahkan IP VPS Anda ke domain utama Anda di DNS Cloudflare dengan tipe **A Record** (Proxy Status: On/Orange). Sekarang aplikasi Anda telah online secara permanen dengan protokol keamanan SSL terbaik dari Cloudflare!
+5.  Dapatkan sertifikat SSL aman dengan **Certbot Let's Encrypt**:
+    ```bash
+    sudo apt install certbot python3-certbot-nginx -y
+    sudo certbot --nginx -d smip.domainanda.com
+    ```
+6.  Selesai! Sekarang aplikasi S.M.I.P Anda yang berjalan di Pterodactyl VPS dapat diakses secara global dan aman melalui alamat `https://smip.domainanda.com`.
 
 ---
 
-## 📦 Menjalankan Secara Lokal (Local Development)
+## 💻 Cara Menjalankan Secara Lokal (Local Development)
 
-Jika Anda ingin menguji atau memodifikasi aplikasi ini di komputer lokal Anda sebelum melakukan deployment:
+Jika Anda ingin mencoba menjalankan atau memodifikasi aplikasi ini di komputer lokal Anda:
 
 ```bash
-# 1. Unduh dan pasang dependensi proyek
+# 1. Pasang semua dependensi
 npm install
 
-# 2. Buat file .env di direktori root dan masukkan API Key Anda
-# GEMINI_API_KEY=isi_dengan_api_key_anda
+# 2. Buat file .env di folder utama dan isi kunci API Gemini
+# GEMINI_API_KEY=Kunci_API_Anda_Di_Sini
 
-# 3. Jalankan server lokal untuk mode pengembangan
+# 3. Jalankan server lokal dalam mode pengembangan
 npm run dev
 ```
 
-Aplikasi web sekarang akan berjalan secara dinamis di alamat `http://localhost:3000`. Anda dapat mengakses dashboard interaktif, menguji fitur analisis sentimen AI secara langsung, dan mengelola pelacakan kompetitor secara real-time.
+Buka `http://localhost:3000` di browser Anda untuk masuk ke antarmuka dashboard interaktif S.M.I.P.

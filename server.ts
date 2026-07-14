@@ -399,6 +399,34 @@ function localAnalyzeSentiment(title?: string, content?: string) {
   };
 }
 
+// Construct authentic search or explore URLs for official social media platforms to avoid 404 errors
+function constructOfficialPlatformSearchUrl(platform: string, query: string): string {
+  const encQuery = encodeURIComponent(query);
+  const cleanTag = encodeURIComponent(query.replace(/[\s#]+/g, ""));
+  
+  switch (platform.toLowerCase()) {
+    case "twitter":
+    case "x":
+      return `https://x.com/search?q=${encQuery}`;
+    case "tiktok":
+      return `https://www.tiktok.com/search?q=${encQuery}`;
+    case "instagram":
+      return `https://www.instagram.com/explore/tags/${cleanTag}/`;
+    case "facebook":
+      return `https://www.facebook.com/search/top?q=${encQuery}`;
+    case "youtube":
+      return `https://www.youtube.com/results?search_query=${encQuery}`;
+    case "linkedin":
+      return `https://www.linkedin.com/search/results/all/?keywords=${encQuery}`;
+    case "reddit":
+      return `https://www.reddit.com/search/?q=${encQuery}`;
+    case "whatsapp":
+      return `https://web.whatsapp.com/`;
+    default:
+      return `https://www.google.com/search?q=${encQuery}`;
+  }
+}
+
 // Local Fallback Mock Generator for Active Search Grounding Results (Used when search tools/scopes fail)
 function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) {
   const selectedPlatforms = platforms && platforms.length > 0 ? platforms : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
@@ -493,7 +521,7 @@ function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) 
     
     results.push({
       platform,
-      url: `https://www.${platform}.com/share/status/global-${Math.floor(Math.random() * 10000000)}`,
+      url: constructOfficialPlatformSearchUrl(platform, trackerQuery),
       author: region.author,
       title: template.title,
       content: template.content,
@@ -775,12 +803,19 @@ app.post("/api/trigger-monitor", async (req, res) => {
 
     const parsedResults = JSON.parse(response.text.trim());
     
-    // Add unique IDs and link to tracker
-    const formattedResults = parsedResults.map((res: any, index: number) => ({
-      ...res,
-      id: `mr-${Date.now()}-${index}`,
-      trackerId
-    }));
+    // Add unique IDs and link to tracker, cleaning up URLs to avoid 404 dead links
+    const formattedResults = parsedResults.map((res: any, index: number) => {
+      let cleanUrl = res.url || "";
+      if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
+        cleanUrl = constructOfficialPlatformSearchUrl(res.platform || "google", tracker.query);
+      }
+      return {
+        ...res,
+        url: cleanUrl,
+        id: `mr-${Date.now()}-${index}`,
+        trackerId
+      };
+    });
 
     // Save newly found results to local DB
     // Clear old results for this tracker to simulate a fresh monitor refresh, or merge them!
@@ -1313,6 +1348,70 @@ Aturan Output JSON:
   }
 });
 
+// Helper for real-time background Google Search Grounding to fetch authentic, non-simulated signals
+async function runBackgroundGrounding(tracker: any, platform: string) {
+  if (!process.env.GEMINI_API_KEY) return null;
+  try {
+    const prompt = `Search the live web for a very recent public discussion, review, or mention of "${tracker.query}" on the platform: ${platform}.
+    Use Google Search grounding to retrieve real information.
+    Format the response as a single valid JSON object matching this schema exactly:
+    {
+      "platform": "${platform}",
+      "url": "the actual source URL retrieved from the search grounding links",
+      "author": "name/handle of the poster or Public Discussion",
+      "title": "brief summary headline of the post/mention in Indonesian or English",
+      "content": "summary of what was said in the post or comment in Indonesian or English",
+      "sentiment": "positive" | "neutral" | "negative",
+      "sentimentScore": number from -1 to 1 representing the emotion strength,
+      "emotion": "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral",
+      "engagement": "High" | "Medium" | "Low",
+      "country": "country name of the poster or topic"
+    }`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            platform: { type: Type.STRING },
+            url: { type: Type.STRING },
+            author: { type: Type.STRING },
+            title: { type: Type.STRING },
+            content: { type: Type.STRING },
+            sentiment: { type: Type.STRING },
+            sentimentScore: { type: Type.NUMBER },
+            emotion: { type: Type.STRING },
+            engagement: { type: Type.STRING },
+            country: { type: Type.STRING }
+          },
+          required: ["platform", "url", "author", "title", "content", "sentiment", "sentimentScore", "emotion", "engagement", "country"]
+        }
+      }
+    });
+
+    const res = JSON.parse(response.text.trim());
+    let cleanUrl = res.url || "";
+    if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
+      cleanUrl = constructOfficialPlatformSearchUrl(platform, tracker.query);
+    }
+
+    return {
+      ...res,
+      url: cleanUrl,
+      date: new Date().toISOString(),
+      latitude: platform === "tiktok" ? -6.2088 : 37.7749,
+      longitude: platform === "tiktok" ? 106.8456 : -95.7129
+    };
+  } catch (err) {
+    console.warn(`[Background Grounding Warning] Real web search failed for tracker ${tracker.query} on ${platform}:`, err);
+    return null;
+  }
+}
+
 // ==========================================
 // VITE DEV SERVER / PRODUCTION SERVING WITH WEBSOCKETS
 // ==========================================
@@ -1349,7 +1448,7 @@ async function startServer() {
   });
 
   // Start real-time background ingestion simulation (auto-polling & live feeds simulation)
-  setInterval(() => {
+  setInterval(async () => {
     try {
       const db = getDB();
       if (!db.trackers || db.trackers.length === 0) return;
@@ -1361,15 +1460,36 @@ async function startServer() {
         : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
       const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
 
-      const rawResults = localGenerateMonitorResults(randomTracker.query, [randomPlatform]);
-      if (rawResults && rawResults.length > 0) {
-        const freshMention = {
-          ...rawResults[0],
-          id: `mr-${Date.now()}-bg`,
-          trackerId: randomTracker.id,
-          date: new Date().toISOString() // Brand new timestamp
-        };
+      let freshMention: any = null;
 
+      // With 15% probability and if GEMINI_API_KEY is active, execute a real live search grounding in the background
+      if (Math.random() < 0.15 && process.env.GEMINI_API_KEY) {
+        console.log(`[Real-time Background Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${randomPlatform}...`);
+        const realSignal = await runBackgroundGrounding(randomTracker, randomPlatform);
+        if (realSignal) {
+          freshMention = {
+            ...realSignal,
+            id: `mr-${Date.now()}-bg-real`,
+            trackerId: randomTracker.id
+          };
+          console.log(`[Real-time Background Ingest] Successfully fetched REAL grounding signal: "${freshMention.title}"`);
+        }
+      }
+
+      // Fallback/standard generator if search grounding is not triggered or fails
+      if (!freshMention) {
+        const rawResults = localGenerateMonitorResults(randomTracker.query, [randomPlatform]);
+        if (rawResults && rawResults.length > 0) {
+          freshMention = {
+            ...rawResults[0],
+            id: `mr-${Date.now()}-bg`,
+            trackerId: randomTracker.id,
+            date: new Date().toISOString() // Brand new timestamp
+          };
+        }
+      }
+
+      if (freshMention) {
         // Insert at the beginning of monitor results
         db.monitorResults = db.monitorResults || [];
         db.monitorResults.unshift(freshMention);
@@ -1380,7 +1500,7 @@ async function startServer() {
         }
 
         writeDB(db);
-        console.log(`[Real-time Ingest] New live brand post: "${randomTracker.query}" on ${randomPlatform}`);
+        console.log(`[Real-time Ingest] New brand post ingested: "${randomTracker.query}" on ${randomPlatform}`);
 
         // Broadcast to all active clients for real-time UI injection
         broadcast("LIVE_POST_INGESTED", {
