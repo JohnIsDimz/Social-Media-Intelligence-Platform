@@ -34,13 +34,30 @@ function broadcast(type: string, data: any) {
 
 // Initialize Gemini SDK with telemetry header
 const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
+  apiKey: process.env.GEMINI_API_KEY || "missing_api_key_placeholder",
   httpOptions: {
     headers: {
       'User-Agent': 'mediatrend-build',
     }
   }
 });
+
+// Helper to check if the Gemini API Key is configured and valid
+function isGeminiKeyValid(): boolean {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return false;
+  const normalized = key.trim();
+  if (
+    normalized === "" || 
+    normalized === "MY_GEMINI_API_KEY" || 
+    normalized === "YOUR_GEMINI_API_KEY" || 
+    normalized.startsWith("YOUR_") ||
+    normalized === "missing_api_key_placeholder"
+  ) {
+    return false;
+  }
+  return true;
+}
 
 // Database Helper Functions using SQLite
 import Database from "better-sqlite3";
@@ -575,7 +592,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
 
   // 4. Grounding: If we have remaining platforms (e.g. Tiktok, Instagram, Facebook, WhatsApp, LinkedIn, etc.)
   // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
-  if (remainingPlatforms.length > 0 && process.env.GEMINI_API_KEY) {
+  if (remainingPlatforms.length > 0 && isGeminiKeyValid()) {
     try {
       console.log(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
       const searchPlatformsStr = remainingPlatforms.join(", ");
@@ -893,53 +910,77 @@ app.post("/api/analyze-url", async (req, res) => {
       if (scraped.imageUrl) scrapedImg = scraped.imageUrl;
     }
 
-    // Call Gemini 3.5 Flash for high-precision Sentiment and Emotion extraction
-    const prompt = `Analyze this social media post for Sentiment and Emotion monitoring.
-    
-    Post Details:
-    URL: ${url || "N/A"}
-    Platform: ${platform}
-    Scraped Title: ${scrapedTitle}
-    Original Description / Content: ${scrapedDesc}
-    
-    Analyze the text carefully. Provide the response as a valid JSON object matching this schema exactly:
-    {
-      "sentiment": "positive" | "neutral" | "negative",
-      "sentimentScore": number between -1.0 (extremely negative) and 1.0 (extremely positive),
-      "emotion": string (use one of: "Joy", "Anger", "Sadness", "Surprise", "Love", "Neutral", "Fear"),
-      "engagement": "High" | "Medium" | "Low",
-      "hashtags": string[] (array of detected hashtags or relevant keyword tags),
-      "refinedTitle": string (a concise, human-friendly summary headline of the post content in Indonesian or English),
-      "refinedDescription": string (a concise summary description of the post in Indonesian or English)
-    }
-    
-    Analyze and output Indonesian-focused slang or abbreviations correctly if present (e.g., "ngaco" -> negative, "keren" -> positive).`;
+    let geminiResult = null;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            sentiment: { type: Type.STRING },
-            sentimentScore: { type: Type.NUMBER },
-            emotion: { type: Type.STRING },
-            engagement: { type: Type.STRING },
-            hashtags: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            refinedTitle: { type: Type.STRING },
-            refinedDescription: { type: Type.STRING }
-          },
-          required: ["sentiment", "sentimentScore", "emotion", "engagement", "hashtags", "refinedTitle", "refinedDescription"]
+    if (isGeminiKeyValid()) {
+      try {
+        // Call Gemini 3.5 Flash for high-precision Sentiment and Emotion extraction
+        const prompt = `Analyze this social media post for Sentiment and Emotion monitoring.
+        
+        Post Details:
+        URL: ${url || "N/A"}
+        Platform: ${platform}
+        Scraped Title: ${scrapedTitle}
+        Original Description / Content: ${scrapedDesc}
+        
+        Analyze the text carefully. Provide the response as a valid JSON object matching this schema exactly:
+        {
+          "sentiment": "positive" | "neutral" | "negative",
+          "sentimentScore": number between -1.0 (extremely negative) and 1.0 (extremely positive),
+          "emotion": string (use one of: "Joy", "Anger", "Sadness", "Surprise", "Love", "Neutral", "Fear"),
+          "engagement": "High" | "Medium" | "Low",
+          "hashtags": string[] (array of detected hashtags or relevant keyword tags),
+          "refinedTitle": string (a concise, human-friendly summary headline of the post content in Indonesian or English),
+          "refinedDescription": string (a concise summary description of the post in Indonesian or English)
         }
-      }
-    });
+        
+        Analyze and output Indonesian-focused slang or abbreviations correctly if present (e.g., "ngaco" -> negative, "keren" -> positive).`;
 
-    const geminiResult = JSON.parse(response.text.trim());
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                sentiment: { type: Type.STRING },
+                sentimentScore: { type: Type.NUMBER },
+                emotion: { type: Type.STRING },
+                engagement: { type: Type.STRING },
+                hashtags: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                refinedTitle: { type: Type.STRING },
+                refinedDescription: { type: Type.STRING }
+              },
+              required: ["sentiment", "sentimentScore", "emotion", "engagement", "hashtags", "refinedTitle", "refinedDescription"]
+            }
+          }
+        });
+
+        geminiResult = JSON.parse(response.text.trim());
+      } catch (err: any) {
+        console.warn("[Gemini API Warning] Analysis API call failed with error details:", err?.message || err);
+        console.log("Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
+      }
+    } else {
+      console.log("[S.M.I.P Server] GEMINI_API_KEY is not configured or is a placeholder. Bypassing Gemini API and using local high-accuracy heuristic analyzer.");
+    }
+
+    if (!geminiResult) {
+      const localResult = localAnalyzeSentiment(scrapedTitle, scrapedDesc);
+      geminiResult = {
+        refinedTitle: localResult.refinedTitle,
+        refinedDescription: localResult.refinedDescription,
+        sentiment: localResult.sentiment,
+        sentimentScore: localResult.sentimentScore,
+        emotion: localResult.emotion,
+        engagement: localResult.engagement,
+        hashtags: localResult.hashtags
+      };
+    }
 
     const db = getDB();
     const newAnalysis = {
@@ -963,37 +1004,8 @@ app.post("/api/analyze-url", async (req, res) => {
 
     res.json(newAnalysis);
   } catch (err: any) {
-    console.warn("[Gemini API] Analysis API call failed with error details:", err?.message || err);
-    console.log("Analysis API failed via Gemini API. Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
-    
-    try {
-      const localResult = localAnalyzeSentiment(scrapedTitle, scrapedDesc);
-      
-      const db = getDB();
-      const newAnalysis = {
-        id: `ap-${Date.now()}`,
-        url: url || `manual-text-${Date.now()}`,
-        platform,
-        title: localResult.refinedTitle,
-        description: localResult.refinedDescription,
-        imageUrl: scrapedImg,
-        sentiment: localResult.sentiment,
-        sentimentScore: localResult.sentimentScore,
-        emotion: localResult.emotion,
-        engagement: localResult.engagement,
-        hashtags: localResult.hashtags,
-        analyzedAt: new Date().toISOString()
-      };
-
-      db.analyzedPosts.unshift(newAnalysis);
-      writeDB(db);
-      broadcast("SYNC", { event: "post_analyzed", post: newAnalysis });
-
-      res.json(newAnalysis);
-    } catch (fallbackErr: any) {
-      console.error("Local fallback analysis failed:", fallbackErr);
-      res.status(500).json({ error: "Failed to perform intelligent sentiment analysis. " + fallbackErr.message });
-    }
+    console.error("Critical error in /api/analyze-url:", err);
+    res.status(500).json({ error: "Failed to perform sentiment analysis: " + err.message });
   }
 });
 
@@ -1424,6 +1436,10 @@ Aturan Output JSON:
 - primaryDriver adalah penjelasan ringkas & akurat tentang faktor pendorong utama sentimen global pada hari tersebut.
 - actionableInsights adalah 3 rekomendasi taktis nyata berbasis pasar global untuk merespons tren prediksi tersebut secara efektif.`;
 
+    if (!isGeminiKeyValid()) {
+      throw new Error("GEMINI_API_KEY is not configured or is a placeholder.");
+    }
+
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
       contents: prompt,
@@ -1549,7 +1565,7 @@ Aturan Output JSON:
 
 // Helper for real-time background Google Search Grounding to fetch authentic, non-simulated signals
 async function runBackgroundGrounding(tracker: any, platform: string) {
-  if (!process.env.GEMINI_API_KEY) return null;
+  if (!isGeminiKeyValid()) return null;
   try {
     const prompt = `Search the live web for a very recent public discussion, review, or mention of "${tracker.query}" on the platform: ${platform}.
     Use Google Search grounding to retrieve real information.
@@ -1662,7 +1678,7 @@ async function startServer() {
       let freshMention: any = null;
 
       // With 15% probability and if GEMINI_API_KEY is active, execute a real live search grounding in the background
-      if (Math.random() < 0.15 && process.env.GEMINI_API_KEY) {
+      if (Math.random() < 0.15 && isGeminiKeyValid()) {
         console.log(`[Real-time Background Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${randomPlatform}...`);
         const realSignal = await runBackgroundGrounding(randomTracker, randomPlatform);
         if (realSignal) {

@@ -411,6 +411,12 @@ export default function App() {
                 });
               }
 
+              // Update allMonitorResults dynamically so that on-the-fly calculated platform trend charts transition and shift smoothly in real-time
+              setAllMonitorResults((prev) => {
+                if (prev.some((item) => item.id === post.id)) return prev;
+                return [post, ...prev].slice(0, 500);
+              });
+
               // 2. Add to transient real-time floating alerts state
               const newAlert = {
                 id: `alert-${Date.now()}-${Math.random()}`,
@@ -1821,59 +1827,59 @@ export default function App() {
                   {/* Comparison Side-by-Side Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Platform A View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 overflow-hidden relative min-h-[360px]">
-                      <AnimatePresence mode="wait">
-                        <motion.div
-                          key={comparePlatformA}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
-                          className="flex flex-col gap-4 w-full h-full"
-                        >
-                          {/* Header Platform A */}
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <div className="flex items-center gap-2">
-                              <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
-                              <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
-                            </div>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
-                              Platform A
-                            </span>
-                          </div>
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 relative min-h-[360px]">
+                      {/* Header Platform A */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
+                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
+                          Platform A
+                        </span>
+                      </div>
 
-                          {/* Stats Overview */}
-                          <div className="grid grid-cols-3 gap-3">
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
-                              <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformA).total}</p>
-                            </div>
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                              {getPlatformStats(comparePlatformA).total > 0 ? (
-                                <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                                  {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
-                                </p>
-                              ) : (
-                                <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
-                              )}
-                            </div>
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                              {getPlatformStats(comparePlatformA).total > 0 ? (
-                                <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
-                              ) : (
-                                <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
-                              )}
-                            </div>
-                          </div>
+                      {/* Stats Overview */}
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
+                          <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformA).total}</p>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
+                          {getPlatformStats(comparePlatformA).total > 0 ? (
+                            <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                              {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
+                            </p>
+                          ) : (
+                            <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
+                          )}
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
+                          {getPlatformStats(comparePlatformA).total > 0 ? (
+                            <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
+                          ) : (
+                            <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
+                          )}
+                        </div>
+                      </div>
 
-                          {/* Mini AreaChart with horizontal drag scroll */}
-                          <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs">
-                            <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
-                              <span className="font-semibold text-slate-500">Tren Analisis</span>
-                              <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
-                            </div>
+                      {/* Mini AreaChart with horizontal drag scroll */}
+                      <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs overflow-hidden">
+                        <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
+                          <span className="font-semibold text-slate-500">Tren Analisis</span>
+                          <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
+                        </div>
+                        <AnimatePresence mode="wait">
+                          <motion.div
+                            key={comparePlatformA}
+                            initial={{ opacity: 0, x: 12, filter: "blur(2px)" }}
+                            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+                            exit={{ opacity: 0, x: -12, filter: "blur(2px)" }}
+                            transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                            className="w-full"
+                          >
                             {getPlatformStats(comparePlatformA).total > 0 ? (
                               <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
                                 <div className="h-44 min-w-[540px]">
@@ -1913,65 +1919,65 @@ export default function App() {
                                 </p>
                               </div>
                             )}
-                          </div>
-                        </motion.div>
-                      </AnimatePresence>
+                          </motion.div>
+                        </AnimatePresence>
+                      </div>
                     </div>
 
                     {/* Platform B View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 overflow-hidden relative min-h-[360px]">
-                      <AnimatePresence mode="wait">
-                        <motion.div
-                          key={comparePlatformB}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
-                          className="flex flex-col gap-4 w-full h-full"
-                        >
-                          {/* Header Platform B */}
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <div className="flex items-center gap-2">
-                              <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
-                              <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
-                            </div>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
-                              Platform B
-                            </span>
-                          </div>
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 relative min-h-[360px]">
+                      {/* Header Platform B */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
+                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
+                          Platform B
+                        </span>
+                      </div>
 
-                          {/* Stats Overview */}
-                          <div className="grid grid-cols-3 gap-3">
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
-                              <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformB).total}</p>
-                            </div>
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                              {getPlatformStats(comparePlatformB).total > 0 ? (
-                                <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                                  {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
-                                </p>
-                              ) : (
-                                <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
-                              )}
-                            </div>
-                            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                              <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                              {getPlatformStats(comparePlatformB).total > 0 ? (
-                                <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
-                              ) : (
-                                <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
-                              )}
-                            </div>
-                          </div>
+                      {/* Stats Overview */}
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
+                          <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformB).total}</p>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
+                          {getPlatformStats(comparePlatformB).total > 0 ? (
+                            <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                              {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
+                            </p>
+                          ) : (
+                            <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
+                          )}
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
+                          {getPlatformStats(comparePlatformB).total > 0 ? (
+                            <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
+                          ) : (
+                            <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
+                          )}
+                        </div>
+                      </div>
 
-                          {/* Mini AreaChart with horizontal drag scroll */}
-                          <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs">
-                            <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
-                              <span className="font-semibold text-slate-500">Tren Analisis</span>
-                              <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
-                            </div>
+                      {/* Mini AreaChart with horizontal drag scroll */}
+                      <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs overflow-hidden">
+                        <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
+                          <span className="font-semibold text-slate-500">Tren Analisis</span>
+                          <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
+                        </div>
+                        <AnimatePresence mode="wait">
+                          <motion.div
+                            key={comparePlatformB}
+                            initial={{ opacity: 0, x: 12, filter: "blur(2px)" }}
+                            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+                            exit={{ opacity: 0, x: -12, filter: "blur(2px)" }}
+                            transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                            className="w-full"
+                          >
                             {getPlatformStats(comparePlatformB).total > 0 ? (
                               <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
                                 <div className="h-44 min-w-[540px]">
@@ -2011,9 +2017,9 @@ export default function App() {
                                 </p>
                               </div>
                             )}
-                          </div>
-                        </motion.div>
-                      </AnimatePresence>
+                          </motion.div>
+                        </AnimatePresence>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
