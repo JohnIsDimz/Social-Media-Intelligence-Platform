@@ -53,6 +53,7 @@ import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionRepor
 import { api } from "./apiService";
 import { GlobalHeatmap } from "./components/GlobalHeatmap";
 import { RadarScanner } from "./components/RadarScanner";
+import { AnimatedNumber } from "./components/AnimatedNumber";
 
 const fallbackPredictions: AIPredictionReport = {
   summary: "Berdasarkan analisis tren sentimen 7 hari terakhir, brand Anda menunjukkan tingkat kepuasan publik yang cukup stabil dengan sedikit fluktuasi negatif akibat keluhan teknis. AI memperkirakan adanya perbaikan sentimen dalam 3 hari ke depan seiring respons tim yang cepat.",
@@ -1362,9 +1363,9 @@ export default function App() {
                         initial={{ scale: 0.8, opacity: 0.4 }}
                         animate={{ scale: 1, opacity: 1 }}
                         transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                        className="text-2xl font-bold text-slate-900 mt-0.5"
+                        className="text-2xl font-bold text-slate-900 mt-0.5 flex items-baseline"
                       >
-                        {stats?.totalAnalyzed ?? 0}
+                        <AnimatedNumber value={stats?.totalAnalyzed ?? 0} precision={0} />
                       </motion.h3>
                     </div>
                   </motion.div>
@@ -1373,21 +1374,38 @@ export default function App() {
                     layout 
                     className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
                   >
-                    <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-                      <ThumbsUp className="h-6 w-6" />
+                    <div className={`p-3 rounded-xl transition-colors duration-300 ${
+                      stats?.overallSentiment === "positive" ? "bg-emerald-50 text-emerald-600" :
+                      stats?.overallSentiment === "negative" ? "bg-rose-50 text-rose-600" :
+                      "bg-slate-100 text-slate-600"
+                    }`}>
+                      {stats?.overallSentiment === "positive" ? <ThumbsUp className="h-6 w-6" /> :
+                       stats?.overallSentiment === "negative" ? <ThumbsDown className="h-6 w-6" /> :
+                       <Activity className="h-6 w-6" />}
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Sentimen Dominan</p>
-                      <motion.h3 
-                        key={stats?.overallSentiment ?? "neutral"}
-                        initial={{ scale: 0.8, opacity: 0.4 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                        className="text-lg font-bold text-emerald-600 mt-0.5 capitalize"
-                      >
-                        {stats?.overallSentiment === "positive" ? "Positif" : 
-                         stats?.overallSentiment === "negative" ? "Negatif" : "Netral"}
-                      </motion.h3>
+                      <div className="flex flex-col mt-0.5">
+                        <motion.span 
+                          key={stats?.overallSentiment ?? "neutral"}
+                          initial={{ scale: 0.8, opacity: 0.4 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                          className={`text-lg font-bold capitalize leading-tight ${
+                            stats?.overallSentiment === "positive" ? "text-emerald-600" :
+                            stats?.overallSentiment === "negative" ? "text-rose-600" :
+                            "text-slate-600"
+                          }`}
+                        >
+                          {stats?.overallSentiment === "positive" ? "Positif" : 
+                           stats?.overallSentiment === "negative" ? "Negatif" : "Netral"}
+                        </motion.span>
+                        {stats && typeof stats.averageScore === 'number' && (
+                          <span className="text-[10px] text-slate-400 font-medium mt-1 font-mono flex items-center gap-0.5">
+                            Skor: <AnimatedNumber value={stats.averageScore} precision={2} className="font-bold text-slate-600" />
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </motion.div>
 
@@ -1400,15 +1418,27 @@ export default function App() {
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Denyut Emosi</p>
-                      <motion.h3 
-                        key={stats?.emotionDistribution?.[0]?.name ?? "neutral"}
-                        initial={{ scale: 0.8, opacity: 0.4 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                        className="text-lg font-bold text-amber-600 mt-0.5 capitalize"
-                      >
-                        {stats?.emotionDistribution?.[0]?.name ?? "Netral"}
-                      </motion.h3>
+                      <div className="flex flex-col mt-0.5">
+                        <motion.span 
+                          key={stats?.emotionDistribution?.[0]?.name ?? "neutral"}
+                          initial={{ scale: 0.8, opacity: 0.4 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                          className="text-lg font-bold text-amber-600 capitalize leading-tight"
+                        >
+                          {stats?.emotionDistribution?.[0]?.name ?? "Netral"}
+                        </motion.span>
+                        {stats && stats.totalAnalyzed > 0 && stats.emotionDistribution?.[0] && (
+                          <span className="text-[10px] text-slate-400 font-medium mt-1 font-mono flex items-center gap-0.5">
+                            Prevalensi: <AnimatedNumber 
+                              value={Math.round((stats.emotionDistribution[0].value / stats.totalAnalyzed) * 100)} 
+                              precision={0} 
+                              suffix="%" 
+                              className="font-bold text-slate-600" 
+                            />
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </motion.div>
 
