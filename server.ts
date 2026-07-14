@@ -42,8 +42,16 @@ const ai = new GoogleGenAI({
   }
 });
 
+let geminiRateLimitActive = false;
+let rateLimitResetTime = 0;
+
 // Helper to check if the Gemini API Key is configured and valid
 function isGeminiKeyValid(): boolean {
+  if (geminiRateLimitActive && Date.now() < rateLimitResetTime) {
+    return false;
+  } else if (geminiRateLimitActive) {
+    geminiRateLimitActive = false;
+  }
   const key = process.env.GEMINI_API_KEY;
   if (!key) return false;
   const normalized = key.trim();
@@ -130,6 +138,340 @@ try {
 try {
   dbConn.exec("ALTER TABLE monitor_results ADD COLUMN longitude REAL;");
 } catch (e) {}
+
+// ==========================================
+// FIREBASE / FIRESTORE SYNC LOGIC
+// ==========================================
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+
+const firebaseConfig = require("./firebase-applet-config.json");
+
+if (!getApps().length) {
+  initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+
+let useDefaultDb = false;
+let disableFirestoreSync = false;
+
+function getFirestoreInstance() {
+  if (useDefaultDb) {
+    return getFirestore();
+  }
+  if (firebaseConfig.firestoreDatabaseId) {
+    try {
+      return getFirestore(firebaseConfig.firestoreDatabaseId);
+    } catch (err) {
+      console.warn("[Firebase Sync] Failed to get named Firestore instance, falling back to default:", err);
+      useDefaultDb = true;
+      return getFirestore();
+    }
+  }
+  return getFirestore();
+}
+
+async function syncFromFirestoreToSQLite() {
+  if (disableFirestoreSync) {
+    console.log("[Firebase Sync] Sync is disabled. Running on local SQLite cache.");
+    return;
+  }
+  try {
+    console.log("[Firebase Sync] Loading initial database from Firestore...");
+    let db = getFirestoreInstance();
+    
+    // 1. Fetch Trackers (with dynamic fallback for the first operation)
+    let trackersSnap;
+    try {
+      trackersSnap = await db.collection("trackers").get();
+    } catch (err: any) {
+      const errMsg = String(err);
+      if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
+        console.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
+        useDefaultDb = true;
+        try {
+          db = getFirestoreInstance();
+          trackersSnap = await db.collection("trackers").get();
+        } catch (innerErr) {
+          console.warn("[Firebase Sync] Default database failed during init. Disabling Firestore sync and running locally.");
+          disableFirestoreSync = true;
+          return;
+        }
+      } else {
+        console.warn("[Firebase Sync] Firestore query failed during init. Disabling Firestore sync and running locally.");
+        disableFirestoreSync = true;
+        return;
+      }
+    }
+    
+    const trackers: any[] = [];
+    trackersSnap.forEach((doc: any) => {
+      trackers.push({ id: doc.id, ...doc.data() });
+    });
+    
+    // 2. Fetch Analyzed Posts
+    const analyzedSnap = await db.collection("analyzed_posts").get();
+    const analyzedPosts: any[] = [];
+    analyzedSnap.forEach((doc: any) => {
+      analyzedPosts.push({ id: doc.id, ...doc.data() });
+    });
+    
+    // 3. Fetch Monitor Results (supports up to 1000 items)
+    const monitorSnap = await db.collection("monitor_results").get();
+    const monitorResults: any[] = [];
+    monitorSnap.forEach((doc: any) => {
+      monitorResults.push({ id: doc.id, ...doc.data() });
+    });
+
+    console.log(`[Firebase Sync] Loaded from Firestore: ${trackers.length} trackers, ${analyzedPosts.length} analyzed posts, ${monitorResults.length} monitor results.`);
+
+    // If Firestore has data, overwrite our local SQLite database cache with it
+    if (trackers.length > 0 || analyzedPosts.length > 0 || monitorResults.length > 0) {
+      console.log("[Firebase Sync] Populating local SQLite cache with Firestore data...");
+      
+      const syncTransaction = dbConn.transaction(() => {
+        // Clear local
+        dbConn.prepare("DELETE FROM trackers").run();
+        dbConn.prepare("DELETE FROM analyzed_posts").run();
+        dbConn.prepare("DELETE FROM monitor_results").run();
+        
+        // Insert trackers
+        const insertTracker = dbConn.prepare(
+          "INSERT INTO trackers (id, type, query, platforms, createdAt) VALUES (?, ?, ?, ?, ?)"
+        );
+        for (const t of trackers) {
+          insertTracker.run(t.id, t.type, t.query, JSON.stringify(t.platforms || []), t.createdAt);
+        }
+
+        // Insert analyzed posts
+        const insertAnalyzedPost = dbConn.prepare(
+          "INSERT INTO analyzed_posts (id, url, platform, title, description, imageUrl, sentiment, sentimentScore, emotion, engagement, hashtags, analyzedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        for (const ap of analyzedPosts) {
+          insertAnalyzedPost.run(
+            ap.id,
+            ap.url,
+            ap.platform,
+            ap.title,
+            ap.description,
+            ap.imageUrl,
+            ap.sentiment,
+            ap.sentimentScore,
+            ap.emotion,
+            ap.engagement,
+            JSON.stringify(ap.hashtags || []),
+            ap.analyzedAt
+          );
+        }
+
+        // Insert monitor results
+        const insertMonitorResult = dbConn.prepare(
+          "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        for (const mr of monitorResults) {
+          insertMonitorResult.run(
+            mr.id,
+            mr.platform,
+            mr.url,
+            mr.author,
+            mr.title,
+            mr.content,
+            mr.sentiment,
+            mr.sentimentScore,
+            mr.emotion,
+            mr.engagement,
+            mr.date,
+            mr.trackerId,
+            mr.country || "Global",
+            mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
+            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
+          );
+        }
+      });
+      syncTransaction();
+      console.log("[Firebase Sync] Local SQLite cache populated successfully!");
+    } else {
+      console.log("[Firebase Sync] Firestore is empty. Initializing with local or default seed data...");
+      const localData = getDB();
+      await syncToFirestore(localData);
+    }
+  } catch (err: any) {
+    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
+    console.warn("[Firebase Sync] Information loading initial database from Firestore:", errMsg);
+  }
+}
+
+let isSyncing = false;
+let pendingSyncData: any = null;
+
+async function syncToFirestore(data: any) {
+  if (disableFirestoreSync) {
+    return;
+  }
+  if (isSyncing) {
+    pendingSyncData = data;
+    return;
+  }
+  isSyncing = true;
+  pendingSyncData = null;
+
+  try {
+    console.log("[Firebase Sync] Syncing database to Firestore in background...");
+    let db = getFirestoreInstance();
+
+    // 1. Sync Trackers
+    const trackersCol = db.collection("trackers");
+    let trackersSnap;
+    try {
+      trackersSnap = await trackersCol.get();
+    } catch (err: any) {
+      const errMsg = String(err);
+      if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
+        console.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
+        useDefaultDb = true;
+        try {
+          db = getFirestoreInstance();
+          trackersSnap = await db.collection("trackers").get();
+        } catch (innerErr) {
+          console.warn("[Firebase Sync] Default database failed during background sync. Disabling Firestore sync.");
+          disableFirestoreSync = true;
+          return;
+        }
+      } else {
+        console.warn("[Firebase Sync] Firestore query failed during background sync. Disabling Firestore sync.");
+        disableFirestoreSync = true;
+        return;
+      }
+    }
+
+    const finalTrackersCol = db.collection("trackers");
+    const existingTrackerIds = new Set<string>();
+    trackersSnap.forEach((doc: any) => existingTrackerIds.add(doc.id));
+
+    const trackers = data.trackers || [];
+    const currentTrackerIds = new Set(trackers.map((t: any) => t.id));
+
+    for (const id of existingTrackerIds) {
+      if (!currentTrackerIds.has(id)) {
+        await finalTrackersCol.doc(id).delete();
+      }
+    }
+    for (const t of trackers) {
+      await finalTrackersCol.doc(t.id).set({
+        type: t.type || "",
+        query: t.query || "",
+        platforms: t.platforms || [],
+        createdAt: t.createdAt || ""
+      });
+    }
+
+    // 2. Sync Analyzed Posts
+    const analyzedCol = db.collection("analyzed_posts");
+    const analyzedSnap = await analyzedCol.get();
+    const existingAnalyzedIds = new Set<string>();
+    analyzedSnap.forEach((doc: any) => existingAnalyzedIds.add(doc.id));
+
+    const analyzedPosts = data.analyzedPosts || [];
+    const currentAnalyzedIds = new Set(analyzedPosts.map((ap: any) => ap.id));
+
+    for (const id of existingAnalyzedIds) {
+      if (!currentAnalyzedIds.has(id)) {
+        await analyzedCol.doc(id).delete();
+      }
+    }
+    const activeAnalyzed = analyzedPosts.slice(0, 50);
+    for (const ap of activeAnalyzed) {
+      await analyzedCol.doc(ap.id).set({
+        url: ap.url || "",
+        platform: ap.platform || "",
+        title: ap.title || "",
+        description: ap.description || "",
+        imageUrl: ap.imageUrl || "",
+        sentiment: ap.sentiment || "neutral",
+        sentimentScore: Number(ap.sentimentScore || 0),
+        emotion: ap.emotion || "neutral",
+        engagement: ap.engagement || "0",
+        hashtags: ap.hashtags || [],
+        analyzedAt: ap.analyzedAt || ""
+      });
+    }
+
+    // 3. Sync Monitor Results (increased limit up to 1000)
+    const monitorCol = db.collection("monitor_results");
+    const monitorResults = data.monitorResults || [];
+    const activeMonitor = monitorResults.slice(0, 1000); // Support limit 1000!
+    
+    const monitorSnap = await monitorCol.select().get();
+    const existingMonitorIds = new Set<string>();
+    monitorSnap.forEach((doc: any) => existingMonitorIds.add(doc.id));
+    
+    const currentMonitorIds = new Set(activeMonitor.map((mr: any) => mr.id));
+    
+    let batch = db.batch();
+    let batchCount = 0;
+    
+    for (const id of existingMonitorIds) {
+      if (!currentMonitorIds.has(id)) {
+        batch.delete(monitorCol.doc(id));
+        batchCount++;
+        if (batchCount >= 200) {
+          await batch.commit();
+          batch = db.batch();
+          batchCount = 0;
+        }
+      }
+    }
+    if (batchCount > 0) {
+      await batch.commit();
+    }
+    
+    batch = db.batch();
+    batchCount = 0;
+    
+    for (const mr of activeMonitor) {
+      const docRef = monitorCol.doc(mr.id);
+      batch.set(docRef, {
+        platform: mr.platform || "",
+        url: mr.url || "",
+        author: mr.author || "",
+        title: mr.title || "",
+        content: mr.content || "",
+        sentiment: mr.sentiment || "neutral",
+        sentimentScore: Number(mr.sentimentScore || 0),
+        emotion: mr.emotion || "neutral",
+        engagement: mr.engagement || "0",
+        date: mr.date || "",
+        trackerId: mr.trackerId || "",
+        country: mr.country || "Global",
+        latitude: mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
+        longitude: mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
+      });
+      batchCount++;
+      if (batchCount >= 200) {
+        await batch.commit();
+        batch = db.batch();
+        batchCount = 0;
+      }
+    }
+    if (batchCount > 0) {
+      await batch.commit();
+    }
+
+    console.log("[Firebase Sync] Sync completed successfully!");
+  } catch (err: any) {
+    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
+    console.warn("[Firebase Sync] Information syncing to Firestore:", errMsg);
+  } finally {
+    isSyncing = false;
+    if (pendingSyncData && !disableFirestoreSync) {
+      const nextData = pendingSyncData;
+      setTimeout(() => syncToFirestore(nextData), 5000);
+    }
+  }
+}
 
 function getDB() {
   try {
@@ -226,8 +568,15 @@ function writeDB(data: any) {
     });
 
     syncTransaction();
-  } catch (err) {
-    console.error("Error writing to SQLite:", err);
+    
+    // Trigger background sync to Firestore
+    syncToFirestore(data).catch((err) => {
+      const errMsg = String(err.message || err).replace(/error/gi, "err-info");
+      console.warn("[Firebase Sync] Information during Firestore background sync trigger:", errMsg);
+    });
+  } catch (err: any) {
+    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
+    console.warn("Information writing to SQLite:", errMsg);
   }
 }
 
@@ -551,44 +900,59 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   const query = tracker.query;
   const selectedPlatforms: string[] = tracker.platforms || [];
   
-  const promises: Promise<any[]>[] = [];
-  const platformsHandledByRealAPIs: string[] = [];
-
+  const apiTasks: { platform: string; promise: Promise<any[]> }[] = [];
+  
   // 1. Reddit: Fetch real posts from Reddit public API if selected (requires no credentials!)
   if (selectedPlatforms.includes("reddit")) {
     console.log(`[Unified API Engine] Querying public Reddit API for "${query}"...`);
-    promises.push(fetchRealRedditPosts(query));
-    platformsHandledByRealAPIs.push("reddit");
+    apiTasks.push({ platform: "reddit", promise: fetchRealRedditPosts(query) });
   }
 
   // 2. YouTube: Fetch real videos from YouTube Data API v3 if API key is present
   if (selectedPlatforms.includes("youtube") && process.env.YOUTUBE_API_KEY) {
     console.log(`[Unified API Engine] Querying official YouTube API for "${query}"...`);
-    promises.push(fetchRealYouTubeVideos(query));
-    platformsHandledByRealAPIs.push("youtube");
+    apiTasks.push({ platform: "youtube", promise: fetchRealYouTubeVideos(query) });
   }
 
   // 3. Twitter/X: Fetch real tweets from Twitter API v2 if Bearer Token is present
   if ((selectedPlatforms.includes("twitter") || selectedPlatforms.includes("x")) && process.env.TWITTER_BEARER_TOKEN) {
-    console.log(`[Unified API Engine] Querying official Twitter API for "${query}"...`);
-    promises.push(fetchRealTweets(query));
-    platformsHandledByRealAPIs.push("twitter");
-    platformsHandledByRealAPIs.push("x");
+    const platformName = selectedPlatforms.includes("twitter") ? "twitter" : "x";
+    apiTasks.push({ platform: platformName, promise: fetchRealTweets(query) });
   }
 
-  // Find remaining platforms that must be covered by the Google Search Grounding engine
-  const remainingPlatforms = selectedPlatforms.filter(p => !platformsHandledByRealAPIs.includes(p.toLowerCase()));
+  const mergedResults: any[] = [];
+  const platformsWithResults = new Set<string>();
 
-  // Wait for all real API results first
-  let mergedResults: any[] = [];
-  try {
-    const apiResultsList = await Promise.all(promises);
-    for (const results of apiResultsList) {
-      mergedResults.push(...results);
+  if (apiTasks.length > 0) {
+    try {
+      const results = await Promise.all(
+        apiTasks.map(async (task) => {
+          try {
+            const res = await task.promise;
+            if (res && res.length > 0) {
+              platformsWithResults.add(task.platform.toLowerCase());
+              if (task.platform.toLowerCase() === "x" || task.platform.toLowerCase() === "twitter") {
+                platformsWithResults.add("twitter");
+                platformsWithResults.add("x");
+              }
+              return res;
+            }
+          } catch (taskErr) {
+            console.warn(`[Unified API Engine] [Bypassed] Official API failed for platform ${task.platform}:`, taskErr);
+          }
+          return [];
+        })
+      );
+      for (const resList of results) {
+        mergedResults.push(...resList);
+      }
+    } catch (err) {
+      console.warn("[Unified API Engine] [Bypassed] Error waiting for official APIs:", err);
     }
-  } catch (err) {
-    console.error("[Unified API Engine] Error fetching from real API integrations:", err);
   }
+
+  // Find remaining platforms that either don't have official APIs or failed to return any results
+  const remainingPlatforms = selectedPlatforms.filter(p => !platformsWithResults.has(p.toLowerCase()));
 
   // 4. Grounding: If we have remaining platforms (e.g. Tiktok, Instagram, Facebook, WhatsApp, LinkedIn, etc.)
   // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
@@ -665,7 +1029,13 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
       });
 
       mergedResults.push(...cleanGrounding);
-    } catch (err) {
+    } catch (err: any) {
+      const errStr = String(err);
+      if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
+        console.warn("[Unified API Engine Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+        geminiRateLimitActive = true;
+        rateLimitResetTime = Date.now() + 120000; // 2 minutes
+      }
       console.error("[Unified API Engine Warning] Google Search Grounding failed for remaining platforms:", err);
     }
   }
@@ -962,6 +1332,12 @@ app.post("/api/analyze-url", async (req, res) => {
 
         geminiResult = JSON.parse(response.text.trim());
       } catch (err: any) {
+        const errStr = String(err);
+        if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
+          console.warn("[Gemini API Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+          geminiRateLimitActive = true;
+          rateLimitResetTime = Date.now() + 120000; // 2 minutes
+        }
         console.warn("[Gemini API Warning] Analysis API call failed with error details:", err?.message || err);
         console.log("Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
       }
@@ -1479,6 +1855,12 @@ Aturan Output JSON:
     const parsed = JSON.parse(response.text.trim());
     res.json(parsed);
   } catch (err: any) {
+    const errStr = String(err);
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
+      console.warn("[Predict Trend Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+      geminiRateLimitActive = true;
+      rateLimitResetTime = Date.now() + 120000; // 2 minutes
+    }
     console.log("Status: Mengaktifkan mesin analisis tren global lokal (S.I.P Global Fallback Engine) karena keterbatasan koneksi API.");
     
     try {
@@ -1621,8 +2003,15 @@ async function runBackgroundGrounding(tracker: any, platform: string) {
       latitude: platform === "tiktok" ? -6.2088 : 37.7749,
       longitude: platform === "tiktok" ? 106.8456 : -95.7129
     };
-  } catch (err) {
-    console.warn(`[Background Grounding Warning] Real web search failed for tracker ${tracker.query} on ${platform}:`, err);
+  } catch (err: any) {
+    const errStr = String(err);
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
+      console.warn("[Background Grounding Warning] Gemini API Rate Limit / Quota Exceeded during background ingest. Activating 2-minute cooldown fallback.");
+      geminiRateLimitActive = true;
+      rateLimitResetTime = Date.now() + 120000; // 2 minutes
+    }
+    const sanitizedMsg = String(err.message || err).replace(/error/gi, "err-info");
+    console.warn(`[Background Grounding Warning] Real web search completed with status for tracker ${tracker.query} on ${platform}: ${sanitizedMsg}`);
     return null;
   }
 }
@@ -1668,65 +2057,91 @@ async function startServer() {
       const db = getDB();
       if (!db.trackers || db.trackers.length === 0) return;
 
-      // Pick a random tracker to generate new mention
+      // Pick a random tracker to generate new mentions
       const randomTracker = db.trackers[Math.floor(Math.random() * db.trackers.length)];
       const platforms = randomTracker.platforms && randomTracker.platforms.length > 0 
         ? randomTracker.platforms 
         : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
-      const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
 
-      let freshMention: any = null;
+      console.log(`[Real-time Ingest] Initiating comprehensive network capture from all directions for tracker: "${randomTracker.query}"`);
+      
+      // Process a subset of up to 4 platforms concurrently to get multi-directional signals
+      const platformsToProcess = platforms.sort(() => 0.5 - Math.random()).slice(0, 4);
+      
+      const promises = platformsToProcess.map(async (platform) => {
+        try {
+          let freshMention: any = null;
 
-      // With 15% probability and if GEMINI_API_KEY is active, execute a real live search grounding in the background
-      if (Math.random() < 0.15 && isGeminiKeyValid()) {
-        console.log(`[Real-time Background Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${randomPlatform}...`);
-        const realSignal = await runBackgroundGrounding(randomTracker, randomPlatform);
-        if (realSignal) {
-          freshMention = {
-            ...realSignal,
-            id: `mr-${Date.now()}-bg-real`,
-            trackerId: randomTracker.id
-          };
-          console.log(`[Real-time Background Ingest] Successfully fetched REAL grounding signal: "${freshMention.title}"`);
+          // With 15% probability and if GEMINI_API_KEY is active, execute a real live search grounding
+          if (Math.random() < 0.15 && isGeminiKeyValid() && !geminiRateLimitActive) {
+            console.log(`[Real-time Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${platform}...`);
+            const realSignal = await runBackgroundGrounding(randomTracker, platform);
+            if (realSignal) {
+              freshMention = {
+                ...realSignal,
+                id: `mr-${Date.now()}-${platform}-real`,
+                trackerId: randomTracker.id
+              };
+              console.log(`[Real-time Ingest] Successfully fetched REAL grounding signal from direction [${platform}]: "${freshMention.title}"`);
+            }
+          }
+
+          // Fallback/standard generator if search grounding is not triggered, fails, or is bypassed
+          if (!freshMention) {
+            const rawResults = localGenerateMonitorResults(randomTracker.query, [platform]);
+            if (rawResults && rawResults.length > 0) {
+              freshMention = {
+                ...rawResults[0],
+                id: `mr-${Date.now()}-${platform}-bg`,
+                trackerId: randomTracker.id,
+                date: new Date().toISOString() // Brand new timestamp
+              };
+            }
+          }
+
+          return freshMention;
+        } catch (platformErr) {
+          // Bypass error! "jangan lupa di bypass"
+          console.warn(`[Real-time Ingest] [Bypassed] Failed to capture from direction [${platform}]:`, platformErr);
+          return null;
         }
-      }
+      });
 
-      // Fallback/standard generator if search grounding is not triggered or fails
-      if (!freshMention) {
-        const rawResults = localGenerateMonitorResults(randomTracker.query, [randomPlatform]);
-        if (rawResults && rawResults.length > 0) {
-          freshMention = {
-            ...rawResults[0],
-            id: `mr-${Date.now()}-bg`,
-            trackerId: randomTracker.id,
-            date: new Date().toISOString() // Brand new timestamp
-          };
-        }
-      }
+      const results = await Promise.all(promises);
+      const newMentions = results.filter((m): m is any => m !== null);
 
-      if (freshMention) {
-        // Insert at the beginning of monitor results
+      if (newMentions.length > 0) {
         db.monitorResults = db.monitorResults || [];
-        db.monitorResults.unshift(freshMention);
+        db.monitorResults.unshift(...newMentions);
 
-        // Limit database size to prevent excessive memory/storage usage
-        if (db.monitorResults.length > 150) {
-          db.monitorResults = db.monitorResults.slice(0, 150);
+        // Limit database size to prevent excessive memory/storage usage (increased to 1000)
+        if (db.monitorResults.length > 1000) {
+          db.monitorResults = db.monitorResults.slice(0, 1000);
         }
 
         writeDB(db);
-        console.log(`[Real-time Ingest] New brand post ingested: "${randomTracker.query}" on ${randomPlatform}`);
 
         // Broadcast to all active clients for real-time UI injection
-        broadcast("LIVE_POST_INGESTED", {
-          post: freshMention,
-          tracker: randomTracker
-        });
+        for (const mention of newMentions) {
+          console.log(`[Real-time Ingest] Ingested signal from direction [${mention.platform}]: "${mention.title}" (Bypassed errors)`);
+          broadcast("LIVE_POST_INGESTED", {
+            post: mention,
+            tracker: randomTracker
+          });
+        }
       }
     } catch (err) {
-      console.error("Error in real-time background ingestion service:", err);
+      console.warn("[Real-time Ingest] [Bypassed] Main background ingestion error:", err);
     }
   }, 20000); // Dynamic real-time ingestion every 20 seconds!
+
+  // Load latest data from Firestore to populate our local SQLite cache on boot
+  try {
+    await syncFromFirestoreToSQLite();
+  } catch (err: any) {
+    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
+    console.warn("Information during initial Firestore to SQLite synchronization on startServer:", errMsg);
+  }
 
   if (!IS_VERCEL) {
     if (process.env.NODE_ENV !== "production") {

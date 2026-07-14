@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "Tracker": {
+      "title": "Tracker",
+      "description": "A search/social brand monitor query tracker.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Type of the tracker, e.g., brand, product, topic"
+        },
+        "query": {
+          "type": "string",
+          "description": "The search term query"
+        },
+        "platforms": {
+          "type": "array",
+          "description": "The target social media platforms to track"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when tracker was created"
+        }
+      },
+      "required": ["type", "query", "platforms", "createdAt"]
+    },
+    "AnalyzedPost": {
+      "title": "AnalyzedPost",
+      "description": "A single social media post fully analyzed by AI.",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "platform": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "sentiment": { "type": "string" },
+        "sentimentScore": { "type": "number" },
+        "emotion": { "type": "string" },
+        "engagement": { "type": "string" },
+        "hashtags": { "type": "array" },
+        "analyzedAt": { "type": "string" }
+      },
+      "required": ["url", "platform", "title", "description", "sentiment", "sentimentScore", "analyzedAt"]
+    },
+    "MonitorResult": {
+      "title": "MonitorResult",
+      "description": "A social mention result returned during query tracking.",
+      "type": "object",
+      "properties": {
+        "platform": { "type": "string" },
+        "url": { "type": "string" },
+        "author": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "sentiment": { "type": "string" },
+        "sentimentScore": { "type": "number" },
+        "emotion": { "type": "string" },
+        "engagement": { "type": "string" },
+        "date": { "type": "string" },
+        "trackerId": { "type": "string" },
+        "country": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" }
+      },
+      "required": ["platform", "url", "author", "content", "sentiment", "sentimentScore", "date", "trackerId"]
+    }
+  },
+  "firestore": {
+    "/trackers/{trackerId}": {
+      "schema": "Tracker",
+      "description": "Collection of search trackers"
+    },
+    "/analyzed_posts/{postId}": {
+      "schema": "AnalyzedPost",
+      "description": "Collection of analyzed posts"
+    },
+    "/monitor_results/{resultId}": {
+      "schema": "MonitorResult",
+      "description": "Collection of monitor results"
+    }
+  }
+}
