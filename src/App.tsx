@@ -219,6 +219,52 @@ export default function App() {
     typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default"
   );
 
+  // User IP and Asia/Jakarta Clock States
+  const [userIp, setUserIp] = useState<string>("Mendeteksi...");
+  const [jakartaTime, setJakartaTime] = useState<string>("");
+
+  useEffect(() => {
+    // 1. Fetch user IP
+    const fetchUserIp = async () => {
+      try {
+        const response = await fetch("https://api.ipify.org?format=json");
+        if (response.ok) {
+          const data = await response.json();
+          setUserIp(data.ip || "127.0.0.1");
+        } else {
+          setUserIp("127.0.0.1");
+        }
+      } catch (err) {
+        setUserIp("127.0.0.1");
+      }
+    };
+    fetchUserIp();
+
+    // 2. Clock Interval (Asia/Jakarta)
+    const updateTime = () => {
+      const formatter = new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+      const dateFormatter = new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+      const now = new Date();
+      setJakartaTime(`${dateFormatter.format(now)} • ${formatter.format(now)} WIB`);
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const requestNotificationPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
       showNotification("Browser Anda tidak mendukung notifikasi desktop.");
@@ -1259,6 +1305,37 @@ export default function App() {
                         <span>Ekspor Laporan Utama (CSV)</span>
                       </button>
                     )}
+                  </div>
+                </div>
+
+                {/* Real-time IP and Catalog Clock Widgets */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Your IP Address Widget */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between hover:shadow-md transition-all duration-300">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                        <Globe className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase font-semibold">Your IP Address</p>
+                        <h4 className="text-base font-bold text-slate-800 font-mono mt-0.5">{userIp}</h4>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-indigo-600 font-mono tracking-wider bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100">DETECTED</span>
+                  </div>
+
+                  {/* Catalog Clock (Asia/Jakarta) Widget */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between hover:shadow-md transition-all duration-300">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+                        <Clock className="h-5 w-5 animate-pulse" />
+                      </div>
+                      <div>
+                        <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase font-semibold">Local Time (Asia/Jakarta)</p>
+                        <h4 className="text-sm font-bold text-slate-800 mt-0.5">{jakartaTime || "Memuat..."}</h4>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-emerald-600 font-mono tracking-wider bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100">LIVE</span>
                   </div>
                 </div>
 
