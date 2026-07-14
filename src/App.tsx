@@ -31,7 +31,8 @@ import {
   X,
   Zap,
   Bell,
-  BellOff
+  BellOff,
+  MoveHorizontal
 } from "lucide-react";
 import {
   AreaChart,
@@ -1776,13 +1777,13 @@ export default function App() {
                     </div>
 
                     {/* Selectors */}
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
-                        <span className="text-slate-400">Platform A:</span>
+                    <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 w-full sm:w-auto">
+                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold w-full sm:w-auto">
+                        <span className="text-slate-400 whitespace-nowrap">Platform A:</span>
                         <select
                           value={comparePlatformA}
                           onChange={(e) => setComparePlatformA(e.target.value as any)}
-                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0"
+                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0 pr-1 py-0"
                         >
                           <option value="instagram">Instagram</option>
                           <option value="tiktok">TikTok</option>
@@ -1795,14 +1796,14 @@ export default function App() {
                         </select>
                       </div>
 
-                      <div className="text-slate-400 font-bold text-xs">VS</div>
+                      <div className="text-slate-400 font-extrabold text-xs py-1 sm:py-0 select-none tracking-widest shrink-0">VS</div>
 
-                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
-                        <span className="text-slate-400">Platform B:</span>
+                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold w-full sm:w-auto">
+                        <span className="text-slate-400 whitespace-nowrap">Platform B:</span>
                         <select
                           value={comparePlatformB}
                           onChange={(e) => setComparePlatformB(e.target.value as any)}
-                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0"
+                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0 pr-1 py-0"
                         >
                           <option value="instagram">Instagram</option>
                           <option value="tiktok">TikTok</option>
@@ -1820,21 +1821,28 @@ export default function App() {
                   {/* Comparison Side-by-Side Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Platform A View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4">
-                      {/* Header Platform A */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
-                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
-                        </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
-                          Platform A
-                        </span>
-                      </div>
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 overflow-hidden relative min-h-[360px]">
+                      <AnimatePresence mode="wait">
+                        <motion.div
+                          key={comparePlatformA}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                          className="flex flex-col gap-4 w-full h-full"
+                        >
+                          {/* Header Platform A */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
+                              <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
+                            </div>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
+                              Platform A
+                            </span>
+                          </div>
 
-                      {/* Stats Overview */}
-                      {getPlatformStats(comparePlatformA).total > 0 ? (
-                        <>
+                          {/* Stats Overview */}
                           <div className="grid grid-cols-3 gap-3">
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
@@ -1842,72 +1850,97 @@ export default function App() {
                             </div>
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                              <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                                {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
-                              </p>
+                              {getPlatformStats(comparePlatformA).total > 0 ? (
+                                <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                                  {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
+                                </p>
+                              ) : (
+                                <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
+                              )}
                             </div>
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                              <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
+                              {getPlatformStats(comparePlatformA).total > 0 ? (
+                                <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
+                              ) : (
+                                <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
+                              )}
                             </div>
                           </div>
 
-                          {/* Mini AreaChart */}
-                          <div className="h-48 mt-2">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <AreaChart data={getPlatformStats(comparePlatformA).trendData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                                <defs>
-                                  <linearGradient id={`colorPos-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id={`colorNeu-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id={`colorNeg-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                                  </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                                <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                                <Tooltip />
-                                <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformA})`} />
-                                <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformA})`} />
-                                <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformA})`} />
-                              </AreaChart>
-                            </ResponsiveContainer>
+                          {/* Mini AreaChart with horizontal drag scroll */}
+                          <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs">
+                            <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
+                              <span className="font-semibold text-slate-500">Tren Analisis</span>
+                              <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
+                            </div>
+                            {getPlatformStats(comparePlatformA).total > 0 ? (
+                              <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
+                                <div className="h-44 min-w-[540px]">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={getPlatformStats(comparePlatformA).trendData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                                      <defs>
+                                        <linearGradient id={`colorPos-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                        </linearGradient>
+                                        <linearGradient id={`colorNeu-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                        </linearGradient>
+                                        <linearGradient id={`colorNeg-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                                        </linearGradient>
+                                      </defs>
+                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                      <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
+                                      <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
+                                      <Tooltip />
+                                      <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                      <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                      <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                    </AreaChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="h-44 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                                <Activity className="h-6 w-6 text-slate-300 animate-pulse mb-1" />
+                                <p className="text-xs font-bold text-slate-500">Data Belum Tersedia</p>
+                                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">
+                                  Lakukan analisis atau scan live untuk platform {comparePlatformA} agar grafik tampil di sini.
+                                </p>
+                              </div>
+                            )}
                           </div>
-                        </>
-                      ) : (
-                        <div className="h-60 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-dashed border-slate-200">
-                          <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-2" />
-                          <p className="text-xs font-semibold text-slate-500">Belum Ada Data</p>
-                          <p className="text-[11px] text-slate-400 mt-1 max-w-[200px]">
-                            Lakukan analisis sentimen atau scan live untuk platform {comparePlatformA} agar grafik tampil di sini.
-                          </p>
-                        </div>
-                      )}
+                        </motion.div>
+                      </AnimatePresence>
                     </div>
 
                     {/* Platform B View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4">
-                      {/* Header Platform B */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
-                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
-                        </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
-                          Platform B
-                        </span>
-                      </div>
+                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 overflow-hidden relative min-h-[360px]">
+                      <AnimatePresence mode="wait">
+                        <motion.div
+                          key={comparePlatformB}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+                          className="flex flex-col gap-4 w-full h-full"
+                        >
+                          {/* Header Platform B */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
+                              <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
+                            </div>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
+                              Platform B
+                            </span>
+                          </div>
 
-                      {/* Stats Overview */}
-                      {getPlatformStats(comparePlatformB).total > 0 ? (
-                        <>
+                          {/* Stats Overview */}
                           <div className="grid grid-cols-3 gap-3">
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
@@ -1915,54 +1948,72 @@ export default function App() {
                             </div>
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                              <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                                {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
-                              </p>
+                              {getPlatformStats(comparePlatformB).total > 0 ? (
+                                <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
+                                  {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
+                                </p>
+                              ) : (
+                                <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
+                              )}
                             </div>
                             <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                              <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
+                              {getPlatformStats(comparePlatformB).total > 0 ? (
+                                <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
+                              ) : (
+                                <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
+                              )}
                             </div>
                           </div>
 
-                          {/* Mini AreaChart */}
-                          <div className="h-48 mt-2">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <AreaChart data={getPlatformStats(comparePlatformB).trendData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                                <defs>
-                                  <linearGradient id={`colorPos-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id={`colorNeu-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                                  </linearGradient>
-                                  <linearGradient id={`colorNeg-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                                    <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                                  </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                                <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                                <Tooltip />
-                                <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformB})`} />
-                                <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformB})`} />
-                                <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformB})`} />
-                              </AreaChart>
-                            </ResponsiveContainer>
+                          {/* Mini AreaChart with horizontal drag scroll */}
+                          <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs">
+                            <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
+                              <span className="font-semibold text-slate-500">Tren Analisis</span>
+                              <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
+                            </div>
+                            {getPlatformStats(comparePlatformB).total > 0 ? (
+                              <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
+                                <div className="h-44 min-w-[540px]">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={getPlatformStats(comparePlatformB).trendData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                                      <defs>
+                                        <linearGradient id={`colorPos-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                        </linearGradient>
+                                        <linearGradient id={`colorNeu-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                        </linearGradient>
+                                        <linearGradient id={`colorNeg-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
+                                          <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+                                        </linearGradient>
+                                      </defs>
+                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                      <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
+                                      <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
+                                      <Tooltip />
+                                      <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                      <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                      <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
+                                    </AreaChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="h-44 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                                <Activity className="h-6 w-6 text-slate-300 animate-pulse mb-1" />
+                                <p className="text-xs font-bold text-slate-500">Data Belum Tersedia</p>
+                                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">
+                                  Lakukan analisis atau scan live untuk platform {comparePlatformB} agar grafik tampil di sini.
+                                </p>
+                              </div>
+                            )}
                           </div>
-                        </>
-                      ) : (
-                        <div className="h-60 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-dashed border-slate-200">
-                          <Activity className="h-8 w-8 text-slate-300 animate-pulse mb-2" />
-                          <p className="text-xs font-semibold text-slate-500">Belum Ada Data</p>
-                          <p className="text-[11px] text-slate-400 mt-1 max-w-[200px]">
-                            Lakukan analisis sentimen atau scan live untuk platform {comparePlatformB} agar grafik tampil di sini.
-                          </p>
-                        </div>
-                      )}
+                        </motion.div>
+                      </AnimatePresence>
                     </div>
                   </div>
                 </motion.div>

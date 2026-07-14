@@ -9,6 +9,7 @@
   --animate-radar-sweep: radar-sweep 5s linear infinite;
   --animate-ping-slow: ping-slow 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
   --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+  --animate-float: float 3s ease-in-out infinite;
 
   @keyframes radar-sweep {
     0% {
@@ -36,6 +37,18 @@
       opacity: 0.45;
     }
   }
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+}
+
+:root {
+  --sky-500: var(--color-sky-500);
 }
 
 body {
