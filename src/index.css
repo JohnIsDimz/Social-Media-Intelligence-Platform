@@ -5,6 +5,37 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --animate-radar-sweep: radar-sweep 5s linear infinite;
+  --animate-ping-slow: ping-slow 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+
+  @keyframes radar-sweep {
+    0% {
+      transform: rotate(0deg);
+    }
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes ping-slow {
+    0% {
+      transform: scale(0.8) translate(-50%, -50%);
+      opacity: 0.9;
+    }
+    100% {
+      transform: scale(2.8) translate(-17.8%, -17.8%);
+      opacity: 0;
+    }
+  }
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 0.15;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
 }
 
 body {

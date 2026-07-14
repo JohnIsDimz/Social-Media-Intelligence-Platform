@@ -29,7 +29,9 @@ import {
   Brain,
   Menu,
   X,
-  Zap
+  Zap,
+  Bell,
+  BellOff
 } from "lucide-react";
 import {
   AreaChart,
@@ -48,6 +50,8 @@ import {
 } from "recharts";
 import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport } from "./types";
 import { api } from "./apiService";
+import { GlobalHeatmap } from "./components/GlobalHeatmap";
+import { RadarScanner } from "./components/RadarScanner";
 
 const fallbackPredictions: AIPredictionReport = {
   summary: "Berdasarkan analisis tren sentimen 7 hari terakhir, brand Anda menunjukkan tingkat kepuasan publik yang cukup stabil dengan sedikit fluktuasi negatif akibat keluhan teknis. AI memperkirakan adanya perbaikan sentimen dalam 3 hari ke depan seiring respons tim yang cepat.",
@@ -210,6 +214,46 @@ export default function App() {
   // Real-Time WebSocket and Live Telemetry State
   const [liveUpdates, setLiveUpdates] = useState<any[]>([]);
   const [webSocketStatus, setWebSocketStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'polling'>('connecting');
+  const [lastIngestedTime, setLastIngestedTime] = useState<number>(0);
+  const [notificationPermission, setNotificationPermission] = useState<string>(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default"
+  );
+
+  const requestNotificationPermission = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      showNotification("Browser Anda tidak mendukung notifikasi desktop.");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        showNotification("Notifikasi browser berhasil diaktifkan!");
+        new Notification("S.M.I.P Active Engine", {
+          body: "Sistem Notifikasi Browser Aktif. Anda akan menerima peringatan jika mendeteksi anomali atau sentimen negatif.",
+          icon: "/favicon.ico"
+        });
+      } else if (permission === "denied") {
+        showNotification("Notifikasi browser ditolak oleh pengguna.");
+      }
+    } catch (err) {
+      console.error("Gagal meminta izin notifikasi:", err);
+    }
+  };
+
+  const sendBrowserNotification = (title: string, body: string, options?: NotificationOptions) => {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(title, {
+          body,
+          icon: "/favicon.ico",
+          ...options
+        });
+      } catch (err) {
+        console.error("Error sending notification:", err);
+      }
+    }
+  };
 
   // Initial Fetch
   useEffect(() => {
@@ -330,6 +374,22 @@ export default function App() {
                 timestamp: new Date()
               };
               setLiveUpdates((prev) => [newAlert, ...prev].slice(0, 3));
+              setLastIngestedTime(Date.now());
+
+              // Trigger Browser Notification
+              if (post.sentiment === "negative") {
+                sendBrowserNotification(
+                  `🚨 Lonjakan Sentimen Negatif! [S.M.I.P Engine]`,
+                  `Kritis (${post.platform.toUpperCase()}): "${post.content}"`,
+                  { tag: post.id }
+                );
+              } else {
+                sendBrowserNotification(
+                  `🔔 Sinyal Penting Terdeteksi [S.M.I.P Engine]`,
+                  `Sinyal (${post.platform.toUpperCase()}): "${post.content}"`,
+                  { tag: post.id }
+                );
+              }
 
               // 3. Silently fetch updated stats in background to seamlessly update chart views!
               fetchStatsSilent();
@@ -431,6 +491,22 @@ export default function App() {
           };
           
           setLiveUpdates((prev) => [newAlert, ...prev].slice(0, 3));
+          setLastIngestedTime(Date.now());
+
+          // Trigger Browser Notification
+          if (sentiment === "negative") {
+            sendBrowserNotification(
+              `🚨 Lonjakan Sentimen Negatif! [S.M.I.P Simulation]`,
+              `Kritis (${randomPlatform.toUpperCase()}): "${content}"`,
+              { tag: newAlert.id }
+            );
+          } else {
+            sendBrowserNotification(
+              `🔔 Sinyal Baru Terdeteksi [S.M.I.P Simulation]`,
+              `Sinyal (${randomPlatform.toUpperCase()}): "${content}"`,
+              { tag: newAlert.id }
+            );
+          }
         }
       }, 8000);
     }
@@ -911,6 +987,35 @@ export default function App() {
               </span>
             </div>
 
+            {/* Browser Notifications Control */}
+            <button
+              onClick={requestNotificationPermission}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-[9px] font-mono tracking-wider font-bold uppercase cursor-pointer select-none active:scale-95 ${
+                notificationPermission === "granted"
+                  ? "bg-indigo-50 border-indigo-200 text-indigo-600 hover:bg-indigo-100"
+                  : notificationPermission === "denied"
+                  ? "bg-rose-50 border-rose-200 text-rose-600 opacity-60"
+                  : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+              }`}
+              title={
+                notificationPermission === "granted"
+                  ? "Notifikasi Browser Aktif"
+                  : "Aktifkan Notifikasi Browser"
+              }
+            >
+              {notificationPermission === "granted" ? (
+                <>
+                  <Bell className="h-3.5 w-3.5 text-indigo-600 animate-bounce" />
+                  <span>NOTIF_ON</span>
+                </>
+              ) : (
+                <>
+                  <BellOff className="h-3.5 w-3.5 text-slate-400" />
+                  <span>NOTIF_OFF</span>
+                </>
+              )}
+            </button>
+
             {/* Main Menu Button (Icon-Only, Text Removed) */}
             <button
               onClick={() => setIsDrawerOpen(true)}
@@ -1158,43 +1263,75 @@ export default function App() {
                 </div>
 
                 {/* 4-Column High-Level Stats */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
+                <motion.div layout className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <motion.div 
+                    layout 
+                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
+                  >
                     <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
                       <FileText className="h-6 w-6" />
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Total Analisis</p>
-                      <h3 className="text-2xl font-bold text-slate-900 mt-0.5">{stats?.totalAnalyzed ?? 0}</h3>
+                      <motion.h3 
+                        key={stats?.totalAnalyzed ?? 0}
+                        initial={{ scale: 0.8, opacity: 0.4 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                        className="text-2xl font-bold text-slate-900 mt-0.5"
+                      >
+                        {stats?.totalAnalyzed ?? 0}
+                      </motion.h3>
                     </div>
-                  </div>
+                  </motion.div>
 
-                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
+                  <motion.div 
+                    layout 
+                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
+                  >
                     <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
                       <ThumbsUp className="h-6 w-6" />
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Sentimen Dominan</p>
-                      <h3 className="text-lg font-bold text-emerald-600 mt-0.5 capitalize">
+                      <motion.h3 
+                        key={stats?.overallSentiment ?? "neutral"}
+                        initial={{ scale: 0.8, opacity: 0.4 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                        className="text-lg font-bold text-emerald-600 mt-0.5 capitalize"
+                      >
                         {stats?.overallSentiment === "positive" ? "Positif" : 
                          stats?.overallSentiment === "negative" ? "Negatif" : "Netral"}
-                      </h3>
+                      </motion.h3>
                     </div>
-                  </div>
+                  </motion.div>
 
-                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
+                  <motion.div 
+                    layout 
+                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
+                  >
                     <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
                       <Smile className="h-6 w-6" />
                     </div>
                     <div>
                       <p className="text-slate-400 text-xs font-medium">Denyut Emosi</p>
-                      <h3 className="text-lg font-bold text-amber-600 mt-0.5 capitalize">
+                      <motion.h3 
+                        key={stats?.emotionDistribution?.[0]?.name ?? "neutral"}
+                        initial={{ scale: 0.8, opacity: 0.4 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
+                        className="text-lg font-bold text-amber-600 mt-0.5 capitalize"
+                      >
                         {stats?.emotionDistribution?.[0]?.name ?? "Netral"}
-                      </h3>
+                      </motion.h3>
                     </div>
-                  </div>
+                  </motion.div>
 
-                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
+                  <motion.div 
+                    layout 
+                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
+                  >
                     <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
                       <Globe className="h-6 w-6" />
                     </div>
@@ -1202,8 +1339,8 @@ export default function App() {
                       <p className="text-slate-400 text-xs font-medium">Saluran Dipantau</p>
                       <h3 className="text-lg font-bold text-slate-900 mt-0.5">8 Platform</h3>
                     </div>
-                  </div>
-                </div>
+                  </motion.div>
+                </motion.div>
 
                 {/* ─── NEW TECHNOLOGY: UNIVERSAL SOCIAL SIGNAL INTELLIGENCE (S.S.E) ─── */}
                 {socialSignals && (
@@ -1217,8 +1354,8 @@ export default function App() {
                     <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
                     <div className="absolute bottom-0 left-0 w-80 h-80 bg-rose-600/5 rounded-full blur-3xl pointer-events-none" />
 
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-800">
-                      <div>
+                    <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 pb-6 border-b border-slate-800">
+                      <div className="flex-1 max-w-xl">
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] font-mono font-bold tracking-wider uppercase mb-2">
                           <Zap className="h-3 w-3 animate-pulse text-indigo-400" /> NEW: UNIVERSAL SOCIAL SIGNAL ENGINE
                         </div>
@@ -1226,11 +1363,19 @@ export default function App() {
                           Cross-Platform Intelligence Aggregator
                         </h3>
                         <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                          Sistem agregasi dinamis mendeteksi volume dengungan, sentimen, kecepatan percakapan, dan koherensi sinyal sosial di 8 platform utama.
+                          Sistem agregasi dinamis mendeteksi volume dengungan, sentimen, kecepatan percakapan, dan koherensi sinyal sosial di 8 platform utama secara real-time.
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-4 lg:w-auto w-full">
+                      {/* Animated Center Radar Screen Widget */}
+                      <div className="flex justify-center xl:justify-start">
+                        <RadarScanner
+                          monitorResults={monitorResults}
+                          lastIngestedTime={lastIngestedTime}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-4 xl:w-auto w-full">
                         <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
                           <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Buzz Index</span>
                           <div className="flex items-baseline gap-1 mt-1">
@@ -1268,14 +1413,37 @@ export default function App() {
                         const isPositive = signal.sentimentScore > 0.05;
                         const isNegative = signal.sentimentScore < -0.05;
 
+                        // Check if this platform card had a new post ingested recently (within last 5 seconds)
+                        const isRecentlyIngested = (Date.now() - lastIngestedTime < 5000) && 
+                          (liveUpdates[0]?.platform?.toLowerCase() === signal.platform.toLowerCase());
+
                         return (
                           <div 
                             key={signal.platform}
-                            className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-4 flex flex-col justify-between hover:bg-slate-900/60 transition-all group"
+                            className={`bg-slate-900/40 border rounded-2xl p-4 flex flex-col justify-between hover:bg-slate-900/60 transition-all group relative overflow-hidden ${
+                              isRecentlyIngested 
+                                ? "border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.25)] bg-slate-900/70 scale-[1.02] duration-300"
+                                : "border-slate-800/60"
+                            }`}
                           >
+                            {/* Ingestion Flash Overlay line */}
+                            {isRecentlyIngested && (
+                              <div className="absolute top-0 left-0 w-full h-[3px] bg-indigo-500 animate-pulse" />
+                            )}
+
                             <div className="flex items-center justify-between">
                               <span className="text-xs font-bold text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
-                                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: style.color }} />
+                                {/* Sonar active pulse indicator ring */}
+                                <span className="relative flex h-2.5 w-2.5">
+                                  <span 
+                                    className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                                    style={{ backgroundColor: style.color }}
+                                  />
+                                  <span 
+                                    className="relative inline-flex rounded-full h-2.5 w-2.5"
+                                    style={{ backgroundColor: style.color }}
+                                  />
+                                </span>
                                 {signal.platform}
                               </span>
                               <div className="flex items-center gap-1">

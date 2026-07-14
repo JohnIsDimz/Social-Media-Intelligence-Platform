@@ -34,6 +34,9 @@ export interface MonitorResult {
   emotion: string;
   engagement: string;
   date: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface SentimentTrendPoint {

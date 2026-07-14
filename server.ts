@@ -96,10 +96,23 @@ dbConn.exec(`
     emotion TEXT,
     engagement TEXT,
     date TEXT,
-    trackerId TEXT
+    trackerId TEXT,
+    country TEXT,
+    latitude REAL,
+    longitude REAL
   );
-
 `);
+
+// Run dynamic column additions if tables already exist but lack coordinates/country columns
+try {
+  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN country TEXT;");
+} catch (e) {}
+try {
+  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN latitude REAL;");
+} catch (e) {}
+try {
+  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN longitude REAL;");
+} catch (e) {}
 
 function getDB() {
   try {
@@ -116,7 +129,10 @@ function getDB() {
     
     const monitorResults = dbConn.prepare("SELECT * FROM monitor_results").all().map((mr: any) => ({
       ...mr,
-      sentimentScore: Number(mr.sentimentScore || 0)
+      sentimentScore: Number(mr.sentimentScore || 0),
+      country: mr.country || "Global",
+      latitude: mr.latitude !== null && mr.latitude !== undefined ? Number(mr.latitude) : null,
+      longitude: mr.longitude !== null && mr.longitude !== undefined ? Number(mr.longitude) : null
     }));
 
     return { trackers, analyzedPosts, monitorResults };
@@ -167,7 +183,7 @@ function writeDB(data: any) {
       // 3. Sync monitor_results
       dbConn.prepare("DELETE FROM monitor_results").run();
       const insertMonitorResult = dbConn.prepare(
-        "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       if (data.monitorResults) {
         for (const mr of data.monitorResults) {
@@ -183,7 +199,10 @@ function writeDB(data: any) {
             mr.emotion,
             mr.engagement,
             mr.date,
-            mr.trackerId
+            mr.trackerId,
+            mr.country || "Global",
+            mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
+            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
           );
         }
       }
@@ -383,86 +402,109 @@ function localAnalyzeSentiment(title?: string, content?: string) {
 // Local Fallback Mock Generator for Active Search Grounding Results (Used when search tools/scopes fail)
 function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) {
   const selectedPlatforms = platforms && platforms.length > 0 ? platforms : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
-  const authors = [
-    "@budi_santoso", "@siti_nurhaliza", "@andreas_s", "@rizky_pratama", 
-    "Ahmad Fauzi", "Rina Wulandari", "Agus Setiawan", "Dewi Lestari"
-  ];
   
-  const positiveTemplates = [
-    {
-      title: `Rekomendasi ${trackerQuery} terbaik`,
-      content: `Sumpah ini ${trackerQuery} membantu banget buat produktivitas sehari-hari! Pelayanannya cepet dan praktis abis. Sangat direkomendasikan untuk semuanya! #rekomendasi #mantap`
-    },
-    {
-      title: `Review jujur layanan ${trackerQuery}`,
-      content: `Keren banget inovasi dari ${trackerQuery}, dapet promo melimpah akhir pekan ini. Adminnya ramah dan penanganannya super cepat! #puas #mantap`
-    }
+  // List of high-fidelity global cities with coordinates
+  const globalRegions = [
+    { country: "United States", lat: 37.0902, lng: -95.7129, author: "@alex_boston", templates: {
+      positive: { title: `Amazing results with ${trackerQuery}!`, content: `The recent changes in ${trackerQuery} have been stellar for our US distribution channels. Absolute game changer! #global #success` },
+      neutral: { title: `Exploring ${trackerQuery} updates`, content: `Checking out the new features released on ${trackerQuery}. Interface looks clean, waiting to see performance. #tech` },
+      negative: { title: `Service bottleneck on ${trackerQuery}`, content: `Anyone else getting slow response times on ${trackerQuery} today? Trying to push an update but it keeps timing out. #issue` }
+    }},
+    { country: "United Kingdom", lat: 55.3781, lng: -3.4360, author: "@charlie_london", templates: {
+      positive: { title: `${trackerQuery} is absolutely fantastic`, content: `Shout out to the ${trackerQuery} team for outstanding support and seamless API integration! Splendid work. #production` },
+      neutral: { title: `${trackerQuery} integration review`, content: `Currently mapping our UK business pipelines to run over ${trackerQuery}. Average response times are standard.` },
+      negative: { title: `Pricing concerns for ${trackerQuery}`, content: `The tier adjustments of ${trackerQuery} make it tough for small teams. Value must align with regional costs.` }
+    }},
+    { country: "Japan", lat: 36.2048, lng: 138.2529, author: "@yuki_tokyo", templates: {
+      positive: { title: `非常に素晴らしい ${trackerQuery}`, content: `${trackerQuery} は本当に便利で生産性が向上しました。デザインも洗練されています！ #お勧め #便利` },
+      neutral: { title: `${trackerQuery} の動作確認`, content: `新しいバージョンの ${trackerQuery} の検証を行っています。今のところ大きな不具合はありません。` },
+      negative: { title: `${trackerQuery} のバグについて`, content: `アクセス集中時に ${trackerQuery} のレスポンスが遅延する問題があります。早急な改善を望みます。` }
+    }},
+    { country: "Australia", lat: -25.2744, lng: 133.7751, author: "@mate_sydney", templates: {
+      positive: { title: `Cracking experience with ${trackerQuery}`, content: `Honestly, ${trackerQuery} has made managing our digital assets so much smoother. Keep up the brilliant work! #australia` },
+      neutral: { title: `Testing ${trackerQuery} pipelines`, content: `Reviewing the data throughput on ${trackerQuery} for our Sydney cluster. Results seem steady so far.` },
+      negative: { title: `Latency issues on ${trackerQuery}`, content: ` Experiencing some heavy latency spikes on ${trackerQuery} from our end. Hope it is fixed soon.` }
+    }},
+    { country: "Indonesia", lat: -0.7893, lng: 113.9213, author: "@budi_jakarta", templates: {
+      positive: { title: `Inovasi keren dari ${trackerQuery}`, content: `Sumpah ini ${trackerQuery} ngebantu banget buat operasional kita sehari-hari! Sangat praktis dan responsif. #rekomendasi #mantap` },
+      neutral: { title: `Diskusi seputar ${trackerQuery}`, content: `Ada yang lagi pasang sistem ${trackerQuery} di perusahaannya? Pengen tau review pemakaian jangka panjang.` },
+      negative: { title: `Kendala teknis ${trackerQuery}`, content: `Aplikasi ${trackerQuery} agak lelet diakses pas jam sibuk kantor. Mohon ditingkatkan lagi kapasitas servernya.` }
+    }},
+    { country: "Germany", lat: 51.1657, lng: 10.4515, author: "@klaus_berlin", templates: {
+      positive: { title: `Hervorragende Leistung von ${trackerQuery}`, content: `Die API von ${trackerQuery} läuft absolut zuverlässig und schnell. Sehr empfehlenswert für Enterprise-Kunden!` },
+      neutral: { title: `Untersuchung von ${trackerQuery}`, content: `Wir bewerten derzeit die Compliance-Richtlinien von ${trackerQuery} für den europäischen Markt.` },
+      negative: { title: `Kritik am neuen Update von ${trackerQuery}`, content: `Das jüngste Interface-Update von ${trackerQuery} ist unübersichtlich geworden. Bitte Option für altes Layout anbieten.` }
+    }},
+    { country: "Brazil", lat: -14.2350, lng: -51.9253, author: "@tiago_saopaulo", templates: {
+      positive: { title: `Excelente suporte de ${trackerQuery}!`, content: `Parabéns aos desenvolvedores do ${trackerQuery}, a usabilidade está excelente e a entrega de dados é imediata! #top` },
+      neutral: { title: `Análise do ${trackerQuery}`, content: `Acompanhando o progresso da ferramenta ${trackerQuery} nos canais de marketing do Brasil.` },
+      negative: { title: `Instabilidade no ${trackerQuery}`, content: `Enfrentando quedas intermitentes ao autenticar no painel do ${trackerQuery} esta manhã. Alguém mais?` }
+    }},
+    { country: "South Africa", lat: -30.5595, lng: 22.9375, author: "@lerato_jozi", templates: {
+      positive: { title: `Great value with ${trackerQuery}`, content: `Local deployment of ${trackerQuery} has dramatically reduced overhead costs. Absolute game changer in our region!` },
+      neutral: { title: `Querying ${trackerQuery}`, content: `Monitoring the discussion volume of ${trackerQuery} across Johannesburg digital forums.` },
+      negative: { title: `Connection drop in ${trackerQuery}`, content: `Server timeouts are ruining the integration of ${trackerQuery} for our clients. Need support help asap.` }
+    }},
+    { country: "India", lat: 20.5937, lng: 78.9629, author: "@priya_tech", templates: {
+      positive: { title: `Superb innovation by ${trackerQuery}`, content: `${trackerQuery} has streamlined our multi-channel logistics beautifully. Extremely happy with the automation!` },
+      neutral: { title: `Evaluating ${trackerQuery} framework`, content: `Comparing ${trackerQuery} capabilities with local analytics engines. Seems highly scalable.` },
+      negative: { title: `Support delay with ${trackerQuery}`, content: `The response time from ${trackerQuery} helpdesk is extremely slow today. Need priority support.` }
+    }},
+    { country: "Singapore", lat: 1.3521, lng: 103.8198, author: "@sg_pulse", templates: {
+      positive: { title: `Amazing efficiency from ${trackerQuery}`, content: `Our ASEAN team has scaled up seamlessly thanks to ${trackerQuery}. Outstanding response speeds! #fintech` },
+      neutral: { title: `Standard check on ${trackerQuery}`, content: `Routine performance metrics of ${trackerQuery} are matching our SLA targets.` },
+      negative: { title: `Service disruption on ${trackerQuery}`, content: `Slight service degradation noticed on ${trackerQuery} early afternoon. Keep an eye out.` }
+    }}
   ];
-  
-  const neutralTemplates = [
-    {
-      title: `Diskusi seputar ${trackerQuery}`,
-      content: `Ada yang punya pengalaman pakai ${trackerQuery} baru-baru ini? Pengen tau performanya buat penggunaan harian. #diskusi`
-    },
-    {
-      title: `Pembaruan sistem ${trackerQuery}`,
-      content: `Melihat update terbaru dari aplikasi ${trackerQuery}, sepertinya mereka merombak layout navigasi utamanya. #update`
-    }
-  ];
-  
-  const negativeTemplates = [
-    {
-      title: `Keluhan performa ${trackerQuery}`,
-      content: `Kenapa ya ${trackerQuery} belakangan ini agak lelet kalau diakses jam sibuk? Sering dapet pesan error koneksi. #keluhan #kecewa`
-    },
-    {
-      title: `Ulasan kritis ${trackerQuery}`,
-      content: `Harganya makin naik tapi kualitas pelayanan ${trackerQuery} terasa stagnan. Semoga tim mereka segera melakukan evaluasi menyeluruh. #kecewa`
-    }
-  ];
-  
+
   const results: any[] = [];
-  const countToGenerate = Math.min(4, selectedPlatforms.length * 2);
+  // Generate 8-12 diverse multi-regional results to represent a beautiful global distribution
+  const countToGenerate = Math.max(8, Math.min(12, selectedPlatforms.length * 2));
   
   for (let i = 0; i < countToGenerate; i++) {
     const platform = selectedPlatforms[i % selectedPlatforms.length];
-    const author = authors[Math.floor(Math.random() * authors.length)];
     
-    // Distribute sentiment (50% positive, 25% neutral, 25% negative)
+    // Choose a diverse country/region
+    const region = globalRegions[i % globalRegions.length];
+    
+    // Distribute sentiment: 55% positive, 25% neutral, 20% negative for a realistic optimistic outlook
     const roll = Math.random();
     let template;
     let sentiment: "positive" | "neutral" | "negative";
     let sentimentScore = 0;
     let emotion = "Neutral";
     
-    if (roll < 0.5) {
-      template = positiveTemplates[Math.floor(Math.random() * positiveTemplates.length)];
+    if (roll < 0.55) {
+      template = region.templates.positive;
       sentiment = "positive";
-      sentimentScore = Number((0.4 + Math.random() * 0.5).toFixed(2));
+      sentimentScore = Number((0.35 + Math.random() * 0.55).toFixed(2));
       emotion = "Joy";
-    } else if (roll < 0.75) {
-      template = neutralTemplates[Math.floor(Math.random() * neutralTemplates.length)];
+    } else if (roll < 0.80) {
+      template = region.templates.neutral;
       sentiment = "neutral";
       sentimentScore = Number((-0.15 + Math.random() * 0.3).toFixed(2));
       emotion = "Neutral";
     } else {
-      template = negativeTemplates[Math.floor(Math.random() * negativeTemplates.length)];
+      template = region.templates.negative;
       sentiment = "negative";
-      sentimentScore = Number((-0.4 - Math.random() * 0.5).toFixed(2));
+      sentimentScore = Number((-0.35 - Math.random() * 0.55).toFixed(2));
       emotion = "Anger";
     }
     
     results.push({
       platform,
-      url: `https://www.${platform}.com/share/status/local-${Math.floor(Math.random() * 1000000)}`,
-      author,
+      url: `https://www.${platform}.com/share/status/global-${Math.floor(Math.random() * 10000000)}`,
+      author: region.author,
       title: template.title,
       content: template.content,
       sentiment,
       sentimentScore,
       emotion,
-      engagement: Math.random() > 0.5 ? "High" : "Medium",
-      date: new Date(Date.now() - Math.random() * 172800000).toISOString()
+      engagement: Math.random() > 0.4 ? "High" : "Medium",
+      date: new Date(Date.now() - Math.random() * 172800000).toISOString(),
+      country: region.country,
+      latitude: region.lat,
+      longitude: region.lng
     });
   }
   
@@ -689,6 +731,9 @@ app.post("/api/trigger-monitor", async (req, res) => {
     - emotion: "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral"
     - engagement: "High" | "Medium" | "Low"
     - date: approximate ISO date (e.g. "2026-07-12T00:00:00.000Z")
+    - country: country of origin of this post or the brand mention (e.g. "United States", "Indonesia", "United Kingdom", "Japan", etc.)
+    - latitude: approximate latitude coordinate of the location
+    - longitude: approximate longitude coordinate of the location
     
     JSON Output Format should be a clean array of these objects:
     [
@@ -717,9 +762,12 @@ app.post("/api/trigger-monitor", async (req, res) => {
               sentimentScore: { type: Type.NUMBER },
               emotion: { type: Type.STRING },
               engagement: { type: Type.STRING },
-              date: { type: Type.STRING }
+              date: { type: Type.STRING },
+              country: { type: Type.STRING },
+              latitude: { type: Type.NUMBER },
+              longitude: { type: Type.NUMBER }
             },
-            required: ["platform", "url", "author", "title", "content", "sentiment", "sentimentScore", "emotion", "engagement", "date"]
+            required: ["platform", "url", "author", "title", "content", "sentiment", "sentimentScore", "emotion", "engagement", "date", "country", "latitude", "longitude"]
           }
         }
       }
