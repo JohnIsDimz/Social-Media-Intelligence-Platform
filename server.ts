@@ -185,25 +185,47 @@ try {
 // ==========================================
 // FIREBASE / FIRESTORE SYNC LOGIC
 // ==========================================
-import { initializeApp, getApps } from "firebase-admin/app";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
 let firebaseConfig: any = {};
 try {
-  const possiblePaths = [
-    path.join(process.cwd(), "firebase-applet-config.json"),
-    path.join(__dirname, "../firebase-applet-config.json"),
-    path.join(__dirname, "firebase-applet-config.json"),
-    "/app/firebase-applet-config.json",
-    "/firebase-applet-config.json"
-  ];
   let foundPath = "";
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      foundPath = p;
-      break;
+  
+  // 1. Check process.cwd()
+  const cwdPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(cwdPath)) {
+    foundPath = cwdPath;
+  }
+
+  // 2. Check __dirname safely (without throwing ReferenceError if running as ES module in dev mode)
+  if (!foundPath) {
+    let resolvedDirname = "";
+    try {
+      resolvedDirname = __dirname;
+    } catch (e) {
+      // In ES modules __dirname is not defined
+    }
+    if (resolvedDirname) {
+      const parentDirConfig = path.join(resolvedDirname, "../firebase-applet-config.json");
+      const sameDirConfig = path.join(resolvedDirname, "firebase-applet-config.json");
+      if (fs.existsSync(parentDirConfig)) {
+        foundPath = parentDirConfig;
+      } else if (fs.existsSync(sameDirConfig)) {
+        foundPath = sameDirConfig;
+      }
     }
   }
+
+  // 3. Check absolute container paths
+  if (!foundPath) {
+    if (fs.existsSync("/app/firebase-applet-config.json")) {
+      foundPath = "/app/firebase-applet-config.json";
+    } else if (fs.existsSync("/firebase-applet-config.json")) {
+      foundPath = "/firebase-applet-config.json";
+    }
+  }
+
   if (foundPath) {
     firebaseConfig = JSON.parse(fs.readFileSync(foundPath, "utf-8"));
     console.log(`[Firebase Init] Successfully loaded config from absolute path: ${foundPath}`);
@@ -215,9 +237,40 @@ try {
 }
 
 if (!getApps().length) {
-  initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
+  let adminCredential: any = null;
+
+  // Supports initializing with a service account on external hosting providers like Railway
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      adminCredential = cert(sa);
+      console.log("[Firebase Init] Initializing with service account credential from FIREBASE_SERVICE_ACCOUNT_JSON.");
+    } catch (err) {
+      console.error("[Firebase Init] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", err);
+    }
+  } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    try {
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      adminCredential = cert({
+        projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey,
+      });
+      console.log("[Firebase Init] Initializing with service account credential from individual environment variables.");
+    } catch (err) {
+      console.error("[Firebase Init] Failed to initialize with service account environment variables:", err);
+    }
+  }
+
+  const initOptions: any = {
+    projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID || "aplikasi-smip",
+  };
+
+  if (adminCredential) {
+    initOptions.credential = adminCredential;
+  }
+
+  initializeApp(initOptions);
 }
 
 let useDefaultDb = false;
