@@ -190,9 +190,25 @@ import { getFirestore } from "firebase-admin/firestore";
 
 let firebaseConfig: any = {};
 try {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  const possiblePaths = [
+    path.join(process.cwd(), "firebase-applet-config.json"),
+    path.join(__dirname, "../firebase-applet-config.json"),
+    path.join(__dirname, "firebase-applet-config.json"),
+    "/app/firebase-applet-config.json",
+    "/firebase-applet-config.json"
+  ];
+  let foundPath = "";
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      foundPath = p;
+      break;
+    }
+  }
+  if (foundPath) {
+    firebaseConfig = JSON.parse(fs.readFileSync(foundPath, "utf-8"));
+    console.log(`[Firebase Init] Successfully loaded config from absolute path: ${foundPath}`);
+  } else {
+    console.warn("[Firebase Init] firebase-applet-config.json not found in any standard path.");
   }
 } catch (err) {
   console.warn("[Firebase Init] Failed to read firebase-applet-config.json locally:", err);
