@@ -4,20 +4,5 @@ service cloud.firestore {
     match /{document=**} {
       allow read, write: if false;
     }
-
-    match /trackers/{trackerId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    match /analyzed_posts/{postId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    match /monitor_results/{resultId} {
-      allow read: if true;
-      allow write: if true;
-    }
   }
 }

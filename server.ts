@@ -56,7 +56,7 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "64kb" }));
 
 // Global WebSocket server and broadcast utility
 let wss: WebSocketServer | null = null;
@@ -727,17 +727,40 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
 ];
 
-// Scrape Social Media URL Meta Tags using an enhanced bypass engine with rotating User-Agents and multi-fallback parsing
+// Only fetch known public social-network hosts; arbitrary URLs can expose internal services (SSRF).
+const ALLOWED_SCRAPE_HOSTS = new Set([
+  "tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com",
+  "instagram.com", "www.instagram.com",
+  "facebook.com", "www.facebook.com", "fb.com", "www.fb.com",
+  "whatsapp.com", "www.whatsapp.com", "wa.me",
+  "twitter.com", "www.twitter.com", "x.com", "www.x.com",
+  "youtube.com", "www.youtube.com", "youtu.be",
+  "linkedin.com", "www.linkedin.com",
+  "reddit.com", "www.reddit.com", "redd.it"
+]);
+
+function validateScrapeUrl(value: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("URL tidak valid.");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port || !ALLOWED_SCRAPE_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new Error("URL harus HTTPS dan berasal dari domain media sosial yang didukung.");
+  }
+  return parsed;
+}
+
+// Scrape metadata only after validating the destination, and never follow redirects to an unchecked host.
 async function scrapeSocialUrl(url: string) {
   try {
+    const parsedUrl = validateScrapeUrl(url);
     const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
     
     // Extract domain to mock matching Referer header
     let referer = "https://www.google.com/";
-    try {
-      const parsedUrl = new URL(url);
-      referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
-    } catch (_) {}
+    referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
 
     const response = await fetch(url, {
       headers: {
@@ -756,6 +779,7 @@ async function scrapeSocialUrl(url: string) {
         "Upgrade-Insecure-Requests": "1",
         "Cache-Control": "max-age=0"
       },
+      redirect: "manual",
       signal: AbortSignal.timeout(8000) // 8 seconds timeout
     });
 
