@@ -1,59 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import {
-  BarChart3,
-  TrendingUp,
-  Hash,
-  Search,
-  Plus,
-  Trash2,
-  RefreshCw,
-  AlertTriangle,
-  Globe,
-  Activity,
-  FileText,
-  ThumbsUp,
-  ThumbsDown,
-  Smile,
-  AlertCircle,
-  ExternalLink,
-  Loader2,
-  CheckCircle,
-  Calendar,
-  MessageCircle,
-  Users,
-  Clock,
-  ArrowRight,
-  Download,
-  Sparkles,
-  Brain,
-  Menu,
-  X,
-  Zap,
-  Bell,
-  BellOff,
-  MoveHorizontal
-} from "lucide-react";
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  Legend
-} from "recharts";
 import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport } from "./types";
 import { api } from "./apiService";
-import { GlobalHeatmap } from "./components/GlobalHeatmap";
-import { RadarScanner } from "./components/RadarScanner";
-import { AnimatedNumber } from "./components/AnimatedNumber";
+import { CommandStrip } from "./components/CommandStrip";
+import { SideRail, type View } from "./components/SideRail";
+import { AddTrackerDialog, RailDrawer, Toasts, type Toast } from "./components/Overlays";
+import type { ChannelRow } from "./components/ChannelTable";
+import { OverviewView } from "./views/OverviewView";
+import { AnalyzerView } from "./views/AnalyzerView";
+import { ChannelsView } from "./views/ChannelsView";
 
 /** Explicit provenance badge. A fabricated metric must never look like a real one. */
 function SimulatedBadge({ show, title }: { show?: boolean; title?: string }) {
@@ -169,7 +123,7 @@ const platformStyles: Record<string, { bg: string, text: string, border: string,
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analyzer' | 'monitoring'>('dashboard');
+  const [view, setView] = useState<View>("overview");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
   
@@ -178,9 +132,6 @@ export default function App() {
   const [analyzedPosts, setAnalyzedPosts] = useState<AnalyzedPost[]>([]);
   const [monitorResults, setMonitorResults] = useState<MonitorResult[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [allMonitorResults, setAllMonitorResults] = useState<MonitorResult[]>([]);
-  const [comparePlatformA, setComparePlatformA] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit'>('instagram');
-  const [comparePlatformB, setComparePlatformB] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit'>('tiktok');
   
   // Interaction State
   const [urlInput, setUrlInput] = useState("");
@@ -226,12 +177,9 @@ export default function App() {
       lastAggregatedAt: string;
     };
   } | null>(null);
-  const [isLoadingSignals, setIsLoadingSignals] = useState(false);
 
   // Real-Time WebSocket and Live Telemetry State
-  const [liveUpdates, setLiveUpdates] = useState<any[]>([]);
   const [webSocketStatus, setWebSocketStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'polling'>('connecting');
-  const [lastIngestedTime, setLastIngestedTime] = useState<number>(0);
   const [notificationPermission, setNotificationPermission] = useState<string>(
     typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default"
   );
@@ -355,7 +303,6 @@ export default function App() {
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
-      setAllMonitorResults(allMonitoredData);
       if (signalsData) {
         setSocialSignals(signalsData);
       }
@@ -428,24 +375,7 @@ export default function App() {
                 });
               }
 
-              // Update allMonitorResults dynamically so that on-the-fly calculated platform trend charts transition and shift smoothly in real-time
-              setAllMonitorResults((prev) => {
-                if (prev.some((item) => item.id === post.id)) return prev;
-                return [post, ...prev].slice(0, 500);
-              });
-
-              // 2. Add to transient real-time floating alerts state
-              const newAlert = {
-                id: `alert-${Date.now()}-${Math.random()}`,
-                title: `Post Baru Terdeteksi (${tracker?.query || "Brand"})`,
-                content: post.content,
-                platform: post.platform,
-                sentiment: post.sentiment,
-                timestamp: new Date()
-              };
-              setLiveUpdates((prev) => [newAlert, ...prev].slice(0, 3));
-              setLastIngestedTime(Date.now());
-
+              // 2. Desktop notification for genuinely new posts
               // Trigger Browser Notification
               if (post.sentiment === "negative") {
                 sendBrowserNotification(
@@ -571,84 +501,6 @@ export default function App() {
     }
   }, [timeRange]);
 
-  // Helper function to calculate stats and sentiment trend per platform
-  const getPlatformStats = (platform: string) => {
-    const cutoffDate = new Date();
-    const rangeDays = parseInt(timeRange) || 7;
-    cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
-
-    const combined = [
-      ...analyzedPosts.map(p => ({ ...p, date: p.analyzedAt })),
-      ...allMonitorResults
-    ].filter(item => {
-      if (item.platform !== platform) return false;
-      const dateStr = item.date;
-      if (!dateStr) return true;
-      return new Date(dateStr) >= cutoffDate;
-    });
-
-    const total = combined.length;
-    let posCount = 0;
-    let neuCount = 0;
-    let negCount = 0;
-    let totalScore = 0;
-
-    combined.forEach(item => {
-      if (item.sentiment === "positive") posCount++;
-      else if (item.sentiment === "negative") negCount++;
-      else neuCount++;
-      totalScore += (item.sentimentScore ?? 0);
-    });
-
-    const avgScore = total > 0 ? Number((totalScore / total).toFixed(2)) : 0;
-    
-    // Compute Trend points for each day in range
-    const dateGroups: Record<string, { pos: number; neu: number; neg: number }> = {};
-    for (let i = rangeDays - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dayStr = d.toISOString().split("T")[0];
-      dateGroups[dayStr] = { pos: 0, neu: 0, neg: 0 };
-    }
-
-    combined.forEach(item => {
-      if (!item.date) return;
-      const dayStr = item.date.split("T")[0];
-      if (dateGroups[dayStr]) {
-        if (item.sentiment === "positive") dateGroups[dayStr].pos++;
-        else if (item.sentiment === "negative") dateGroups[dayStr].neg++;
-        else dateGroups[dayStr].neu++;
-      }
-    });
-
-    const trendData = Object.entries(dateGroups)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, counts]) => ({
-        date: new Date(date).toLocaleDateString("id-ID", { day: "numeric", month: "short" }),
-        positive: counts.pos,
-        neutral: counts.neu,
-        negative: counts.neg
-      }));
-
-    // Top emotion
-    const emotionCounts: Record<string, number> = {};
-    combined.forEach(item => {
-      const emotion = item.emotion || "Neutral";
-      emotionCounts[emotion] = (emotionCounts[emotion] || 0) + 1;
-    });
-    const topEmotion = Object.entries(emotionCounts)
-      .sort((a, b) => b[1] - a[1])[0]?.[0] || "Neutral";
-
-    return {
-      total,
-      posCount,
-      neuCount,
-      negCount,
-      avgScore,
-      trendData,
-      topEmotion
-    };
-  };
 
   const fetchInitialData = async () => {
     setIsLoading(true);
@@ -668,7 +520,8 @@ export default function App() {
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
-      setAllMonitorResults(allMonitoredData);
+      // Keep the channels view populated without an extra round-trip.
+      setMonitorResults((prev) => (prev.length > 0 ? prev : allMonitoredData));
       if (signalsData) {
         setSocialSignals(signalsData);
       }
@@ -734,29 +587,31 @@ export default function App() {
   };
 
   // Create New Tracker Campaign
-  const handleCreateTracker = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTrackerQuery.trim()) return;
-
+  const createTrackerDirect = async (
+    type: "brand" | "hashtag",
+    query: string,
+    platforms: string[]
+  ) => {
     setError(null);
     try {
       const newTracker = await api.post<Tracker>("/api/trackers", {
-        type: newTrackerType,
-        query: newTrackerType === 'hashtag' && !newTrackerQuery.startsWith('#') ? `#${newTrackerQuery}` : newTrackerQuery,
-        platforms: newTrackerPlatforms
+        type,
+        query: type === "hashtag" && !query.startsWith("#") ? `#${query}` : query,
+        platforms,
       });
-      
-      setTrackers(prev => [...prev, newTracker]);
+
+      setTrackers((prev) => [...prev, newTracker]);
       setSelectedTrackerId(newTracker.id);
       setShowAddTrackerModal(false);
       setNewTrackerQuery("");
-      
-      showNotification(`Tracker "${newTracker.query}" berhasil ditambahkan!`);
-      
+      setView("channels");
+
+      showNotification(`Pemantauan "${newTracker.query}" ditambahkan.`);
+
       // Auto-trigger live scanning
       triggerLiveMonitoring(newTracker.id);
     } catch (err: any) {
-      setError(err.message || "Gagal menyimpan tracker baru.");
+      setError(err.message || "Gagal menyimpan pemantauan baru.");
     }
   };
 
@@ -782,9 +637,16 @@ export default function App() {
   };
 
   // Run Custom Post Analyzer
-  const handleAnalyzePost = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!urlInput.trim() && !textInput.trim()) {
+  const handleAnalyzePost = async (
+    e?: React.FormEvent,
+    payload?: { url?: string; text?: string; platform?: string }
+  ) => {
+    e?.preventDefault();
+    const urlValue = (payload?.url ?? urlInput).trim();
+    const textValue = (payload?.text ?? textInput).trim();
+    const platformValue = payload?.platform ?? manualPlatform;
+
+    if (!urlValue && !textValue) {
       setError("Masukkan URL atau salin teks kiriman untuk dianalisis.");
       return;
     }
@@ -793,9 +655,9 @@ export default function App() {
     setError(null);
     try {
       const result = await api.post<AnalyzedPost>("/api/analyze-url", {
-        url: urlInput.trim() || undefined,
-        rawText: textInput.trim() || undefined,
-        manualPlatform: textInput.trim() ? manualPlatform : undefined
+        url: urlValue || undefined,
+        rawText: textValue || undefined,
+        manualPlatform: textValue ? platformValue : undefined
       });
 
       setAnalyzedPosts(prev => [result, ...prev]);
@@ -946,1664 +808,167 @@ export default function App() {
   };
 
   // Platform Colors for UI Badges
-  const getPlatformColors = (platform: string) => {
-    switch (platform) {
-      case "tiktok": return "bg-black text-white hover:bg-zinc-900";
-      case "instagram": return "bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500 text-white";
-      case "facebook": return "bg-blue-600 text-white hover:bg-blue-700";
-      case "whatsapp": return "bg-green-500 text-white hover:bg-green-600";
-      case "twitter": return "bg-sky-500 text-white hover:bg-sky-600";
-      case "youtube": return "bg-red-600 text-white hover:bg-red-700";
-      case "linkedin": return "bg-indigo-700 text-white hover:bg-indigo-800";
-      case "reddit": return "bg-orange-600 text-white hover:bg-orange-700";
-      default: return "bg-slate-500 text-white hover:bg-slate-600";
-    }
+
+
+
+  /* ---------------------------------------------------------------------------
+   * Derived view data
+   * ------------------------------------------------------------------------- */
+
+  const activeTracker = trackers.find((t) => t.id === selectedTrackerId);
+
+  const channelRows: ChannelRow[] =
+    socialSignals?.platformSignals?.map((s) => ({
+      platform: s.platform,
+      buzzVolume: s.buzzVolume,
+      sentimentScore: s.sentimentScore,
+      velocity: s.velocity,
+      signalStrength: s.signalStrength,
+      activeUsersCount: s.activeUsersCount,
+      isSimulated: s.isSimulated,
+    })) ?? [];
+
+  const simulatedPlatformCount =
+    channelRows.filter((r) => r.isSimulated).length;
+  const totalSignals =
+    socialSignals?.aggregateIndex?.totalSignalsDetected ??
+    (stats?.totalAnalyzed ?? 0);
+
+  const toastKind: Toast["kind"] = error ? "fail" : "ok";
+  const toastMessage = error ?? successMessage;
+
+  const toasts: Toast[] = toastMessage
+    ? [{ id: 1, kind: toastKind, message: toastMessage }]
+    : [];
+
+  const dismissToast = () => {
+    setError(null);
+    setSuccessMessage(null);
   };
 
-  // Sentiment Color Helper
-  const getSentimentBadge = (sentiment: string) => {
-    switch (sentiment) {
-      case "positive": return "bg-emerald-100 text-emerald-800 border-emerald-200";
-      case "negative": return "bg-rose-100 text-rose-800 border-rose-200";
-      default: return "bg-slate-100 text-slate-800 border-slate-200";
-    }
-  };
+  const connectionForStrip = webSocketStatus;
 
-  // Emotion Emoji Helper
-  const getEmotionDetails = (emotion: string) => {
-    const norm = emotion.toLowerCase();
-    if (norm.includes("joy") || norm.includes("senang") || norm.includes("gembira")) return { emoji: "😊", color: "bg-amber-100 text-amber-800" };
-    if (norm.includes("anger") || norm.includes("marah") || norm.includes("kesal")) return { emoji: "😡", color: "bg-red-100 text-red-800" };
-    if (norm.includes("sadness") || norm.includes("sedih") || norm.includes("kecewa")) return { emoji: "😢", color: "bg-blue-100 text-blue-800" };
-    if (norm.includes("love") || norm.includes("cinta") || norm.includes("suka")) return { emoji: "😍", color: "bg-pink-100 text-pink-800" };
-    if (norm.includes("surprise") || norm.includes("terkejut") || norm.includes("kaget")) return { emoji: "😮", color: "bg-purple-100 text-purple-800" };
-    if (norm.includes("fear") || norm.includes("takut")) return { emoji: "😰", color: "bg-zinc-100 text-zinc-800" };
-    return { emoji: "😐", color: "bg-slate-100 text-slate-800" };
+  const railProps = {
+    trackers,
+    activeTrackerId: selectedTrackerId,
+    onSelectTracker: (id: string) => {
+      setSelectedTrackerId(id);
+      setView("channels");
+      setIsDrawerOpen(false);
+      fetchMonitorResults(id);
+    },
+    onAddTracker: () => {
+      setShowAddTrackerModal(true);
+      setIsDrawerOpen(false);
+    },
+    onDeleteTracker: handleDeleteTracker,
+    connection: webSocketStatus,
+    notificationsOn: notificationPermission === "granted",
+    onToggleNotifications: requestNotificationPermission,
+    simulated: simulatedPlatformCount > 0,
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans" id="app-root">
-      {/* Header Banner */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs" id="app-header">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-xs">
-              <Activity className="h-6 w-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight font-display text-indigo-950">
-                S.M.I.P
-              </h1>
-              <p className="text-[10px] text-slate-400 font-mono tracking-wider uppercase">Active AI Decision Engine</p>
-            </div>
-          </div>
+    <div className="flex min-h-screen flex-col bg-paper text-ink" id="app-root">
+      <CommandStrip
+        trackers={trackers}
+        totalSignals={totalSignals}
+        signals={channelRows}
+        connection={connectionForStrip}
+        clock={jakartaTime}
+        isSimulated={simulatedPlatformCount > 0}
+        onOpenMenu={() => setIsDrawerOpen(true)}
+      />
 
-          <div className="flex items-center gap-2 sm:gap-4">
-            {/* Real-time WebSocket Connection Badge */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200">
-              <span className={`h-2 w-2 rounded-full ${
-                webSocketStatus === 'connected' ? 'bg-emerald-500 animate-pulse' :
-                webSocketStatus === 'connecting' ? 'bg-amber-400 animate-pulse' :
-                webSocketStatus === 'polling' ? 'bg-indigo-500 animate-pulse' : 'bg-rose-500'
-              }`} />
-              <span className="text-[9px] font-mono tracking-wider font-bold uppercase text-slate-500">
-                {webSocketStatus === 'connected' ? 'LIVE_WS' :
-                 webSocketStatus === 'connecting' ? 'CONNECT_WS' :
-                 webSocketStatus === 'polling' ? 'POLLING_ACTIVE' : 'OFFLINE_WS'}
-              </span>
-            </div>
-
-            {/* Browser Notifications Control */}
-            <button
-              onClick={requestNotificationPermission}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-[9px] font-mono tracking-wider font-bold uppercase cursor-pointer select-none active:scale-95 ${
-                notificationPermission === "granted"
-                  ? "bg-indigo-50 border-indigo-200 text-indigo-600 hover:bg-indigo-100"
-                  : notificationPermission === "denied"
-                  ? "bg-rose-50 border-rose-200 text-rose-600 opacity-60"
-                  : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-              }`}
-              title={
-                notificationPermission === "granted"
-                  ? "Notifikasi Browser Aktif"
-                  : "Aktifkan Notifikasi Browser"
-              }
-            >
-              {notificationPermission === "granted" ? (
-                <>
-                  <Bell className="h-3.5 w-3.5 text-indigo-600 animate-bounce" />
-                  <span>NOTIF_ON</span>
-                </>
-              ) : (
-                <>
-                  <BellOff className="h-3.5 w-3.5 text-slate-400" />
-                  <span>NOTIF_OFF</span>
-                </>
-              )}
-            </button>
-
-            {/* Main Menu Button (Icon-Only, Text Removed) */}
-            <button
-              onClick={() => setIsDrawerOpen(true)}
-              className="flex items-center justify-center h-10 w-10 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-900 rounded-xl transition-all shadow-xs hover:shadow-md cursor-pointer select-none active:scale-95"
-              title="Menu Navigasi"
-            >
-              <Menu className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Slide-out Navigation Drawer on Top Right */}
-      <AnimatePresence>
-        {isDrawerOpen && (
-          <>
-            {/* Backdrop Overlay */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.5 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsDrawerOpen(false)}
-              className="fixed inset-0 bg-slate-950/40 backdrop-blur-xs z-50 cursor-pointer"
+      <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col lg:flex-row">
+        {/* Rail — desktop only; the drawer carries the same content on small screens. */}
+        <aside className="hidden w-[240px] shrink-0 border-r border-hair lg:block xl:w-[264px]">
+          <div className="sticky top-0">
+            <SideRail
+              view={view}
+              onChangeView={setView}
+              {...railProps}
             />
-            
-            {/* Drawer Panel */}
-            <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 30, stiffness: 300 }}
-              className="fixed top-0 right-0 h-full w-80 bg-white shadow-2xl border-l border-slate-200 z-50 p-6 flex flex-col gap-6"
-            >
-              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-indigo-600" />
-                  <h2 className="text-sm font-bold text-indigo-950 font-display">Navigasi Utama</h2>
-                </div>
-                <button
-                  onClick={() => setIsDrawerOpen(false)}
-                  className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded-lg transition-colors cursor-pointer"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={() => {
-                    setActiveTab('dashboard');
-                    setIsDrawerOpen(false);
-                  }}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
-                    activeTab === 'dashboard'
-                      ? 'bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100'
-                      : 'text-slate-600 hover:bg-slate-50 border border-transparent hover:text-slate-900'
-                  }`}
-                >
-                  <BarChart3 className="h-5 w-5" />
-                  <span>Dashboard Analitik</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveTab('analyzer');
-                    setIsDrawerOpen(false);
-                  }}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
-                    activeTab === 'analyzer'
-                      ? 'bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100'
-                      : 'text-slate-600 hover:bg-slate-50 border border-transparent hover:text-slate-900'
-                  }`}
-                >
-                  <TrendingUp className="h-5 w-5" />
-                  <span>Analisis Sentimen AI</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveTab('monitoring');
-                    setIsDrawerOpen(false);
-                  }}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
-                    activeTab === 'monitoring'
-                      ? 'bg-indigo-50 text-indigo-700 shadow-xs border border-indigo-100'
-                      : 'text-slate-600 hover:bg-slate-50 border border-transparent hover:text-slate-900'
-                  }`}
-                >
-                  <Search className="h-5 w-5" />
-                  <span>Monitoring Brand</span>
-                </button>
-              </div>
-
-              {/* Informational Card with AI status signal */}
-              <div className="mt-auto p-4 rounded-xl bg-slate-50 border border-slate-100 flex flex-col gap-3">
-                <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
-                  <span className="font-semibold text-indigo-950 text-[11px] uppercase tracking-wider font-mono">S.I.P AI Engine</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="flex h-2 w-2 relative">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                    </span>
-                    <span className="text-[10px] font-bold text-emerald-600 font-mono tracking-wider">ONLINE</span>
-                  </div>
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Sistem analisis media sosial dan prediksi arah sentimen brand dengan kecerdasan buatan.
-                </p>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Main Body */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 grid grid-cols-1 lg:grid-cols-4 gap-8">
-        {/* Left Sidebar Menu */}
-        <aside className="lg:col-span-1 flex flex-col gap-6" id="app-sidebar">
-
-          {/* Quick Stats Summary */}
-          <div className="bg-indigo-950 text-white rounded-2xl p-5 shadow-xs relative overflow-hidden">
-            <div className="absolute right-0 bottom-0 opacity-10 translate-x-1/4 translate-y-1/4">
-              <Activity className="h-44 w-44 text-white" />
-            </div>
-            
-            <h3 className="text-xs font-semibold text-indigo-200 tracking-wider uppercase mb-3">Kesehatan Brand</h3>
-            <div className="space-y-4">
-              <div>
-                <p className="text-slate-400 text-xs">Skor Sentimen Rata-rata</p>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-3xl font-bold font-display">
-                    {stats ? `${stats.averageScore > 0 ? "+" : ""}${stats.averageScore}` : "0.0"}
-                  </span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                    stats?.overallSentiment === "positive" ? "bg-emerald-500/20 text-emerald-300" :
-                    stats?.overallSentiment === "negative" ? "bg-rose-500/20 text-rose-300" : "bg-slate-500/20 text-slate-300"
-                  }`}>
-                    {stats?.overallSentiment === "positive" ? "Positif" :
-                     stats?.overallSentiment === "negative" ? "Negatif" : "Netral"}
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <div className="w-full bg-indigo-900/40 rounded-full h-2 overflow-hidden mb-2">
-                  <div 
-                    className="bg-emerald-400 h-2 rounded-full transition-all duration-1000" 
-                    style={{ width: stats ? `${((stats.averageScore + 1) / 2) * 100}%` : "50%" }}
-                  />
-                </div>
-                <div className="flex justify-between text-[10px] text-indigo-300 font-mono">
-                  <span>-1.0 NEGATIF</span>
-                  <span>+1.0 POSITIF</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Alerts / Realtime Logs Section */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs">
-            <h3 className="text-xs font-semibold text-slate-400 tracking-wider uppercase mb-3">Sinyal Peringatan AI</h3>
-            <div className="flex flex-col gap-3">
-              {stats?.recentAlerts && stats.recentAlerts.length > 0 ? (
-                stats.recentAlerts.map(alert => (
-                  <div key={alert.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex gap-2.5 items-start">
-                    {alert.type === "negative_spikes" ? (
-                      <AlertTriangle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
-                    ) : alert.type === "new_trend" ? (
-                      <Hash className="h-5 w-5 text-indigo-500 shrink-0 mt-0.5" />
-                    ) : (
-                      <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      <h4 className="text-xs font-semibold text-slate-900">{alert.title}</h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{alert.message}</p>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-slate-400 italic">Tidak ada peringatan aktif.</p>
-              )}
-            </div>
           </div>
         </aside>
 
-        {/* Right Main Panel */}
-        <main className="lg:col-span-3 flex flex-col gap-6" id="app-main">
-          {/* Notification Alert Bar */}
-          <AnimatePresence>
-            {successMessage && (
-              <motion.div
-                initial={{ opacity: 0, y: -15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="bg-emerald-500 text-white px-5 py-3.5 rounded-2xl shadow-md flex items-center gap-3 text-sm font-medium z-50 border border-emerald-400"
-              >
-                <CheckCircle className="h-5 w-5 shrink-0" />
-                <span>{successMessage}</span>
-              </motion.div>
-            )}
-
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, y: -15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="bg-rose-50 border border-rose-200 text-rose-800 px-5 py-3.5 rounded-2xl flex items-center gap-3 text-sm font-medium"
-              >
-                <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-                <span>{error}</span>
-                <button onClick={() => setError(null)} className="ml-auto text-xs text-rose-500 hover:text-rose-700">Tutup</button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Tab Renderings */}
-          <AnimatePresence mode="wait">
-            {/* 1. OVERVIEW DASHBOARD */}
-            {activeTab === 'dashboard' && (
-              <motion.div
-                key="dashboard-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 15 }}
-                transition={{ duration: 0.25 }}
-                className="flex flex-col gap-6"
-              >
-                {/* Intro Title */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                  <div>
-                    <h2 className="text-2xl font-bold font-display text-indigo-950">Analitik & Kecerdasan Brand</h2>
-                    <p className="text-sm text-slate-500 mt-1">Laporan komprehensif data sentimen, tagar, dan monitoring media sosial secara live.</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 shrink-0">
-                    {stats && (
-                      <button
-                        onClick={exportDashboardReport}
-                        className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-3 rounded-xl shadow-sm transition-all cursor-pointer select-none shrink-0"
-                      >
-                        <Download className="h-4 w-4" />
-                        <span>Ekspor Laporan Utama (CSV)</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Real-time IP and Catalog Clock Widgets */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Your IP Address Widget */}
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between hover:shadow-md transition-all duration-300">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
-                        <Globe className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase font-semibold">Your IP Address</p>
-                        <h4 className="text-base font-bold text-slate-800 font-mono mt-0.5">{userIp}</h4>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-bold text-indigo-600 font-mono tracking-wider bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-100">DETECTED</span>
-                  </div>
-
-                  {/* Catalog Clock (Asia/Jakarta) Widget */}
-                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between hover:shadow-md transition-all duration-300">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
-                        <Clock className="h-5 w-5 animate-pulse" />
-                      </div>
-                      <div>
-                        <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase font-semibold">Local Time (Asia/Jakarta)</p>
-                        <h4 className="text-sm font-bold text-slate-800 mt-0.5">{jakartaTime || "Memuat..."}</h4>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-bold text-emerald-600 font-mono tracking-wider bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100">LIVE</span>
-                  </div>
-                </div>
-
-                {/* 4-Column High-Level Stats */}
-                <motion.div layout className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <motion.div 
-                    layout 
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
-                  >
-                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-                      <FileText className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="text-slate-400 text-xs font-medium">Total Analisis</p>
-                      <motion.h3 
-                        key={stats?.totalAnalyzed ?? 0}
-                        initial={{ scale: 0.8, opacity: 0.4 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                        className="text-2xl font-bold text-slate-900 mt-0.5 flex items-baseline"
-                      >
-                        <AnimatedNumber value={stats?.totalAnalyzed ?? 0} precision={0} />
-                      </motion.h3>
-                    </div>
-                  </motion.div>
-
-                  <motion.div 
-                    layout 
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
-                  >
-                    <div className={`p-3 rounded-xl transition-colors duration-300 ${
-                      stats?.overallSentiment === "positive" ? "bg-emerald-50 text-emerald-600" :
-                      stats?.overallSentiment === "negative" ? "bg-rose-50 text-rose-600" :
-                      "bg-slate-100 text-slate-600"
-                    }`}>
-                      {stats?.overallSentiment === "positive" ? <ThumbsUp className="h-6 w-6" /> :
-                       stats?.overallSentiment === "negative" ? <ThumbsDown className="h-6 w-6" /> :
-                       <Activity className="h-6 w-6" />}
-                    </div>
-                    <div>
-                      <p className="text-slate-400 text-xs font-medium">Sentimen Dominan</p>
-                      <div className="flex flex-col mt-0.5">
-                        <motion.span 
-                          key={stats?.overallSentiment ?? "neutral"}
-                          initial={{ scale: 0.8, opacity: 0.4 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                          className={`text-lg font-bold capitalize leading-tight ${
-                            stats?.overallSentiment === "positive" ? "text-emerald-600" :
-                            stats?.overallSentiment === "negative" ? "text-rose-600" :
-                            "text-slate-600"
-                          }`}
-                        >
-                          {stats?.overallSentiment === "positive" ? "Positif" : 
-                           stats?.overallSentiment === "negative" ? "Negatif" : "Netral"}
-                        </motion.span>
-                        {stats && typeof stats.averageScore === 'number' && (
-                          <span className="text-[10px] text-slate-400 font-medium mt-1 font-mono flex items-center gap-0.5">
-                            Skor: <AnimatedNumber value={stats.averageScore} precision={2} className="font-bold text-slate-600" />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </motion.div>
-
-                  <motion.div 
-                    layout 
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
-                  >
-                    <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                      <Smile className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="text-slate-400 text-xs font-medium">Denyut Emosi</p>
-                      <div className="flex flex-col mt-0.5">
-                        <motion.span 
-                          key={stats?.emotionDistribution?.[0]?.name ?? "neutral"}
-                          initial={{ scale: 0.8, opacity: 0.4 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          transition={{ type: "spring", stiffness: 300, damping: 18 }}
-                          className="text-lg font-bold text-amber-600 capitalize leading-tight"
-                        >
-                          {stats?.emotionDistribution?.[0]?.name ?? "Netral"}
-                        </motion.span>
-                        {stats && stats.totalAnalyzed > 0 && stats.emotionDistribution?.[0] && (
-                          <span className="text-[10px] text-slate-400 font-medium mt-1 font-mono flex items-center gap-0.5">
-                            Prevalensi: <AnimatedNumber 
-                              value={Math.round((stats.emotionDistribution[0].value / stats.totalAnalyzed) * 100)} 
-                              precision={0} 
-                              suffix="%" 
-                              className="font-bold text-slate-600" 
-                            />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </motion.div>
-
-                  <motion.div 
-                    layout 
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4 hover:shadow-md transition-all duration-300"
-                  >
-                    <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-                      <Globe className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="text-slate-400 text-xs font-medium">Saluran Dipantau</p>
-                      <h3 className="text-lg font-bold text-slate-900 mt-0.5">8 Platform</h3>
-                    </div>
-                  </motion.div>
-                </motion.div>
-
-                {/* ─── NEW TECHNOLOGY: UNIVERSAL SOCIAL SIGNAL INTELLIGENCE (S.S.E) ─── */}
-                {socialSignals && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 15 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: 0.1 }}
-                    className="bg-slate-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 relative overflow-hidden"
-                  >
-                    {/* Glowing Accent Background */}
-                    <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-                    <div className="absolute bottom-0 left-0 w-80 h-80 bg-rose-600/5 rounded-full blur-3xl pointer-events-none" />
-
-                    <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 pb-6 border-b border-slate-800">
-                      <div className="flex-1 max-w-xl">
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[10px] font-mono font-bold tracking-wider uppercase mb-2">
-                          <Zap className="h-3 w-3 animate-pulse text-indigo-400" /> NEW: UNIVERSAL SOCIAL SIGNAL ENGINE
-                        </div>
-                        <h3 className="text-xl font-bold font-display tracking-tight text-slate-100">
-                          Cross-Platform Intelligence Aggregator
-                        </h3>
-                        <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                          Sistem agregasi dinamis mendeteksi volume dengungan, sentimen, kecepatan percakapan, dan koherensi sinyal sosial di 8 platform utama secara real-time.
-                        </p>
-                      </div>
-
-                      {/* Animated Center Radar Screen Widget */}
-                      <div className="flex justify-center xl:justify-start">
-                        <RadarScanner
-                          monitorResults={monitorResults}
-                          lastIngestedTime={lastIngestedTime}
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-4 xl:w-auto w-full">
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
-                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Buzz Index</span>
-                          <div className="flex items-baseline gap-1 mt-1">
-                            <span className="text-lg font-extrabold text-indigo-400">{socialSignals.aggregateIndex.globalBuzzIndex}</span>
-                            <span className="text-[10px] text-slate-500 font-medium">/100</span>
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
-                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Koherensi</span>
-                          <div className="flex items-baseline gap-1 mt-1">
-                            <span className="text-lg font-extrabold text-emerald-400">{socialSignals.aggregateIndex.crossPlatformCoherence}%</span>
-                            <span className="text-[10px] text-slate-500 font-medium">Align</span>
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3.5 flex flex-col justify-center">
-                          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Dominan</span>
-                          <span className="text-xs font-bold text-slate-200 mt-1.5 uppercase tracking-wide truncate bg-slate-800/80 px-2 py-0.5 rounded-lg border border-slate-700 text-center">
-                            {socialSignals.aggregateIndex.dominantPlatform}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-                      {socialSignals.platformSignals.map((signal) => {
-                        const style = platformStyles[signal.platform] || {
-                          bg: "from-slate-800 to-slate-900",
-                          text: "text-slate-300",
-                          border: "border-slate-700",
-                          color: "#94a3b8",
-                          badge: "bg-slate-800 text-slate-300"
-                        };
-                        const isPositive = signal.sentimentScore > 0.05;
-                        const isNegative = signal.sentimentScore < -0.05;
-
-                        // Check if this platform card had a new post ingested recently (within last 5 seconds)
-                        const isRecentlyIngested = (Date.now() - lastIngestedTime < 5000) && 
-                          (liveUpdates[0]?.platform?.toLowerCase() === signal.platform.toLowerCase());
-
-                        return (
-                          <div 
-                            key={signal.platform}
-                            className={`bg-slate-900/40 border rounded-2xl p-4 flex flex-col justify-between hover:bg-slate-900/60 transition-all group relative overflow-hidden ${
-                              isRecentlyIngested 
-                                ? "border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.25)] bg-slate-900/70 scale-[1.02] duration-300"
-                                : "border-slate-800/60"
-                            }`}
-                          >
-                            {/* Ingestion Flash Overlay line */}
-                            {isRecentlyIngested && (
-                              <div className="absolute top-0 left-0 w-full h-[3px] bg-indigo-500 animate-pulse" />
-                            )}
-
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-slate-200 uppercase tracking-wide flex items-center gap-1.5">
-                                {/* Sonar active pulse indicator ring */}
-                                <span className="relative flex h-2.5 w-2.5">
-                                  <span 
-                                    className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
-                                    style={{ backgroundColor: style.color }}
-                                  />
-                                  <span 
-                                    className="relative inline-flex rounded-full h-2.5 w-2.5"
-                                    style={{ backgroundColor: style.color }}
-                                  />
-                                </span>
-                                {signal.platform}
-                              </span>
-                              <div className="flex items-center gap-1.5">
-                                <SimulatedBadge show={signal.isSimulated} />
-                                {signal.velocity > 45 ? (
-                                  <TrendingUp className="h-3 w-3 text-emerald-400" />
-                                ) : (
-                                  <TrendingUp className="h-3 w-3 text-slate-500" />
-                                )}
-                                <span className="text-[10px] font-mono text-slate-300 font-bold">+{signal.velocity}%</span>
-                              </div>
-                            </div>
-
-                            <div className="my-3.5">
-                              <div className="flex justify-between items-baseline mb-1">
-                                <span className="text-[10px] text-slate-400 font-semibold">Kekuatan Sinyal</span>
-                                <span className="text-xs font-bold text-indigo-400">{signal.signalStrength}%</span>
-                              </div>
-                              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                                <div 
-                                  className="h-full bg-indigo-500 rounded-full transition-all duration-1000"
-                                  style={{ width: `${signal.signalStrength}%` }}
-                                />
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-2.5 border-t border-slate-800/80">
-                              <div className="flex flex-col">
-                                <span className="text-[8px] uppercase tracking-wider font-semibold text-slate-500">Volume</span>
-                                <span className="font-mono text-slate-300 font-bold">{signal.buzzVolume} posts</span>
-                              </div>
-                              
-                              <div className="flex flex-col items-end">
-                                <span className="text-[8px] uppercase tracking-wider font-semibold text-slate-500">Sentimen</span>
-                                <span className={`font-mono font-bold ${
-                                  isPositive ? "text-emerald-400" :
-                                  isNegative ? "text-rose-400" : "text-slate-300"
-                                }`}>
-                                  {signal.sentimentScore > 0 ? "+" : ""}{signal.sentimentScore}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </motion.div>
-                )}
-                {/* ───────────────────────────────────────────────────────────────── */}
-
-                {/* Charts Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Left Column: AI Prediction (Spans 2 columns) */}
-                  <div className="md:col-span-2 flex flex-col gap-6">
-
-                    {/* AI Prediction Component */}
-                    <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.6, ease: "easeOut", delay: 0.15 }}
-                      className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 p-6 rounded-2xl border border-indigo-950 text-white shadow-xl relative overflow-hidden"
-                    >
-                      {/* Ambient Glowing Background lights */}
-                      <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-                      <div className="absolute bottom-0 left-0 w-48 h-48 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
-
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/10 relative z-10">
-                        <div className="flex items-center gap-2.5">
-                          <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-xl border border-indigo-400/20 backdrop-blur-md">
-                            <Brain className="h-5 w-5 animate-pulse" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="text-sm font-bold tracking-wide text-indigo-100">Prediksi Tren &amp; Rekomendasi AI</h3>
-                              <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                                Gemini 3.5 Flash
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-300">Estimasi sentimen saluran media sosial 3 hari ke depan</p>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={fetchPredictions}
-                          disabled={isLoadingPredictions}
-                          className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white hover:text-indigo-200 text-xs font-semibold px-3 py-1.5 rounded-xl border border-white/10 transition-all cursor-pointer select-none disabled:opacity-50 self-start sm:self-auto shrink-0"
-                        >
-                          {isLoadingPredictions ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-300" />
-                          ) : (
-                            <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-                          )}
-                          <span>{isLoadingPredictions ? "Menganalisis..." : "Segarkan Prediksi"}</span>
-                        </button>
-                      </div>
-
-                      {/* Display of Predictions */}
-                      {isLoadingPredictions ? (
-                        <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-300">
-                          <Loader2 className="h-8 w-8 text-indigo-400 animate-spin" />
-                          <p className="text-xs font-medium font-mono tracking-wider text-indigo-300">CALCULATING_SENTIMENT_FORECAST...</p>
-                          <p className="text-[11px] text-slate-400 text-center max-w-xs leading-relaxed">
-                            Menganalisis data percakapan historis, pola sentimen saluran, dan mengevaluasi pemicu sentimen menggunakan AI...
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="mt-5 flex flex-col gap-5 relative z-10">
-                          {/* Summary paragraph */}
-                          <div className="p-4 rounded-xl bg-white/5 border border-white/5 text-xs leading-relaxed text-slate-200 italic flex items-start gap-2.5">
-                            <span className="text-lg text-indigo-400 leading-none">“</span>
-                            <span>{predictions?.summary || fallbackPredictions.summary}</span>
-                            {!predictions && <SimulatedBadge show />}
-                          </div>
-
-                          {/* 3 Days Grid */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            {(predictions?.predictions || fallbackPredictions.predictions).map((pred, idx) => {
-                              const isPos = pred.predictedSentiment === "positive";
-                              const isNeg = pred.predictedSentiment === "negative";
-                              const sentimentText = isPos ? "Positif" : isNeg ? "Negatif" : "Netral";
-                              const sentimentBg = isPos ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : isNeg ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : "bg-slate-500/20 text-slate-300 border border-slate-500/30";
-                              
-                              return (
-                                <div key={idx} className="bg-white/5 border border-white/5 rounded-xl p-4 flex flex-col justify-between gap-3 hover:bg-white/10 transition-all">
-                                  <div>
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div>
-                                        <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">{pred.day}</p>
-                                        <p className="text-xs font-semibold text-white mt-0.5">{pred.dateLabel}</p>
-                                      </div>
-                                      <span className={`text-[9px] font-bold border px-2 py-0.5 rounded-md ${sentimentBg}`}>
-                                        {sentimentText}
-                                      </span>
-                                    </div>
-
-                                    {/* Progress bar container */}
-                                    <div className="mt-3">
-                                      <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
-                                        <span>Proyeksi Distribusi</span>
-                                        <span>Conf: {Math.round(pred.confidenceScore * 100)}%</span>
-                                      </div>
-                                      <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden flex">
-                                        <div style={{ width: `${pred.expectedPosPct}%` }} className="h-full bg-emerald-500" title={`Positif ${pred.expectedPosPct}%`} />
-                                        <div style={{ width: `${pred.expectedNeuPct}%` }} className="h-full bg-slate-400" title={`Netral ${pred.expectedNeuPct}%`} />
-                                        <div style={{ width: `${pred.expectedNegPct}%` }} className="h-full bg-rose-500" title={`Negatif ${pred.expectedNegPct}%`} />
-                                      </div>
-                                      <div className="flex justify-between text-[8px] text-slate-500 mt-1 font-mono">
-                                        <span>+{pred.expectedPosPct}%</span>
-                                        <span>|</span>
-                                        <span>={pred.expectedNeuPct}%</span>
-                                        <span>|</span>
-                                        <span>-{pred.expectedNegPct}%</span>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="border-t border-white/5 pt-2">
-                                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Pemicu Utama</p>
-                                    <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed line-clamp-2">{pred.primaryDriver}</p>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Actionable Insights */}
-                          <div className="mt-2 pt-4 border-t border-white/10">
-                            <h4 className="text-xs font-bold text-indigo-200 mb-2.5 flex items-center gap-1.5">
-                              <Sparkles className="h-3.5 w-3.5 text-indigo-400 animate-spin" style={{ animationDuration: '3s' }} />
-                              <span>Rekomendasi Respons Taktis AI</span>
-                            </h4>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                              {(predictions?.actionableInsights || fallbackPredictions.actionableInsights).map((insight, idx) => (
-                                <div key={idx} className="flex gap-2 items-start text-[11px] text-slate-300 bg-indigo-950/40 p-2.5 rounded-xl border border-indigo-500/10 hover:border-indigo-500/20 transition-all">
-                                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold">
-                                    {idx + 1}
-                                  </span>
-                                  <p className="leading-relaxed">{insight}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </motion.div>
-                  </div>
-
-                  {/* Chart 2: Platform Distribution (Pie Chart - 1 col) */}
-                  <motion.div 
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between"
-                  >
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900 mb-1">Distribusi Platform</h3>
-                      <p className="text-xs text-slate-400">Porsi mention berdasarkan platform</p>
-                    </div>
-
-                    <div className="h-44 flex items-center justify-center relative">
-                      {stats && stats.platformDistribution.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={stats.platformDistribution}
-                              cx="50%"
-                              cy="50%"
-                              innerRadius={50}
-                              outerRadius={70}
-                              paddingAngle={4}
-                              dataKey="value"
-                              isAnimationActive={true}
-                              animationDuration={1000}
-                            >
-                              {stats.platformDistribution.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={entry.color} />
-                              ))}
-                            </Pie>
-                            <Tooltip />
-                          </PieChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">Belum ada data</span>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {stats?.platformDistribution.map((platform) => (
-                        <div key={platform.name} className="flex items-center gap-1.5">
-                          <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: platform.color }} />
-                          <span className="text-slate-600 font-medium truncate">{platform.name}</span>
-                          <span className="text-slate-400 ml-auto">{platform.value}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                </div>
-
-                {/* INTERACTIVE CROSS-PLATFORM SENTIMEN COMPARISON */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, ease: "easeOut", delay: 0.15 }}
-                  className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs"
-                >
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-100 pb-4 mb-6 gap-4">
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                        <BarChart3 className="h-4.5 w-4.5 text-indigo-600" />
-                        <span>Pembanding Sentimen Antar Platform</span>
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Pilih dua platform untuk membandingkan statistik &amp; grafik perkembangan sentimen secara berdampingan.
-                      </p>
-                    </div>
-
-                    {/* Selectors */}
-                    <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 w-full sm:w-auto">
-                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold w-full sm:w-auto">
-                        <span className="text-slate-400 whitespace-nowrap">Platform A:</span>
-                        <select
-                          value={comparePlatformA}
-                          onChange={(e) => setComparePlatformA(e.target.value as any)}
-                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0 pr-1 py-0"
-                        >
-                          <option value="instagram">Instagram</option>
-                          <option value="tiktok">TikTok</option>
-                          <option value="facebook">Facebook</option>
-                          <option value="whatsapp">WhatsApp</option>
-                          <option value="twitter">Twitter / X</option>
-                          <option value="youtube">YouTube</option>
-                          <option value="linkedin">LinkedIn</option>
-                          <option value="reddit">Reddit</option>
-                        </select>
-                      </div>
-
-                      <div className="text-slate-400 font-extrabold text-xs py-1 sm:py-0 select-none tracking-widest shrink-0">VS</div>
-
-                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold w-full sm:w-auto">
-                        <span className="text-slate-400 whitespace-nowrap">Platform B:</span>
-                        <select
-                          value={comparePlatformB}
-                          onChange={(e) => setComparePlatformB(e.target.value as any)}
-                          className="text-slate-700 bg-transparent border-none outline-none cursor-pointer font-bold focus:ring-0 pr-1 py-0"
-                        >
-                          <option value="instagram">Instagram</option>
-                          <option value="tiktok">TikTok</option>
-                          <option value="facebook">Facebook</option>
-                          <option value="whatsapp">WhatsApp</option>
-                          <option value="twitter">Twitter / X</option>
-                          <option value="youtube">YouTube</option>
-                          <option value="linkedin">LinkedIn</option>
-                          <option value="reddit">Reddit</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Comparison Side-by-Side Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Platform A View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 relative min-h-[360px]">
-                      {/* Header Platform A */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformA]?.color || '#64748B' }} />
-                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformA}</h4>
-                        </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformA]?.badge}`}>
-                          Platform A
-                        </span>
-                      </div>
-
-                      {/* Stats Overview */}
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
-                          <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformA).total}</p>
-                        </div>
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                          {getPlatformStats(comparePlatformA).total > 0 ? (
-                            <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformA).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformA).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                              {getPlatformStats(comparePlatformA).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformA).avgScore}
-                            </p>
-                          ) : (
-                            <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
-                          )}
-                        </div>
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                          {getPlatformStats(comparePlatformA).total > 0 ? (
-                            <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformA).topEmotion}</p>
-                          ) : (
-                            <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Mini AreaChart with horizontal drag scroll */}
-                      <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs overflow-hidden">
-                        <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
-                          <span className="font-semibold text-slate-500">Tren Analisis</span>
-                          <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
-                        </div>
-                        <AnimatePresence mode="wait">
-                          <motion.div
-                            key={comparePlatformA}
-                            initial={{ opacity: 0, x: 12, filter: "blur(2px)" }}
-                            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-                            exit={{ opacity: 0, x: -12, filter: "blur(2px)" }}
-                            transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
-                            className="w-full"
-                          >
-                            {getPlatformStats(comparePlatformA).total > 0 ? (
-                              <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
-                                <div className="h-44 min-w-[540px]">
-                                  <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={getPlatformStats(comparePlatformA).trendData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                                      <defs>
-                                        <linearGradient id={`colorPos-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                        </linearGradient>
-                                        <linearGradient id={`colorNeu-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                                        </linearGradient>
-                                        <linearGradient id={`colorNeg-${comparePlatformA}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                                        </linearGradient>
-                                      </defs>
-                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                      <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                                      <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                                      <Tooltip />
-                                      <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                      <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                      <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformA})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                    </AreaChart>
-                                  </ResponsiveContainer>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="h-44 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                                <Activity className="h-6 w-6 text-slate-300 animate-pulse mb-1" />
-                                <p className="text-xs font-bold text-slate-500">Data Belum Tersedia</p>
-                                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">
-                                  Lakukan analisis atau scan live untuk platform {comparePlatformA} agar grafik tampil di sini.
-                                </p>
-                              </div>
-                            )}
-                          </motion.div>
-                        </AnimatePresence>
-                      </div>
-                    </div>
-
-                    {/* Platform B View */}
-                    <div className="p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-4 relative min-h-[360px]">
-                      {/* Header Platform B */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full`} style={{ backgroundColor: platformStyles[comparePlatformB]?.color || '#64748B' }} />
-                          <h4 className="text-sm font-bold text-slate-800 capitalize">{comparePlatformB}</h4>
-                        </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${platformStyles[comparePlatformB]?.badge}`}>
-                          Platform B
-                        </span>
-                      </div>
-
-                      {/* Stats Overview */}
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Total Data</p>
-                          <p className="text-base font-bold text-slate-800 mt-1">{getPlatformStats(comparePlatformB).total}</p>
-                        </div>
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Skor Sentimen</p>
-                          {getPlatformStats(comparePlatformB).total > 0 ? (
-                            <p className={`text-base font-bold mt-1 ${getPlatformStats(comparePlatformB).avgScore > 0 ? 'text-emerald-600' : getPlatformStats(comparePlatformB).avgScore < 0 ? 'text-rose-600' : 'text-slate-600'}`}>
-                              {getPlatformStats(comparePlatformB).avgScore > 0 ? '+' : ''}{getPlatformStats(comparePlatformB).avgScore}
-                            </p>
-                          ) : (
-                            <p className="text-sm font-semibold text-slate-400 mt-1.5">-</p>
-                          )}
-                        </div>
-                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-xs">
-                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Emosi Dominan</p>
-                          {getPlatformStats(comparePlatformB).total > 0 ? (
-                            <p className="text-xs font-bold text-amber-600 mt-1.5 truncate">{getPlatformStats(comparePlatformB).topEmotion}</p>
-                          ) : (
-                            <p className="text-xs font-semibold text-slate-400 mt-1.5">Data Belum Tersedia</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Mini AreaChart with horizontal drag scroll */}
-                      <div className="relative w-full border border-slate-100 rounded-xl p-3 bg-white mt-2 shadow-xs overflow-hidden">
-                        <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-sans">
-                          <span className="font-semibold text-slate-500">Tren Analisis</span>
-                          <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-bold uppercase tracking-wider scale-90">Timeline</span>
-                        </div>
-                        <AnimatePresence mode="wait">
-                          <motion.div
-                            key={comparePlatformB}
-                            initial={{ opacity: 0, x: 12, filter: "blur(2px)" }}
-                            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-                            exit={{ opacity: 0, x: -12, filter: "blur(2px)" }}
-                            transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
-                            className="w-full"
-                          >
-                            {getPlatformStats(comparePlatformB).total > 0 ? (
-                              <div className="overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent cursor-grab active:cursor-grabbing">
-                                <div className="h-44 min-w-[540px]">
-                                  <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={getPlatformStats(comparePlatformB).trendData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
-                                      <defs>
-                                        <linearGradient id={`colorPos-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                        </linearGradient>
-                                        <linearGradient id={`colorNeu-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
-                                        </linearGradient>
-                                        <linearGradient id={`colorNeg-${comparePlatformB}`} x1="0" y1="0" x2="0" y2="1">
-                                          <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2}/>
-                                          <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-                                        </linearGradient>
-                                      </defs>
-                                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                      <XAxis dataKey="date" stroke="#94a3b8" fontSize={9} tickLine={false} />
-                                      <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} axisLine={false} />
-                                      <Tooltip />
-                                      <Area type="monotone" dataKey="positive" stroke="#10b981" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorPos-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                      <Area type="monotone" dataKey="neutral" stroke="#94a3b8" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeu-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                      <Area type="monotone" dataKey="negative" stroke="#f43f5e" strokeWidth={1.5} fillOpacity={1} fill={`url(#colorNeg-${comparePlatformB})`} isAnimationActive={true} animationDuration={600} animationEasing="ease-in-out" />
-                                    </AreaChart>
-                                  </ResponsiveContainer>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="h-44 flex flex-col items-center justify-center text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                                <Activity className="h-6 w-6 text-slate-300 animate-pulse mb-1" />
-                                <p className="text-xs font-bold text-slate-500">Data Belum Tersedia</p>
-                                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">
-                                  Lakukan analisis atau scan live untuk platform {comparePlatformB} agar grafik tampil di sini.
-                                </p>
-                              </div>
-                            )}
-                          </motion.div>
-                        </AnimatePresence>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-
-                {/* Bottom Stats Grid */}
-                <div className="w-full">
-                  {/* Chart 3: Emotion breakdown */}
-                  <motion.div 
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6, ease: "easeOut", delay: 0.2 }}
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs"
-                  >
-                    <h3 className="text-sm font-semibold text-slate-900 mb-4">Metrik Kepuasan Emosional</h3>
-                    <div className="h-60">
-                      {stats && stats.emotionDistribution.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={stats.emotionDistribution} layout="vertical" margin={{ top: 0, right: 10, left: -10, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                            <XAxis type="number" stroke="#94a3b8" fontSize={10} tickLine={false} />
-                            <YAxis dataKey="name" type="category" stroke="#0f172a" fontSize={11} tickLine={false} axisLine={false} width={80} />
-                            <Tooltip />
-                            <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} barSize={12} isAnimationActive={true} animationDuration={1200} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <div className="h-full flex items-center justify-center text-xs text-slate-400 italic">Belum ada sebaran emosi.</div>
-                      )}
-                    </div>
-                  </motion.div>
-                </div>
-
-
-              </motion.div>
-            )}
-
-            {/* 2. SENTIMENT ANALYZER TOOL */}
-            {activeTab === 'analyzer' && (
-              <motion.div
-                key="analyzer-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 15 }}
-                className="flex flex-col gap-6"
-              >
-                <div>
-                  <h2 className="text-2xl font-bold font-display text-indigo-950">Analisis Sentimen & Emosi AI</h2>
-                  <p className="text-sm text-slate-500 mt-1">Gunakan kecerdasan model Gemini untuk menganalisis sentimen, intensitas emosi, keterlibatan, dan topik utama dari kiriman atau cuplikan teks media sosial.</p>
-                </div>
-
-                {/* Input Control Box */}
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                  <div className="bg-slate-50 border-b border-slate-200 p-4 flex gap-4">
-                    <span className="text-xs font-semibold text-indigo-950 uppercase tracking-wider my-auto">Mode Analisis:</span>
-                    <p className="text-xs text-slate-500 my-auto">Sistem akan melakukan scraping real-time pada tautan atau menganalisis teks yang diinput.</p>
-                  </div>
-
-                  <form onSubmit={handleAnalyzePost} className="p-6 flex flex-col gap-5">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Tautan Posting Media Sosial</label>
-                      <div className="relative">
-                        <input
-                          type="url"
-                          placeholder="https://www.instagram.com/p/... atau https://www.tiktok.com/@user/video/..."
-                          value={urlInput}
-                          onChange={(e) => setUrlInput(e.target.value)}
-                          className="w-full pl-4 pr-12 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm transition-all"
-                        />
-                        <Globe className="absolute right-4 top-3.5 h-5 w-5 text-slate-400" />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <div className="h-px bg-slate-200 flex-1"></div>
-                      <span className="text-xs font-bold text-slate-400 uppercase">Atau Analisis Teks Langsung / Komentar</span>
-                      <div className="h-px bg-slate-200 flex-1"></div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="md:col-span-3">
-                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Teks Mentah / Komentar Pengguna</label>
-                        <textarea
-                          placeholder="Ketik komentar atau teks postingan di sini (misal: 'Gojek layanannya ramah banget tapi harganya agak mahal hari ini...')"
-                          rows={3}
-                          value={textInput}
-                          onChange={(e) => setTextInput(e.target.value)}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm transition-all"
-                        />
-                      </div>
-
-                      <div className="md:col-span-1">
-                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Platform Asal</label>
-                        <select
-                          value={manualPlatform}
-                          onChange={(e) => setManualPlatform(e.target.value as any)}
-                          className="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 text-sm"
-                        >
-                          <option value="tiktok">TikTok</option>
-                          <option value="instagram">Instagram</option>
-                          <option value="facebook">Facebook</option>
-                          <option value="whatsapp">WhatsApp</option>
-                          <option value="twitter">Twitter / X</option>
-                          <option value="youtube">YouTube</option>
-                          <option value="linkedin">LinkedIn</option>
-                          <option value="reddit">Reddit</option>
-                          <option value="other">Saluran Lain</option>
-                        </select>
-                        <p className="text-[10px] text-slate-400 mt-2 leading-tight">Digunakan untuk menyesuaikan visualisasi analisis.</p>
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isAnalyzing}
-                      className="mt-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-3 rounded-xl text-sm flex items-center justify-center gap-2.5 shadow-sm transition-all cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
-                    >
-                      {isAnalyzing ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          <span>Gemini Sedang Menganalisis...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Activity className="h-4 w-4" />
-                          <span>Jalankan Analisis Sentimen AI</span>
-                        </>
-                      )}
-                    </button>
-                  </form>
-                </div>
-
-                {/* History list of Analyzed Posts */}
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-base font-bold text-slate-900">Riwayat Hasil Analisis Kiriman</h3>
-                    {analyzedPosts.length > 0 && (
-                      <button
-                        onClick={exportAnalyzedPostsCSV}
-                        className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-300 text-xs font-semibold px-3 py-1.5 rounded-xl shadow-xs transition-all cursor-pointer select-none"
-                      >
-                        <Download className="h-3.5 w-3.5 text-indigo-500" />
-                        <span>Ekspor CSV</span>
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-4">
-                    {analyzedPosts.length > 0 ? (
-                      analyzedPosts.map((post) => {
-                        const emotion = getEmotionDetails(post.emotion);
-                        return (
-                          <div key={post.id} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden p-6 flex flex-col md:flex-row gap-6">
-                            {/* Visual Thumbnail */}
-                            {post.imageUrl && (
-                              <div className="w-full md:w-32 h-32 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-100 relative">
-                                <img src={post.imageUrl} alt={post.title} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-                                <span className={`absolute top-2 left-2 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${getPlatformColors(post.platform)}`}>
-                                  {post.platform}
-                                </span>
-                              </div>
-                            )}
-
-                            {/* Text Details */}
-                            <div className="flex-1 flex flex-col justify-between">
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2 mb-2">
-                                  <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold border ${getSentimentBadge(post.sentiment)}`}>
-                                    Sentimen: {post.sentiment === "positive" ? "Positif" : post.sentiment === "negative" ? "Negatif" : "Netral"}
-                                  </span>
-
-                                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1 ${emotion.color}`}>
-                                    <span>{emotion.emoji}</span>
-                                    <span className="capitalize">{post.emotion}</span>
-                                  </span>
-
-                                  <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 text-[10px] px-2 py-0.5 rounded-md font-medium">
-                                    Keterlibatan: {post.engagement}
-                                  </span>
-                                </div>
-
-                                <h4 className="text-base font-bold text-slate-900 mt-1">{post.title}</h4>
-                                <p className="text-sm text-slate-600 mt-1 leading-relaxed">{post.description}</p>
-                              </div>
-
-                              {/* Hashtags & Date */}
-                              <div className="flex flex-wrap items-center justify-between gap-4 mt-4 pt-4 border-t border-slate-100">
-                                <div className="flex flex-wrap gap-1.5">
-                                  {post.hashtags && post.hashtags.map((tag) => (
-                                    <span key={tag} className="text-xs text-indigo-600 bg-indigo-50/50 hover:bg-indigo-50 px-2.5 py-0.5 rounded-md font-medium transition-all">
-                                      #{tag.replace("#", "")}
-                                    </span>
-                                  ))}
-                                </div>
-
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
-                                  <SimulatedBadge show={post.isSimulated} />
-                                  <Clock className="h-3.5 w-3.5" />
-                                  <span>{new Date(post.analyzedAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</span>
-                                  {post.url && !post.url.startsWith("manual-text") && (
-                                    <a href={post.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 ml-2">
-                                      <span>Sumber</span>
-                                      <ExternalLink className="h-3 w-3" />
-                                    </a>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 italic">Belum ada kiriman yang dianalisis. Gunakan formulir di atas untuk memulai.</div>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {/* 3. BRAND MONITORING WITH SEARCH GROUNDING */}
-            {activeTab === 'monitoring' && (
-              <motion.div
-                key="monitoring-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 15 }}
-                className="flex flex-col gap-6"
-              >
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-2xl font-bold font-display text-indigo-950">Monitoring Brand Aktif</h2>
-                    <p className="text-sm text-slate-500 mt-1">Sistem melakukan scraping digital dan web search grounding live untuk menemukan mention brand Anda di internet.</p>
-                  </div>
-
-                  <button
-                    onClick={() => setShowAddTrackerModal(true)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2.5 rounded-xl text-sm flex items-center gap-1.5 shrink-0 self-start md:self-auto cursor-pointer shadow-sm transition-all"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Tambah Monitor Baru</span>
-                  </button>
-                </div>
-
-                {/* Tracked Brand List Carousel / Selector */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {trackers.map((t) => (
-                    <div
-                      key={t.id}
-                      onClick={() => {
-                        setSelectedTrackerId(t.id);
-                        fetchMonitorResults(t.id);
-                      }}
-                      className={`p-5 rounded-2xl border transition-all cursor-pointer relative ${
-                        selectedTrackerId === t.id
-                          ? "bg-white border-indigo-500 shadow-md ring-1 ring-indigo-500"
-                          : "bg-white border-slate-200 shadow-xs hover:border-slate-300"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <span className="text-[10px] bg-slate-100 font-mono text-slate-500 px-2 py-0.5 rounded-md uppercase font-bold">
-                          {t.type}
-                        </span>
-                        
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteTracker(t.id);
-                          }}
-                          className="text-slate-400 hover:text-rose-600 transition-colors p-1"
-                          title="Hapus Tracker"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-
-                      <h3 className="text-lg font-bold text-slate-900 mt-2 truncate font-display">{t.query}</h3>
-                      
-                      {/* Active Platforms */}
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {t.platforms.map((plat) => (
-                          <span key={plat} className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md font-medium uppercase font-mono">
-                            {plat}
-                          </span>
-                        ))}
-                      </div>
-
-                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
-                        <span className="font-medium flex items-center gap-1">
-                          <Calendar className="h-3.5 w-3.5" />
-                          <span>{new Date(t.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}</span>
-                        </span>
-
-                        <span className="text-indigo-600 font-semibold hover:underline">Pilih Tracker</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Selected brand results list */}
-                {selectedTrackerId ? (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-6 shadow-xs">
-                    {/* Brand header panel with refresh */}
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-5">
-                      <div>
-                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Hasil Monitor Aktif:</span>
-                        <h3 className="text-xl font-bold text-slate-900 mt-0.5">
-                          {trackers.find(t => t.id === selectedTrackerId)?.query}
-                        </h3>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {monitorResults.length > 0 && (
-                          <button
-                            onClick={exportMonitorResultsCSV}
-                            className="bg-white border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-indigo-600 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer select-none"
-                          >
-                            <Download className="h-3.5 w-3.5 text-indigo-500" />
-                            <span>Ekspor CSV</span>
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => triggerLiveMonitoring(selectedTrackerId)}
-                          disabled={isMonitoring}
-                          className="bg-indigo-50 border border-indigo-100 hover:border-indigo-300 text-indigo-700 font-semibold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed select-none"
-                        >
-                          {isMonitoring ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              <span>Mencari Live Mention...</span>
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className="h-3.5 w-3.5" />
-                              <span>Segarkan Live Scan</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Results lists */}
-                    <div className="flex flex-col gap-4">
-                      {stats?.recentAlerts && stats.recentAlerts.some(a => a.type === "brand_mention") && (
-                        <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-start gap-3">
-                          <Globe className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5 animate-pulse" />
-                          <div className="text-xs text-indigo-950 leading-relaxed">
-                            <strong>Google Search Grounding diaktifkan:</strong> Menampilkan kiriman dan diskusi terbaru dari web live. Klik <strong>Segarkan Live Scan</strong> di atas untuk memindai internet secara mendalam menggunakan model Gemini.
-                          </div>
-                        </div>
-                      )}
-
-                      {monitorResults && monitorResults.length > 0 ? (
-                        monitorResults.map((res) => {
-                          const emo = getEmotionDetails(res.emotion);
-                          return (
-                            <div key={res.id} className="p-5 rounded-2xl border border-slate-200 hover:border-slate-300 bg-slate-50/50 flex flex-col gap-3 transition-all">
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${getPlatformColors(res.platform)}`}>
-                                    {res.platform}
-                                  </span>
-                                  <span className="text-xs font-bold text-slate-800">{res.author}</span>
-                                  <span className="text-[10px] text-slate-400 font-mono">POSTED_RECENTLY</span>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                  <SimulatedBadge show={res.isSimulated} />
-                                  <span className={`text-[10px] font-bold border px-2 py-0.5 rounded-full capitalize ${getSentimentBadge(res.sentiment)}`}>
-                                    {res.sentiment === "positive" ? "Positif" : res.sentiment === "negative" ? "Negatif" : "Netral"}
-                                  </span>
-                                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1 ${emo.color}`}>
-                                    <span>{emo.emoji}</span>
-                                    <span>{res.emotion}</span>
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div>
-                                <h4 className="text-sm font-bold text-slate-900">{res.title}</h4>
-                                <p className="text-xs text-slate-600 mt-1 leading-relaxed">{res.content}</p>
-                              </div>
-
-                              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10px] text-slate-400 font-medium">
-                                <span>Tingkat Keterlibatan: {res.engagement}</span>
-                                {res.url && !res.url.startsWith("http://dummy") && (
-                                  <a href={res.url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5">
-                                    <span>Lihat Posting Asli</span>
-                                    <ExternalLink className="h-2.5 w-2.5" />
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="text-center text-xs text-slate-400 italic py-12 flex flex-col items-center justify-center gap-3">
-                          <Activity className="h-8 w-8 text-indigo-400 animate-pulse" />
-                          <div>
-                            <p className="font-semibold text-slate-700">Belum ada hasil pemindaian internet live.</p>
-                            <p className="text-slate-400 mt-1 max-w-sm mx-auto">Klik tombol <strong className="text-indigo-600">Segarkan Live Scan</strong> di atas untuk memindai internet secara mendalam menggunakan pencarian Google real-time ditenagai AI.</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-xs">Silakan pilih tracker di atas atau buat baru untuk mulai memantau brand secara live.</div>
-                )}
-              </motion.div>
-            )}
-
-
-          </AnimatePresence>
+        <RailDrawer open={isDrawerOpen} onClose={() => setIsDrawerOpen(false)}>
+          <SideRail
+            view={view}
+            onChangeView={(v) => {
+              setView(v);
+              setIsDrawerOpen(false);
+            }}
+            {...railProps}
+          />
+        </RailDrawer>
+
+        <main className="min-w-0 flex-1 px-5 pb-16 pt-6 sm:px-8 sm:pt-7">
+          {isLoading && !stats ? (
+            <div className="flex flex-col gap-3 py-16" aria-busy="true" aria-live="polite">
+              <p className="text-[13px] text-ink-3">memuat data pemantauan…</p>
+              <div className="h-px w-full bg-hair" />
+              <div className="settle h-8 w-2/3 bg-paper-2" />
+              <div className="settle h-4 w-1/2 bg-paper-2" />
+            </div>
+          ) : view === "overview" ? (
+            <OverviewView
+              stats={stats}
+              channels={channelRows}
+              predictions={predictions ?? fallbackPredictions}
+              predictionsAreFallback={!predictions}
+              isLoadingPredictions={isLoadingPredictions}
+              onRefreshPredictions={fetchPredictions}
+              onExport={exportDashboardReport}
+              activeQuery={activeTracker?.query ?? ""}
+              simulatedPlatforms={simulatedPlatformCount}
+              platformCount={channelRows.length || 8}
+              ip={userIp}
+              clock={jakartaTime}
+            />
+          ) : view === "analyzer" ? (
+            <AnalyzerView
+              posts={analyzedPosts}
+              isAnalyzing={isAnalyzing}
+              onSubmit={({ url, text, platform }) =>
+                handleAnalyzePost(undefined, { url, text, platform })
+              }
+              onExport={exportAnalyzedPostsCSV}
+            />
+          ) : (
+            <ChannelsView
+              tracker={activeTracker}
+              results={monitorResults}
+              isScanning={isMonitoring}
+              onScan={() => triggerLiveMonitoring(selectedTrackerId)}
+              onExport={exportMonitorResultsCSV}
+              onAddTracker={() => setShowAddTrackerModal(true)}
+            />
+          )}
         </main>
       </div>
 
-      {/* Footer credits and information */}
-      <footer className="bg-white border-t border-slate-200 mt-12 py-6 text-center text-xs text-slate-400" id="app-footer">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p>© 2026 Social Media Intelligence Platform.</p>
+      <footer className="border-t border-hair">
+        <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-1 px-5 py-5 text-[12px] text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+          <span>S.M.I.P — pemantauan percakapan publik</span>
+          <span className="tnum">
+            {jakartaTime || "—"} · {userIp}
+          </span>
         </div>
       </footer>
 
-      {/* 5. ADD TRACKER MODAL */}
-      <AnimatePresence>
-        {showAddTrackerModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl p-6 max-w-md w-full border border-slate-200 shadow-xl flex flex-col gap-4"
-            >
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="text-base font-bold text-slate-900 font-display">Tambah Monitor Tracker</h3>
-                <button onClick={() => setShowAddTrackerModal(false)} className="text-slate-400 hover:text-slate-600 text-sm font-bold">X</button>
-              </div>
+      <AddTrackerDialog
+        open={showAddTrackerModal}
+        onClose={() => setShowAddTrackerModal(false)}
+        onCreate={async ({ type, query, platforms }) => {
+          setNewTrackerType(type);
+          setNewTrackerQuery(query);
+          setNewTrackerPlatforms(platforms as any);
+          await createTrackerDirect(type, query, platforms);
+        }}
+      />
 
-              <form onSubmit={handleCreateTracker} className="flex flex-col gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Tipe Pemantauan</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setNewTrackerType('brand')}
-                      className={`py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                        newTrackerType === 'brand'
-                          ? "bg-indigo-50 border-indigo-500 text-indigo-700 shadow-xs"
-                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      Brand / Kompetitor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setNewTrackerType('hashtag')}
-                      className={`py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                        newTrackerType === 'hashtag'
-                          ? "bg-indigo-50 border-indigo-500 text-indigo-700 shadow-xs"
-                          : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      Hashtag / Topik
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Kata Kunci / Nama / Tagar</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder={newTrackerType === 'brand' ? "Contoh: Google, Nike, Apple" : "Contoh: #GenerativeAI, #Sustainability"}
-                    value={newTrackerQuery}
-                    onChange={(e) => setNewTrackerQuery(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:border-indigo-500 text-sm"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Saluran Platform untuk Scan</label>
-                  <div className="flex flex-wrap gap-2">
-                    {['tiktok', 'instagram', 'facebook', 'whatsapp', 'twitter', 'youtube', 'linkedin', 'reddit'].map((plat) => {
-                      const isActive = newTrackerPlatforms.includes(plat as any);
-                      return (
-                        <button
-                          key={plat}
-                          type="button"
-                          onClick={() => {
-                            if (isActive) {
-                              setNewTrackerPlatforms(prev => prev.filter(p => p !== plat));
-                            } else {
-                              setNewTrackerPlatforms(prev => [...prev, plat as any]);
-                            }
-                          }}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase border transition-all cursor-pointer ${
-                            isActive
-                              ? "bg-indigo-600 border-indigo-600 text-white"
-                              : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                          }`}
-                        >
-                          {plat}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">Model AI Gemini akan menggunakan Google Search Grounding untuk menelusuri platform terpilih secara live.</p>
-                </div>
-
-                <div className="flex items-center gap-2 justify-end pt-3 border-t border-slate-100 mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddTrackerModal(false)}
-                    className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-700 cursor-pointer"
-                  >
-                    Batal
-                  </button>
-
-                  <button
-                    type="submit"
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2 rounded-xl text-xs cursor-pointer shadow-xs transition-all"
-                  >
-                    Simpan & Mulai Scan
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Floating Real-time Ingestion Feed Alerts (Bottom-Right) */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-xs sm:max-w-sm w-full pointer-events-none">
-        <AnimatePresence>
-          {liveUpdates.map((update) => (
-            <motion.div
-              key={update.id}
-              initial={{ opacity: 0, x: 50, y: 10 }}
-              animate={{ opacity: 1, x: 0, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, x: 50 }}
-              transition={{ type: "spring", stiffness: 350, damping: 25 }}
-              className="bg-slate-900 border border-slate-800 text-white rounded-2xl p-4 shadow-2xl flex flex-col gap-1.5 relative overflow-hidden group hover:border-indigo-500/50 transition-colors pointer-events-auto"
-            >
-              {/* Highlight bar representing sentiment */}
-              <div className={`absolute top-0 left-0 right-0 h-1 ${
-                update.sentiment === 'positive' ? 'bg-emerald-500' :
-                update.sentiment === 'negative' ? 'bg-rose-500' : 'bg-slate-500'
-              }`} />
-
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-mono font-bold tracking-wider uppercase text-indigo-400 flex items-center gap-1">
-                  💡 Real-Time Ingest
-                </span>
-                <button 
-                  onClick={() => setLiveUpdates((prev) => prev.filter(u => u.id !== update.id))}
-                  className="text-slate-500 hover:text-slate-300 transition-colors text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <h4 className="text-xs font-bold text-slate-100">{update.title}</h4>
-              <p className="text-[11px] text-slate-300 leading-relaxed line-clamp-2 italic">
-                "{update.content}"
-              </p>
-
-              <div className="flex items-center justify-between mt-1 text-[9px] text-slate-400 font-mono">
-                <span className={`px-1.5 py-0.5 rounded-md uppercase font-bold tracking-wide text-[8px] ${
-                  update.platform === 'tiktok' ? 'bg-zinc-800 text-white border border-zinc-700' :
-                  update.platform === 'instagram' ? 'bg-pink-500/20 text-pink-300 border border-pink-500/30' :
-                  update.platform === 'facebook' ? 'bg-blue-600/20 text-blue-300 border border-blue-500/30' :
-                  'bg-green-600/20 text-green-300 border border-green-500/30'
-                }`}>
-                  {update.platform}
-                </span>
-                <span>{new Date(update.timestamp).toLocaleTimeString("id-ID")}</span>
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

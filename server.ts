@@ -245,6 +245,9 @@ try {
 try {
   dbConn.exec("ALTER TABLE monitor_results ADD COLUMN longitude REAL;");
 } catch (e) {}
+try {
+  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN isSimulated INTEGER;");
+} catch (e) {}
 
 // ==========================================
 // FIREBASE / FIRESTORE SYNC LOGIC
@@ -479,7 +482,7 @@ async function syncFromFirestoreToSQLite() {
 
         // Insert monitor results
         const insertMonitorResult = dbConn.prepare(
-          "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         );
         for (const mr of monitorResults) {
           insertMonitorResult.run(
@@ -497,7 +500,8 @@ async function syncFromFirestoreToSQLite() {
             mr.trackerId,
             mr.country || "Global",
             mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
+            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
+            mr.isSimulated === true ? 1 : 0
           );
         }
       });
@@ -701,7 +705,8 @@ function getDB() {
       sentimentScore: Number(mr.sentimentScore || 0),
       country: mr.country || "Global",
       latitude: mr.latitude !== null && mr.latitude !== undefined ? Number(mr.latitude) : null,
-      longitude: mr.longitude !== null && mr.longitude !== undefined ? Number(mr.longitude) : null
+      longitude: mr.longitude !== null && mr.longitude !== undefined ? Number(mr.longitude) : null,
+      isSimulated: mr.isSimulated === 1
     }));
 
     return { trackers, analyzedPosts, monitorResults };
@@ -752,7 +757,7 @@ function writeDB(data: any) {
       // 3. Sync monitor_results
       dbConn.prepare("DELETE FROM monitor_results").run();
       const insertMonitorResult = dbConn.prepare(
-        "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       if (data.monitorResults) {
         for (const mr of data.monitorResults) {
@@ -771,7 +776,8 @@ function writeDB(data: any) {
             mr.trackerId,
             mr.country || "Global",
             mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
+            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
+            mr.isSimulated === true ? 1 : 0
           );
         }
       }
