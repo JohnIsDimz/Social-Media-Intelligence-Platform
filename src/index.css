@@ -91,11 +91,6 @@
   }
 }
 
-@keyframes sweep {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(100%); }
-}
-
 @keyframes ticker {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
@@ -105,12 +100,43 @@
   animation: settle 420ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
-.sweep-line::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(217, 134, 31, 0.16), transparent);
-  animation: sweep 3.6s ease-in-out infinite;
+/* ---------------------------------------------------------------------------
+ * Radar dial
+ *
+ * A 60-second sweep, like a clock hand: one full turn a minute, which is also
+ * the collector's tick. The wash trails the hand so the dial reads as a radar
+ * rather than a spinner. Idle or paused states simply drop the animation.
+ * ------------------------------------------------------------------------- */
+
+.radar-sweep {
+  animation: radar-turn 60s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.radar-hand {
+  background: linear-gradient(to top, rgba(217, 134, 31, 0), var(--color-amber));
+}
+
+.radar-wash {
+  background: conic-gradient(
+    from 0deg,
+    rgba(217, 134, 31, 0.28) 0deg,
+    rgba(217, 134, 31, 0.10) 26deg,
+    rgba(217, 134, 31, 0) 60deg,
+    rgba(217, 134, 31, 0) 360deg
+  );
+  mask-image: radial-gradient(circle at 50% 50%, transparent 0, black 12%);
+}
+
+.radar-idle .radar-sweep,
+.radar-offline .radar-sweep {
+  animation-duration: 180s;
+  opacity: 0.45;
+}
+
+@keyframes radar-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -121,4 +147,5 @@
     scroll-behavior: auto !important;
   }
   .settle { opacity: 1; transform: none; }
+  .radar-sweep { animation: none; }
 }

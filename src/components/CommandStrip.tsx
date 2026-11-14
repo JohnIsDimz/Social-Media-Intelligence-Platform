@@ -95,8 +95,6 @@ export function CommandStrip({
       aria-label="Monitoring status"
       className="relative overflow-hidden bg-petrol text-white"
     >
-      {isLive && <div className="sweep-line pointer-events-none absolute inset-0" aria-hidden="true" />}
-
       <div className="relative mx-auto flex max-w-[1180px] flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-8">
         {/* identity */}
         <div className="flex min-w-0 items-center gap-3">

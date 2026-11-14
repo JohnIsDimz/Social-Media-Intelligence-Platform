@@ -11,19 +11,19 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 ### 1. Antarmuka Pengguna (Frontend Stack)
 *   **React 19 & Vite**: Kerangka kerja utama dengan bundler ultra-cepat untuk rendering visual yang responsif.
 *   **Tailwind CSS**: Desain visual presisi tinggi dengan pendekatan modern, kontras yang seimbang, dan ramah pengguna.
-*   **Recharts & D3**: Komponen visualisasi interaktif untuk grafik tren sentimen, sebaran emosi (joy, sadness, anger, dll), serta perbandingan pangsa suara (*share of voice*).
-*   **Framer Motion (motion/react)**: Animasi transisi antar-elemen yang halus, denyut emosi (*emotion pulse*), dan efek transisi panel yang elegan.
+*   **Recharts**: grafik forecast dan sebaran emosi; `share of voice` memakai bar chart ringan buatan sendiri. Dimuat sebagai chunk terpisah (`charts`, ~377 kB) supaya shell tetap ringan.
+*   **CSS motion saja (tanpa library animasi)**: satu `settle` saat konten masuk, sapuan radar 60 detik di dial, semuanya dinonaktifkan otomatis saat `prefers-reduced-motion: reduce`.
 *   **Browser Notifications API & Service Worker**:
     *   Mendaftarkan Service Worker (`/sw.js`) di latar belakang untuk menjamin aplikasi tetap terdaftar pada sistem operasi.
-    *   Pengguna dapat mengaktifkan notifikasi melalui tombol kontrol **NOTIF_ON / NOTIF_OFF** di header dashboard.
-    *   Memicu notifikasi desktop instan saat sistem mendeteksi **lonjakan sentimen negatif** atau **sinyal kritis** dari engine S.M.I.P, bahkan ketika tab browser sedang tertutup.
+    *   Dinyalakan dari panel kiri bawah (**Desktop alerts off/on**).
+    *   Memicu notifikasi desktop saat mention baru masuk lewat WebSocket selama tab masih terbuka; notifikasi saat browser tertutup butuh Web Push (belum ada).
 
 ### 2. Layanan Backend & Real-time (Backend Stack)
 *   **Node.js & Express**: Server backend yang tangguh untuk memproses analitik, mengelola tracker, dan menyajikan API.
 *   **CJS Bundling via esbuild**: Server secara otomatis dikompilasi menjadi satu file ringkas `dist/server.cjs` untuk menjamin waktu muat (*cold-start*) secepat kilat serta kompatibilitas modul yang sempurna di lingkungan produksi Linux/Docker.
 *   **WebSockets (WS)**: Komunikasi dua arah instan antara server dan klien. Setiap kali backend menangkap sinyal baru di latar belakang, data langsung dipancarkan (*broadcast*) ke antarmuka pengguna tanpa perlu memuat ulang halaman.
 
-### 3. Mesin Kecerdasan Buatan & Google Search Grounding (Bebas Kredensial API Ribet)
+### 3. Mesin Kecerdasan Buatan & Lookup Search-Grounded
 *   **Tanpa API Key Sosial Media Tambahan**: Mendapatkan API resmi (seperti Twitter Developer, Meta Graph API, TikTok API, dll) sangatlah sulit, mahal, dan membutuhkan verifikasi badan hukum. S.M.I.P memecahkan masalah ini secara revolusioner dengan **tidak mewajibkan** kunci API pihak ketiga tersebut!
 *   **AI gateway (OpenAI-compatible)**: default ke [Sakelar](https://app.sakelar.web.id) dengan model `glm-5.3-flash` — satu kunci untuk semua model. Dipakai untuk analisis sentimen bernilai numerik (-1..1), klasifikasi emosi dominan, dan laporan forecast. Konfigurasi: `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FORMAT`.
 *   **Google Search Grounding (Alternatif Utama API Resmi)**: 
@@ -32,7 +32,7 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 *   **Reddit Public API (Bebas Autentikasi)**: S.M.I.P memanfaatkan endpoint publik Reddit (`.json`) secara dinamis tanpa kredensial sama sekali untuk menarik postingan teranyar secara instan dan riil.
 
 ### 4. Penyimpanan Data (Database)
-*   **SQLite (`better-sqlite3`)**: Penyimpanan utama untuk *trackers*, analyzed posts, dan monitor results. Di lingkungan serverless (Vercel) file database dialihkan ke `/tmp`; di deployment persisten tersimpan di `src/data/database.sqlite` (tidak di-commit).
+*   **SQLite via `node:sqlite`** (modul bawaan Node 22, tanpa modul native): penyimpanan utama untuk trackers, analyzed posts, dan monitor results. Di lingkungan serverless (Vercel) file dialihkan ke `/tmp`; di VPS tersimpan di `src/data/database.sqlite` dan harus di-mount sebagai volume (tidak di-commit).
 *   **Firestore (opsional)**: Sinkronisasi lewat Firebase Admin SDK. Jika kredensial tidak tersedia, aplikasi tetap berjalan penuh dengan cache SQLite lokal.
 
 ---
@@ -43,9 +43,9 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 *   **Cara Kerja**: Saat backend mendeteksi sinyal baru, event dikirim lewat WebSocket (atau auto-polling 8 detik bila WebSocket gagal). Selama tab browser masih terbuka — termasuk di latar belakang — notifikasi desktop ditampilkan via Notifications API. **Catatan:** notifikasi *saat browser benar-benar ditutup* memerlukan Web Push (VAPID + endpoint server pengirim push) yang belum diimplementasikan di versi ini.
 *   **Cara Mengaktifkan**:
     1.  Buka aplikasi S.M.I.P di browser Anda.
-    2.  Klik tombol **NOTIF_OFF** (berlogo lonceng redup) di bagian kanan atas header.
+    2.  Di panel kiri bawah, klik **Desktop alerts off** (ikon lonceng redup).
     3.  Izinkan permintaan notifikasi dari browser Anda.
-    4.  Status akan berubah menjadi **NOTIF_ON** dengan ikon lonceng biru berdenyut aktif.
+    4.  Status berubah menjadi **Desktop alerts on** (ikon lonceng aktif).
 
 ---
 
@@ -124,6 +124,23 @@ Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (
 ### Health check
 `GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
 `GET /api/channel-health` → status per kanal (lihat bagian *Jaringan data*); mengembalikan `503` hanya bila ada kanal `down` sementara host-nya sendiri punya internet. Cocok untuk load balancer dan uptime monitor.
+
+## 🚀 Deploy ke VPS
+
+Panduan lengkap: **[`docs/VPS.md`](docs/VPS.md)** — Docker atau systemd, reverse proxy TLS, checklist keamanan, dan apa yang harus dipantau setelah hari pertama.
+
+```bash
+cp .env.example .env      # isi AI_API_KEY + API_AUTH_TOKEN
+docker compose up -d --build
+curl -s localhost:3000/api/health | jq
+```
+
+Yang sudah disiapkan untuk produksi:
+* `Dockerfile` 3-stage tanpa toolchain native (tidak ada modul C yang perlu dikompilasi), user non-root, healthcheck ke `/api/health`.
+* `docker-compose.yml` — port hanya di-bind ke `127.0.0.1`, volume untuk SQLite, log diputar 3×10 MB, `no-new-privileges`.
+* `deploy/smip.service` — unit systemd dengan `ProtectSystem=strict` dan akses tulis hanya ke `src/data`.
+* `deploy/nginx.conf` — TLS, HSTS, upgrade `/ws`, cache `/assets` setahun, `X-Forwarded-For` agar rate limit memakai IP asli.
+* CSP via helmet (self + Google Fonts), `X-Frame-Options`, `X-Content-Type-Options`, dan JSON 404 untuk rute `/api` yang tidak dikenal.
 
 ## 💻 Cara Menjalankan Secara Lokal (Local Development)
 

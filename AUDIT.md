@@ -313,6 +313,11 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | — | Output model dipercaya mentah-mentah / bisa menyisipkan data tak relevan | ✅ **Fixed** — jawaban wajib lolos JSON (`chatJson`), mention hasil grounding difilter harus memuat kata kunci, kegagalan provider diklasifikasikan (`auth`/`rate-limit`/`unavailable`/`bad-response`) dan tidak pernah masuk database |
 | — | Forecast mengarang angka saat API gagal | ✅ **Fixed** — `422` bila belum ada data, `503` + `reason` bila AI mati; blok "fallback engine" berisi angka statis dihapus |
 | B2 | `writeDB()` full rewrite | ⬜ Belum (perbaikan performa, bukan blocker live) |
+| — | Tombol duplikat di layar | ✅ **Fixed** — `Refresh` di hero Overview dihapus (fungsi sama dengan *recompute* di header forecast); `Scan again` hanya muncul bila sudah ada hasil sehingga tidak bertabrakan dengan CTA di empty state; tautan *cancel* di header dialog tracker dihapus (sudah ada tombol Cancel). Diuji SSR: tidak ada dua tombol berlabel sama dalam satu layar |
+| — | CSP dimatikan, rute `/api` tak dikenal jatuh ke HTML SPA | ✅ **Fixed** — CSP helmet aktif (self + Google Fonts + ws), catch-all `/api` → JSON 404 **didaftarkan setelah semua route** (sempat salah urutan dan menelan `/api/health` — sudah diperbaiki & diuji) |
+| — | Aset produksi tanpa cache header; shell bisa tersaji basi | ✅ **Fixed** — `/assets/*` immutable 1 tahun, `index.html`/`sw.js`/`manifest.json` `no-cache` |
+| — | Dockerfile butuh toolchain C untuk `better-sqlite3` | ✅ **Fixed** — 3-stage tanpa build tools, non-root, healthcheck, volume `src/data`; ditambah `docker-compose.yml`, `deploy/smip.service`, `deploy/nginx.conf`, `docs/VPS.md` |
+| — | Dependency animasi tak terpakai (`framer-motion`, `motion`) | ✅ **Dihapus** — animasi sekarang CSS murni |
 | B3 | `syncToFirestore` tulis ulang semua dokumen | ⬜ Belum (biaya, bukan blocker live) |
 | — | `App.tsx` 2.633 baris / tanpa code splitting | ⬜ Belum (refactor) |
 | — | `aria-label` pada 22 tombol | ⬜ Belum (aksesibilitas) |

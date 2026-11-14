@@ -65,6 +65,15 @@ export function AddTrackerDialog({
 }) {
   const [type, setType] = useState<"brand" | "hashtag">("brand");
   const [query, setQuery] = useState("");
+  const queryRef = React.useRef<HTMLInputElement>(null);
+
+  // Move focus into the dialog so keyboard users are not left behind the page.
+  useEffect(() => {
+    if (open) {
+      const id = window.setTimeout(() => queryRef.current?.focus(), 40);
+      return () => window.clearTimeout(id);
+    }
+  }, [open]);
   // Default to channels that can actually collect something without a key.
   const [platforms, setPlatforms] = useState<ChannelKey[]>([
     "reddit",
@@ -117,9 +126,6 @@ export function AddTrackerDialog({
           <h2 id="add-title" className="font-display text-[17px] font-semibold text-ink">
             New tracker
           </h2>
-          <button type="button" onClick={onClose} className="text-[12px] text-ink-3 hover:text-ink">
-            cancel
-          </button>
         </div>
 
         <div className="flex flex-col gap-5 px-5 py-5">
@@ -154,16 +160,24 @@ export function AddTrackerDialog({
             <label htmlFor="tracker-query" className="label mb-1.5 block">
               Keyword
             </label>
+            <div aria-live="polite" className="sr-only">
+              {query.trim().length === 0 ? "Keyword is required." : `${query.trim().length} of 200 characters used.`}
+            </div>
             <input
               id="tracker-query"
+              ref={queryRef}
               required
+              aria-describedby="tracker-query-help"
+              aria-invalid={query.trim().length === 0}
               maxLength={200}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={type === "brand" ? "e.g. Kopi Kenangan" : "e.g. #GenerativeAI"}
               className="w-full rounded-[5px] border border-hair bg-white px-3 py-2.5 text-[14px] text-ink placeholder:text-ink-3/70 focus:border-teal focus:outline-none"
             />
-            <p className="mt-1 text-[11px] text-ink-3">1–200 characters.</p>
+            <p id="tracker-query-help" className="mt-1 text-[11px] text-ink-3">
+              1–200 characters, required.
+            </p>
           </div>
 
           <fieldset>

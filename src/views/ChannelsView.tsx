@@ -39,13 +39,15 @@ export function ChannelsView({
           {tracker ? (
             <>
               {results.length > 0 && (
-                <Button variant="quiet" onClick={onExport}>
-                  Export
-                </Button>
+                <>
+                  <Button variant="quiet" onClick={onExport}>
+                    Export
+                  </Button>
+                  <Button variant="primary" onClick={onScan} disabled={isScanning}>
+                    {isScanning ? "scanning…" : "Scan again"}
+                  </Button>
+                </>
               )}
-              <Button variant="primary" onClick={onScan} disabled={isScanning}>
-                {isScanning ? "scanning…" : "Scan again"}
-              </Button>
             </>
           ) : (
             <Button variant="primary" onClick={onAddTracker}>

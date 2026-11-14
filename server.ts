@@ -66,7 +66,24 @@ app.set("trust proxy", process.env.TRUST_PROXY === "false" ? false : 1);
 // (nosniff, frameguard, HSTS, referrer policy, hidePoweredBy) is enabled.
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    // A CSP that matches what the app actually loads: self-hosted bundle, the
+    // Vite dev websocket, Google Fonts, and data: images. Anything else is
+    // blocked, which is the point on a public VPS.
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
@@ -2669,6 +2686,13 @@ async function startServer() {
     logger.warn("Information during initial Firestore to SQLite synchronization on startServer:", errMsg);
   }
 
+  // Registered after every API route on purpose: an Express router matches in
+  // order, so this must be the last /api handler or it swallows real routes.
+  // A mistyped API path gets JSON 404 instead of the SPA's HTML.
+  app.use("/api", (req, res) => {
+    res.status(404).json({ error: `Unknown API route: ${req.method} ${req.originalUrl}` });
+  });
+
   if (!IS_VERCEL) {
     if (process.env.NODE_ENV !== "production") {
       const vite = await createViteServer({
@@ -2678,8 +2702,22 @@ async function startServer() {
       app.use(vite.middlewares);
     } else {
       const distPath = path.join(process.cwd(), "dist");
-      app.use(express.static(distPath));
+      // Hashed assets are immutable; the shell must always be revalidated so a
+      // deploy is picked up instead of served from a stale cache.
+      app.use(
+        express.static(distPath, {
+          index: false,
+          maxAge: "1y",
+          immutable: true,
+          setHeaders: (res, filePath) => {
+            if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith("manifest.json")) {
+              res.setHeader("Cache-Control", "no-cache");
+            }
+          },
+        })
+      );
       app.get("*", (req, res) => {
+        res.setHeader("Cache-Control", "no-cache");
         res.sendFile(path.join(distPath, "index.html"));
       });
     }

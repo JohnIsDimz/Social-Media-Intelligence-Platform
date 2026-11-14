@@ -135,3 +135,23 @@ Dihapus karena tak lagi dipakai: `GlobalHeatmap.tsx` (peta SVG hardcoded),
   `configured`, `grounding`, `needs-key`, `closed`, `down` or `unverified`.
   `unverified` exists because a host with no internet must not be allowed to
   blame the vendor APIs.
+
+## Radar dial (2026-11-14)
+
+The centre of the analytics view is a clock face, not a spinner: 60 minute
+ticks, cardinal numbers at 60/15/30/45, crosshair rings, and one sweep hand that
+completes a turn per minute — the same cadence as the collector tick. A conic
+wash trails the hand so it reads as radar rather than a loading state.
+
+State is told, not implied:
+
+| State | Readout | Motion |
+|---|---|---|
+| `scanning` | "scanning / model reading" | normal sweep |
+| `live` | "N mentions / n channels reporting" | normal sweep |
+| `idle` | "standing by / nothing collected" | slow, dimmed |
+| `offline` | "no source / set AI_API_KEY" | slow, dimmed |
+
+`prefers-reduced-motion` stops the sweep entirely. The dial replaced the thin
+amber sweep band that used to slide across the command strip — one motion in the
+product, not two competing ones.
