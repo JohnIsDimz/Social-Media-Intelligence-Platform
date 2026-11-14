@@ -13,3 +13,7 @@ coverage/
 
 # Generated audit digests for sharing (the source is AUDIT.md)
 reports/
+# Local storage that must never be committed: the app talks to Supabase only.
+src/data/
+*.sqlite
+*.sqlite3
