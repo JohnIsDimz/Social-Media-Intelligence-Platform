@@ -21,6 +21,7 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 ### 2. Layanan Backend & Real-time (Backend Stack)
 *   **Node.js & Express**: Server backend yang tangguh untuk memproses analitik, mengelola tracker, dan menyajikan API.
 *   **CJS Bundling via esbuild**: Server secara otomatis dikompilasi menjadi satu file ringkas `dist/server.cjs` untuk menjamin waktu muat (*cold-start*) secepat kilat serta kompatibilitas modul yang sempurna di lingkungan produksi Linux/Docker.
+*   **Struktur modular**: `server.ts` hanya berisi boot, middleware keamanan, dan registrasi rute. Sisanya dipecah per tanggung jawab di `src/server/` — `routes/` (system, trackers, analysis, aggregation), `collectors.ts` (semua koneksi ke platform luar), `network-audit.ts` (cek kanal hidup/mati), `data.ts` (akses Supabase), `ai.ts` (ketersediaan AI), `logger.ts`, `realtime.ts` (WebSocket), `scan-state.ts`.
 *   **WebSockets (WS)**: Komunikasi dua arah instan antara server dan klien. Setiap kali backend menangkap sinyal baru di latar belakang, data langsung dipancarkan (*broadcast*) ke antarmuka pengguna tanpa perlu memuat ulang halaman.
 
 ### 3. Mesin Kecerdasan Buatan & Lookup Search-Grounded
@@ -164,8 +165,10 @@ Buka `http://localhost:3000` di browser Anda untuk masuk ke antarmuka dashboard 
 
 ```bash
 npm run verify   # type-check + unit test + build
-npm test         # unit test lapisan Supabase (tanpa proyek/kredensial sungguhan)
+npm test         # unit test lapisan Supabase + test tabel rute API
 npm run lint     # type-check saja
 ```
+
+`tests/server-routes.test.ts` mengimpor `server.ts` (tanpa `listen`, lewat `SMIP_NO_LISTEN=1`) dan memastikan seluruh 13 rute API terdaftar, middleware rate-limit/auth berjalan sebelum rute, dan catch-all `/api` berada di urutan terakhir — bug yang pernah membuat rute asli tertelan.
 
 Unit test di `tests/supabase.test.ts` menjalankan kode `src/lib/supabaseDb.ts` terhadap server PostgREST tiruan di localhost: bentuk baris camelCase vs kolom snake_case, upsert yang idempoten, hapus tracker beserta mention-nya, penggantian hasil scan, pemangkasan riwayat, pemecahan 450 baris menjadi 3 permintaan, serta empat kondisi gagal (belum dikonfigurasi, tidak terjangkau, tabel belum ada, normal).
