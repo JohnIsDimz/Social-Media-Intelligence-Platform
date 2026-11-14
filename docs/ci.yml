@@ -1,0 +1,56 @@
+# CI pipeline for S.M.I.P
+#
+# The GitHub App used to push this branch lacks the `workflows` permission, so
+# this file could not be committed to .github/workflows/ directly.
+#
+# To activate CI:
+#   mkdir -p .github/workflows
+#   cp docs/ci.yml .github/workflows/ci.yml
+#
+# ...or grant the integration "Workflows" permission and commit this file there.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (strict)
+        run: npm run typecheck
+
+      - name: Build frontend + server bundle
+        run: npm run build
+
+      - name: Security audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Smoke test (start server, hit health endpoint)
+        run: |
+          npm start & SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/api/health > /dev/null; then
+              echo "health endpoint OK"; break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3000/api/health
+          kill $SERVER_PID

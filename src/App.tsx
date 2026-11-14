@@ -55,6 +55,19 @@ import { GlobalHeatmap } from "./components/GlobalHeatmap";
 import { RadarScanner } from "./components/RadarScanner";
 import { AnimatedNumber } from "./components/AnimatedNumber";
 
+/** Explicit provenance badge. A fabricated metric must never look like a real one. */
+function SimulatedBadge({ show, title }: { show?: boolean; title?: string }) {
+  if (!show) return null;
+  return (
+    <span
+      title={title || "Angka ini dihasilkan oleh model simulasi lokal, bukan dari data jaringan nyata."}
+      className="inline-flex items-center gap-1 rounded border border-amber-400/50 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-400"
+    >
+      Simulasi
+    </span>
+  );
+}
+
 const fallbackPredictions: AIPredictionReport = {
   summary: "Berdasarkan analisis tren sentimen 7 hari terakhir, brand Anda menunjukkan tingkat kepuasan publik yang cukup stabil dengan sedikit fluktuasi negatif akibat keluhan teknis. AI memperkirakan adanya perbaikan sentimen dalam 3 hari ke depan seiring respons tim yang cepat.",
   predictions: [
@@ -200,6 +213,8 @@ export default function App() {
       sentimentScore: number;
       velocity: number;
       signalStrength: number;
+      isSimulated?: boolean;
+      sampleSize?: number;
       activeUsersCount: number;
     }[];
     aggregateIndex: {
@@ -360,6 +375,7 @@ export default function App() {
 
   // WebSocket Integration for Real-time Synchronization with Fail-Safe Auto-Polling Fallback
   const retryCountRef = React.useRef(0);
+  const MAX_WS_RETRIES = 5;
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -368,7 +384,7 @@ export default function App() {
 
     const connectWebSocket = () => {
       // If we've already exceeded retries, don't attempt to initialize WebSocket again to avoid console errors
-      if (retryCountRef.current >= 2) {
+      if (retryCountRef.current > MAX_WS_RETRIES) {
         if (isMounted) setWebSocketStatus('polling');
         return;
       }
@@ -453,34 +469,25 @@ export default function App() {
           }
         };
 
+        // `onclose` is the single source of truth for connection failures.
+        // Previously `onerror` also incremented the retry counter, so one real
+        // failure counted as two and the "retry in 4 seconds" path was dead code.
         ws.onclose = () => {
-          if (isMounted) {
-            retryCountRef.current += 1;
-            if (retryCountRef.current >= 2) {
-              console.log("[WebSocket] Max retries reached. Switching to intelligent auto-polling fallback mode.");
-              setWebSocketStatus('polling');
-            } else {
-              setWebSocketStatus('disconnected');
-              console.log("[WebSocket] Connection closed. Retrying in 4 seconds...");
-              reconnectTimeout = setTimeout(connectWebSocket, 4000);
-            }
+          if (!isMounted) return;
+          retryCountRef.current += 1;
+          if (retryCountRef.current > MAX_WS_RETRIES) {
+            console.log("[WebSocket] Max retries reached. Switching to polling fallback mode.");
+            setWebSocketStatus('polling');
+          } else {
+            setWebSocketStatus('disconnected');
+            console.log(`[WebSocket] Connection closed. Retrying in 4 seconds (attempt ${retryCountRef.current}/${MAX_WS_RETRIES})...`);
+            reconnectTimeout = setTimeout(connectWebSocket, 4000);
           }
         };
 
-        ws.onerror = (err) => {
-          // Handled gracefully without creating excessive error noise
-          console.warn("[WebSocket] Graceful connection bypass - switching to backup polling to avoid sandbox block.");
-          if (ws) {
-            try {
-              ws.close();
-            } catch (e) {}
-          }
-          if (isMounted) {
-            retryCountRef.current += 1;
-            if (retryCountRef.current >= 2) {
-              setWebSocketStatus('polling');
-            }
-          }
+        ws.onerror = () => {
+          // Just log; closing here would double-count the failure.
+          console.warn("[WebSocket] Connection error — falling back to polling if it keeps failing.");
         };
       } catch (e) {
         console.warn("[WebSocket] Direct initialization error, falling back:", e);
@@ -522,46 +529,11 @@ export default function App() {
       pollingInterval = setInterval(() => {
         fetchInitialDataSilent();
         
-        // Occasionally simulate a real-time ingested post notification matching background ingestion
-        if (trackers.length > 0) {
-          const randomTracker = trackers[Math.floor(Math.random() * trackers.length)];
-          const platforms = randomTracker.platforms && randomTracker.platforms.length > 0 
-            ? randomTracker.platforms 
-            : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
-          const randomPlatform = platforms[Math.floor(Math.random() * platforms.length)];
-          
-          const sampleKeywords = ["promo", "produk", "layanan", "viral", "tren", "bagus", "kecewa", "mantap"];
-          const keyword = sampleKeywords[Math.floor(Math.random() * sampleKeywords.length)];
-          const content = `Membahas ${randomTracker.query}: Ulasan mengenai aspek ${keyword} dari postingan terbaru pengguna media sosial.`;
-          const sentiment = ["positive", "neutral", "negative"][Math.floor(Math.random() * 3)];
-
-          const newAlert = {
-            id: `alert-poll-${Date.now()}-${Math.random()}`,
-            title: `Update Real-Time (${randomTracker.query})`,
-            content,
-            platform: randomPlatform,
-            sentiment,
-            timestamp: new Date()
-          };
-          
-          setLiveUpdates((prev) => [newAlert, ...prev].slice(0, 3));
-          setLastIngestedTime(Date.now());
-
-          // Trigger Browser Notification
-          if (sentiment === "negative") {
-            sendBrowserNotification(
-              `🚨 Lonjakan Sentimen Negatif! [S.M.I.P Simulation]`,
-              `Kritis (${randomPlatform.toUpperCase()}): "${content}"`,
-              { tag: newAlert.id }
-            );
-          } else {
-            sendBrowserNotification(
-              `🔔 Sinyal Baru Terdeteksi [S.M.I.P Simulation]`,
-              `Sinyal (${randomPlatform.toUpperCase()}): "${content}"`,
-              { tag: newAlert.id }
-            );
-          }
-        }
+        // NOTE: previously this block fabricated a random post and fired an
+        // OS-level "negative sentiment spike" notification every 8 seconds.
+        // Fake crisis alerts destroy trust in the product, so this simulation
+        // was removed. Alerts now only come from real server-side WebSocket
+        // events (LIVE_POST_INGESTED / SYNC).
       }, 8000);
     }
 
@@ -1560,7 +1532,8 @@ export default function App() {
                                 </span>
                                 {signal.platform}
                               </span>
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1.5">
+                                <SimulatedBadge show={signal.isSimulated} />
                                 {signal.velocity > 45 ? (
                                   <TrendingUp className="h-3 w-3 text-emerald-400" />
                                 ) : (
@@ -1668,6 +1641,7 @@ export default function App() {
                           <div className="p-4 rounded-xl bg-white/5 border border-white/5 text-xs leading-relaxed text-slate-200 italic flex items-start gap-2.5">
                             <span className="text-lg text-indigo-400 leading-none">“</span>
                             <span>{predictions?.summary || fallbackPredictions.summary}</span>
+                            {!predictions && <SimulatedBadge show />}
                           </div>
 
                           {/* 3 Days Grid */}
@@ -2244,6 +2218,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
+                                  <SimulatedBadge show={post.isSimulated} />
                                   <Clock className="h-3.5 w-3.5" />
                                   <span>{new Date(post.analyzedAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</span>
                                   {post.url && !post.url.startsWith("manual-text") && (
@@ -2414,6 +2389,7 @@ export default function App() {
                                 </div>
 
                                 <div className="flex items-center gap-2">
+                                  <SimulatedBadge show={res.isSimulated} />
                                   <span className={`text-[10px] font-bold border px-2 py-0.5 rounded-full capitalize ${getSentimentBadge(res.sentiment)}`}>
                                     {res.sentiment === "positive" ? "Positif" : res.sentiment === "negative" ? "Negatif" : "Netral"}
                                   </span>

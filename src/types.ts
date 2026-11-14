@@ -19,6 +19,8 @@ export interface AnalyzedPost {
   engagement: string; // e.g., High, Medium, Low
   hashtags: string[];
   analyzedAt: string;
+  /** true when the record was generated locally instead of collected. */
+  isSimulated?: boolean;
 }
 
 export interface MonitorResult {
@@ -37,6 +39,8 @@ export interface MonitorResult {
   country?: string;
   latitude?: number;
   longitude?: number;
+  /** true when the record was generated locally instead of collected. */
+  isSimulated?: boolean;
 }
 
 export interface SentimentTrendPoint {

@@ -12,6 +12,11 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Allow any Host header: this server runs behind preview/proxy domains
+      // (and as Vite middleware inside Express). Vite otherwise rejects unknown
+      // hosts with HTTP 403 and the preview never loads.
+      host: "0.0.0.0",
+      allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

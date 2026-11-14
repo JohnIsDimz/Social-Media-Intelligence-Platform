@@ -7,56 +7,104 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
-
-// Globally intercept and sanitize any occurrence of the word "error" (case-insensitive) to "err-info" in all logs
-const originalLog = console.log;
-const originalWarn = console.warn;
-const originalError = console.error;
-
-function cleanLogArg(arg: any): any {
-  if (arg === null || arg === undefined) return arg;
-  if (typeof arg === "string") {
-    return arg.replace(/error/gi, "err-info");
-  }
-  if (arg instanceof Error) {
-    const msg = arg.message || String(arg);
-    const newErr = new Error(msg.replace(/error/gi, "err-info"));
-    if (arg.stack) {
-      newErr.stack = arg.stack.replace(/error/gi, "err-info");
-    }
-    return newErr;
-  }
-  if (typeof arg === "object") {
-    try {
-      const str = JSON.stringify(arg);
-      if (str && str.toLowerCase().includes("error")) {
-        return JSON.parse(str.replace(/error/gi, "err-info"));
-      }
-    } catch (e) {
-      return String(arg).replace(/error/gi, "err-info");
-    }
-  }
-  return arg;
-}
-
-console.log = function(...args: any[]) {
-  originalLog.apply(console, args.map(cleanLogArg));
-};
-
-console.warn = function(...args: any[]) {
-  originalWarn.apply(console, args.map(cleanLogArg));
-};
-
-console.error = function(...args: any[]) {
-  originalWarn.apply(console, args.map(cleanLogArg));
-};
+import helmet from "helmet";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
-const app = express();
-const PORT = 3000;
+// Structured, non-destructive logging. Previously every occurrence of the word
+// "error" was rewritten to "err-info", which destroyed stack traces and made
+// production debugging impossible. Logs are now emitted verbatim.
+const originalLog = console.log.bind(console);
+const originalWarn = console.warn.bind(console);
+const originalError = console.error.bind(console);
 
-app.use(express.json());
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+const LEVELS: Record<string, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
+
+function emit(level: "debug" | "info" | "warn" | "error", args: any[]) {
+  if ((LEVELS[level] ?? 20) < (LEVELS[LOG_LEVEL] ?? 20)) return;
+  const sink =
+    level === "error" ? originalError : level === "warn" ? originalWarn : originalLog;
+  sink.call(
+    console,
+    `[${new Date().toISOString()}] [${level.toUpperCase()}]`,
+    ...args
+  );
+}
+
+const logger = {
+  debug: (...args: any[]) => emit("debug", args),
+  info: (...args: any[]) => emit("info", args),
+  warn: (...args: any[]) => emit("warn", args),
+  error: (...args: any[]) => emit("error", args),
+};
+
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+
+// ---------------------------------------------------------------------------
+// Security hardening
+// ---------------------------------------------------------------------------
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+// Trust the platform proxy (Vercel/Railway/Cloud Run) so rate limiting sees the
+// real client IP instead of the load balancer's. Configurable to avoid the
+// "IP spoofing" class of issues when not behind a proxy.
+app.set("trust proxy", process.env.TRUST_PROXY === "false" ? false : 1);
+
+// Security headers. CSP is intentionally disabled: the SPA uses Tailwind/Vite
+// inline styles, and a wrong CSP would break the live site. Everything else
+// (nosniff, frameguard, HSTS, referrer policy, hidePoweredBy) is enabled.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+// Same-origin by default: this app is served by this very server, so no CORS
+// headers are needed. Set CORS_ORIGINS="https://a.com,https://b.com" to allow
+// other origins explicitly.
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+if (corsOrigins.length > 0) {
+  app.use(cors({ origin: corsOrigins, methods: ["GET", "POST", "DELETE"], maxAge: 600 }));
+}
+
+// Body limits prevent trivial memory-exhaustion DoS.
+app.use(express.json({ limit: "64kb" }));
+app.use(express.urlencoded({ extended: false, limit: "64kb" }));
+
+// Global API rate limit: generous for normal dashboards, hostile to scripts.
+const apiRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Terlalu banyak permintaan. Silakan coba lagi sebentar lagi." },
+});
+
+// Strict limit for endpoints that spend money on Gemini / external APIs.
+const expensiveRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: {
+    error: "Batas permintaan analisis AI tercapai (20/menit). Silakan coba lagi nanti.",
+  },
+});
+
+app.use("/api", apiRateLimiter);
+
+// Guards for every route that calls a paid/external service.
+const AI_ROUTES = ["/api/analyze-url", "/api/trigger-monitor", "/api/predict-trends"];
+app.use(AI_ROUTES, expensiveRateLimiter);
 
 // Global WebSocket server and broadcast utility
 let wss: WebSocketServer | null = null;
@@ -68,7 +116,7 @@ function broadcast(type: string, data: any) {
         try {
           client.send(JSON.stringify({ type, data }));
         } catch (err) {
-          console.error("Error sending WebSocket message:", err);
+          logger.error("Error sending WebSocket message:", err);
         }
       }
     });
@@ -87,6 +135,22 @@ const ai = new GoogleGenAI({
 
 let geminiRateLimitActive = false;
 let rateLimitResetTime = 0;
+
+// Synthetic data switch. When ENABLE_SIMULATED_DATA="false", S.M.I.P will only
+// ever surface data that came from a real network call. This is what you want
+// on a public production deployment: an empty dashboard beats a fabricated one.
+const SIMULATED_DATA_ENABLED = process.env.ENABLE_SIMULATED_DATA !== "false";
+
+// @google/genai types `response.text` as optional. A missing body is a real
+// failure mode (safety block, truncation), so fail loudly instead of crashing
+// with a confusing "Cannot read properties of undefined".
+function responseText(response: { text?: string }): string {
+  const text = response?.text;
+  if (typeof text !== "string" || text.trim() === "") {
+    throw new Error("Model AI tidak mengembalikan konten yang dapat dibaca.");
+  }
+  return text;
+}
 
 // Helper to check if the Gemini API Key is configured and valid
 function isGeminiKeyValid(): boolean {
@@ -228,12 +292,12 @@ try {
 
   if (foundPath) {
     firebaseConfig = JSON.parse(fs.readFileSync(foundPath, "utf-8"));
-    console.log(`[Firebase Init] Successfully loaded config from absolute path: ${foundPath}`);
+    logger.info(`[Firebase Init] Successfully loaded config from absolute path: ${foundPath}`);
   } else {
-    console.warn("[Firebase Init] firebase-applet-config.json not found in any standard path.");
+    logger.warn("[Firebase Init] firebase-applet-config.json not found in any standard path.");
   }
 } catch (err) {
-  console.warn("[Firebase Init] Failed to read firebase-applet-config.json locally:", err);
+  logger.warn("[Firebase Init] Failed to read firebase-applet-config.json locally:", err);
 }
 
 if (!getApps().length) {
@@ -244,9 +308,9 @@ if (!getApps().length) {
     try {
       const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
       adminCredential = cert(sa);
-      console.log("[Firebase Init] Initializing with service account credential from FIREBASE_SERVICE_ACCOUNT_JSON.");
+      logger.info("[Firebase Init] Initializing with service account credential from FIREBASE_SERVICE_ACCOUNT_JSON.");
     } catch (err) {
-      console.error("[Firebase Init] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", err);
+      logger.error("[Firebase Init] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", err);
     }
   } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
     try {
@@ -256,9 +320,9 @@ if (!getApps().length) {
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
         privateKey: privateKey,
       });
-      console.log("[Firebase Init] Initializing with service account credential from individual environment variables.");
+      logger.info("[Firebase Init] Initializing with service account credential from individual environment variables.");
     } catch (err) {
-      console.error("[Firebase Init] Failed to initialize with service account environment variables:", err);
+      logger.error("[Firebase Init] Failed to initialize with service account environment variables:", err);
     }
   }
 
@@ -279,20 +343,29 @@ let disableFirestoreSync = false;
 // Globally handle unhandled rejections and uncaught exceptions to ensure the server never crashes
 process.on("unhandledRejection", (reason: any) => {
   const reasonStr = String(reason?.stack || reason || "");
-  console.warn(`[Global Unhandled Rejection] [Bypassed] intercepted: ${reasonStr.replace(/error/gi, "err-info")}`);
-  if (reasonStr.includes("credentials") || reasonStr.includes("ADC") || reasonStr.includes("GoogleAuth") || reasonStr.includes("application_default_credentials")) {
-    console.warn("[Firebase Sync] Detected Google credentials issue in background. Disabling Firestore sync dynamically.");
+  const isCredentialIssue =
+    reasonStr.includes("credentials") ||
+    reasonStr.includes("ADC") ||
+    reasonStr.includes("GoogleAuth") ||
+    reasonStr.includes("application_default_credentials");
+
+  if (isCredentialIssue) {
+    // Expected when Firebase is not configured. One line, then run on SQLite.
+    if (!disableFirestoreSync) {
+      logger.warn(
+        "[Firebase Sync] Firestore credentials unavailable — running on the local SQLite cache only."
+      );
+    }
     disableFirestoreSync = true;
+    return;
   }
+  logger.error("[Unhandled Rejection]", reason);
 });
 
 process.on("uncaughtException", (error: any) => {
-  const errStr = String(error?.stack || error || "");
-  console.warn(`[Global Uncaught Exception] [Bypassed] intercepted: ${errStr.replace(/error/gi, "err-info")}`);
-  if (errStr.includes("credentials") || errStr.includes("ADC") || errStr.includes("GoogleAuth") || errStr.includes("application_default_credentials")) {
-    console.warn("[Firebase Sync] Detected Google credentials issue. Disabling Firestore sync dynamically.");
-    disableFirestoreSync = true;
-  }
+  // Never keep running after an uncaught exception: process state may be corrupt.
+  logger.error("[Uncaught Exception] shutting down", error);
+  process.exit(1);
 });
 
 function getFirestoreInstance() {
@@ -303,7 +376,7 @@ function getFirestoreInstance() {
     try {
       return getFirestore(firebaseConfig.firestoreDatabaseId);
     } catch (err) {
-      console.warn("[Firebase Sync] Failed to get named Firestore instance, falling back to default:", err);
+      logger.warn("[Firebase Sync] Failed to get named Firestore instance, falling back to default:", err);
       useDefaultDb = true;
       return getFirestore();
     }
@@ -313,11 +386,11 @@ function getFirestoreInstance() {
 
 async function syncFromFirestoreToSQLite() {
   if (disableFirestoreSync) {
-    console.log("[Firebase Sync] Sync is disabled. Running on local SQLite cache.");
+    logger.info("[Firebase Sync] Sync is disabled. Running on local SQLite cache.");
     return;
   }
   try {
-    console.log("[Firebase Sync] Loading initial database from Firestore...");
+    logger.info("[Firebase Sync] Loading initial database from Firestore...");
     let db = getFirestoreInstance();
     
     // 1. Fetch Trackers (with dynamic fallback for the first operation)
@@ -327,18 +400,18 @@ async function syncFromFirestoreToSQLite() {
     } catch (err: any) {
       const errMsg = String(err);
       if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
-        console.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
+        logger.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
         useDefaultDb = true;
         try {
           db = getFirestoreInstance();
           trackersSnap = await db.collection("trackers").get();
         } catch (innerErr) {
-          console.warn("[Firebase Sync] Default database failed during init. Disabling Firestore sync and running locally.");
+          logger.warn("[Firebase Sync] Default database failed during init. Disabling Firestore sync and running locally.");
           disableFirestoreSync = true;
           return;
         }
       } else {
-        console.warn("[Firebase Sync] Firestore query failed during init. Disabling Firestore sync and running locally.");
+        logger.warn("[Firebase Sync] Firestore query failed during init. Disabling Firestore sync and running locally.");
         disableFirestoreSync = true;
         return;
       }
@@ -363,11 +436,11 @@ async function syncFromFirestoreToSQLite() {
       monitorResults.push({ id: doc.id, ...doc.data() });
     });
 
-    console.log(`[Firebase Sync] Loaded from Firestore: ${trackers.length} trackers, ${analyzedPosts.length} analyzed posts, ${monitorResults.length} monitor results.`);
+    logger.info(`[Firebase Sync] Loaded from Firestore: ${trackers.length} trackers, ${analyzedPosts.length} analyzed posts, ${monitorResults.length} monitor results.`);
 
     // If Firestore has data, overwrite our local SQLite database cache with it
     if (trackers.length > 0 || analyzedPosts.length > 0 || monitorResults.length > 0) {
-      console.log("[Firebase Sync] Populating local SQLite cache with Firestore data...");
+      logger.info("[Firebase Sync] Populating local SQLite cache with Firestore data...");
       
       const syncTransaction = dbConn.transaction(() => {
         // Clear local
@@ -429,15 +502,15 @@ async function syncFromFirestoreToSQLite() {
         }
       });
       syncTransaction();
-      console.log("[Firebase Sync] Local SQLite cache populated successfully!");
+      logger.info("[Firebase Sync] Local SQLite cache populated successfully!");
     } else {
-      console.log("[Firebase Sync] Firestore is empty. Initializing with local or default seed data...");
+      logger.info("[Firebase Sync] Firestore is empty. Initializing with local or default seed data...");
       const localData = getDB();
       await syncToFirestore(localData);
     }
   } catch (err: any) {
     const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    console.warn("[Firebase Sync] Information loading initial database from Firestore:", errMsg);
+    logger.warn("[Firebase Sync] Information loading initial database from Firestore:", errMsg);
   }
 }
 
@@ -456,7 +529,7 @@ async function syncToFirestore(data: any) {
   pendingSyncData = null;
 
   try {
-    console.log("[Firebase Sync] Syncing database to Firestore in background...");
+    logger.info("[Firebase Sync] Syncing database to Firestore in background...");
     let db = getFirestoreInstance();
 
     // 1. Sync Trackers
@@ -467,18 +540,18 @@ async function syncToFirestore(data: any) {
     } catch (err: any) {
       const errMsg = String(err);
       if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
-        console.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
+        logger.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
         useDefaultDb = true;
         try {
           db = getFirestoreInstance();
           trackersSnap = await db.collection("trackers").get();
         } catch (innerErr) {
-          console.warn("[Firebase Sync] Default database failed during background sync. Disabling Firestore sync.");
+          logger.warn("[Firebase Sync] Default database failed during background sync. Disabling Firestore sync.");
           disableFirestoreSync = true;
           return;
         }
       } else {
-        console.warn("[Firebase Sync] Firestore query failed during background sync. Disabling Firestore sync.");
+        logger.warn("[Firebase Sync] Firestore query failed during background sync. Disabling Firestore sync.");
         disableFirestoreSync = true;
         return;
       }
@@ -597,10 +670,10 @@ async function syncToFirestore(data: any) {
       await batch.commit();
     }
 
-    console.log("[Firebase Sync] Sync completed successfully!");
+    logger.info("[Firebase Sync] Sync completed successfully!");
   } catch (err: any) {
     const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    console.warn("[Firebase Sync] Information syncing to Firestore:", errMsg);
+    logger.warn("[Firebase Sync] Information syncing to Firestore:", errMsg);
   } finally {
     isSyncing = false;
     if (pendingSyncData && !disableFirestoreSync) {
@@ -633,7 +706,7 @@ function getDB() {
 
     return { trackers, analyzedPosts, monitorResults };
   } catch (err) {
-    console.error("Error reading database from SQLite:", err);
+    logger.error("Error reading database from SQLite:", err);
     return { trackers: [], analyzedPosts: [], monitorResults: [] };
   }
 }
@@ -709,11 +782,11 @@ function writeDB(data: any) {
     // Trigger background sync to Firestore
     syncToFirestore(data).catch((err) => {
       const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-      console.warn("[Firebase Sync] Information during Firestore background sync trigger:", errMsg);
+      logger.warn("[Firebase Sync] Information during Firestore background sync trigger:", errMsg);
     });
   } catch (err: any) {
     const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    console.warn("Information writing to SQLite:", errMsg);
+    logger.warn("Information writing to SQLite:", errMsg);
   }
 }
 
@@ -727,19 +800,69 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
 ];
 
-// Scrape Social Media URL Meta Tags using an enhanced bypass engine with rotating User-Agents and multi-fallback parsing
+// Only public social-network hosts may be fetched. Without this, /api/analyze-url
+// is a textbook SSRF: an attacker could make the server read internal services
+// (cloud metadata, localhost admin panels, private networks).
+const ALLOWED_SCRAPE_HOSTS = new Set([
+  "tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com",
+  "instagram.com", "www.instagram.com",
+  "facebook.com", "www.facebook.com", "fb.com", "www.fb.com",
+  "whatsapp.com", "www.whatsapp.com", "wa.me",
+  "twitter.com", "www.twitter.com", "x.com", "www.x.com",
+  "youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com",
+  "linkedin.com", "www.linkedin.com", "lnkd.in",
+  "reddit.com", "www.reddit.com", "redd.it", "old.reddit.com",
+]);
+
+// Reject IP-literal hosts outright (127.0.0.1, 169.254.169.254, [::1], ...).
+function isIpLiteral(hostname: string): boolean {
+  return (
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || // IPv4
+    hostname.includes(":") ||                      // IPv6 (URL keeps brackets)
+    /^0x/i.test(hostname) ||                       // hex-encoded IP
+    /^\d+$/.test(hostname)                        // decimal-encoded IP
+  );
+}
+
+export function validateScrapeUrl(value: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("URL tidak valid.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("URL harus menggunakan HTTPS.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("URL tidak boleh memuat kredensial.");
+  }
+  if (parsed.port) {
+    throw new Error("URL tidak boleh menggunakan port kustom.");
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (isIpLiteral(hostname)) {
+    throw new Error("Alamat IP tidak diizinkan.");
+  }
+  if (!ALLOWED_SCRAPE_HOSTS.has(hostname)) {
+    throw new Error(
+      "Domain tidak didukung. Gunakan tautan dari TikTok, Instagram, Facebook, WhatsApp, X/Twitter, YouTube, LinkedIn, atau Reddit."
+    );
+  }
+  return parsed;
+}
+
+// Scrape Social Media URL Meta Tags using rotating User-Agents and multi-fallback parsing
 async function scrapeSocialUrl(url: string) {
   try {
+    const parsedUrl = validateScrapeUrl(url);
     const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-    
-    // Extract domain to mock matching Referer header
-    let referer = "https://www.google.com/";
-    try {
-      const parsedUrl = new URL(url);
-      referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
-    } catch (_) {}
+    const referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
 
-    const response = await fetch(url, {
+    const response = await fetch(parsedUrl.toString(), {
+      // Never follow redirects: a public host could redirect the server to an
+      // internal address, re-opening the SSRF hole.
+      redirect: "manual",
       headers: {
         "User-Agent": randomUserAgent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -813,7 +936,7 @@ async function scrapeSocialUrl(url: string) {
       success: true
     };
   } catch (err: any) {
-    console.warn(`Scrape failed for ${url}:`, err.message);
+    logger.warn(`Scrape failed for ${url}:`, err.message);
     // Return gracefully so Gemini can estimate or use fallback
     return {
       title: "Scrape Link",
@@ -912,7 +1035,7 @@ async function fetchRealRedditPosts(query: string): Promise<any[]> {
       }
     });
     if (!res.ok) {
-      console.warn(`[Reddit API] Fetch failed with status ${res.status}`);
+      logger.warn(`[Reddit API] Fetch failed with status ${res.status}`);
       return [];
     }
     const json: any = await res.json();
@@ -941,7 +1064,7 @@ async function fetchRealRedditPosts(query: string): Promise<any[]> {
     });
     return posts;
   } catch (err) {
-    console.error("[Reddit API Error] Failed to fetch real Reddit posts:", err);
+    logger.error("[Reddit API Error] Failed to fetch real Reddit posts:", err);
     return [];
   }
 }
@@ -954,7 +1077,7 @@ async function fetchRealYouTubeVideos(query: string): Promise<any[]> {
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&key=${apiKey}&maxResults=3`;
     const res = await fetch(url);
     if (!res.ok) {
-      console.warn(`[YouTube API] Fetch failed with status ${res.status}`);
+      logger.warn(`[YouTube API] Fetch failed with status ${res.status}`);
       return [];
     }
     const json: any = await res.json();
@@ -982,7 +1105,7 @@ async function fetchRealYouTubeVideos(query: string): Promise<any[]> {
       };
     });
   } catch (err) {
-    console.error("[YouTube API Error] Failed to fetch real YouTube videos:", err);
+    logger.error("[YouTube API Error] Failed to fetch real YouTube videos:", err);
     return [];
   }
 }
@@ -999,7 +1122,7 @@ async function fetchRealTweets(query: string): Promise<any[]> {
       }
     });
     if (!res.ok) {
-      console.warn(`[Twitter API] Fetch failed with status ${res.status}`);
+      logger.warn(`[Twitter API] Fetch failed with status ${res.status}`);
       return [];
     }
     const json: any = await res.json();
@@ -1027,7 +1150,7 @@ async function fetchRealTweets(query: string): Promise<any[]> {
       };
     });
   } catch (err) {
-    console.error("[Twitter API Error] Failed to fetch real tweets:", err);
+    logger.error("[Twitter API Error] Failed to fetch real tweets:", err);
     return [];
   }
 }
@@ -1041,13 +1164,13 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   
   // 1. Reddit: Fetch real posts from Reddit public API if selected (requires no credentials!)
   if (selectedPlatforms.includes("reddit")) {
-    console.log(`[Unified API Engine] Querying public Reddit API for "${query}"...`);
+    logger.info(`[Unified API Engine] Querying public Reddit API for "${query}"...`);
     apiTasks.push({ platform: "reddit", promise: fetchRealRedditPosts(query) });
   }
 
   // 2. YouTube: Fetch real videos from YouTube Data API v3 if API key is present
   if (selectedPlatforms.includes("youtube") && process.env.YOUTUBE_API_KEY) {
-    console.log(`[Unified API Engine] Querying official YouTube API for "${query}"...`);
+    logger.info(`[Unified API Engine] Querying official YouTube API for "${query}"...`);
     apiTasks.push({ platform: "youtube", promise: fetchRealYouTubeVideos(query) });
   }
 
@@ -1075,7 +1198,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
               return res;
             }
           } catch (taskErr) {
-            console.warn(`[Unified API Engine] [Bypassed] Official API failed for platform ${task.platform}:`, taskErr);
+            logger.warn(`[Unified API Engine] [Bypassed] Official API failed for platform ${task.platform}:`, taskErr);
           }
           return [];
         })
@@ -1084,7 +1207,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
         mergedResults.push(...resList);
       }
     } catch (err) {
-      console.warn("[Unified API Engine] [Bypassed] Error waiting for official APIs:", err);
+      logger.warn("[Unified API Engine] [Bypassed] Error waiting for official APIs:", err);
     }
   }
 
@@ -1095,7 +1218,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
   if (remainingPlatforms.length > 0 && isGeminiKeyValid()) {
     try {
-      console.log(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
+      logger.info(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
       const searchPlatformsStr = remainingPlatforms.join(", ");
       const prompt = `Search the live web for recent public discussions, posts, reviews, or mentions of "${query}" specifically on social media platforms: ${searchPlatformsStr}.
       Use Google Search grounding to retrieve real information.
@@ -1153,7 +1276,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
         }
       });
 
-      const parsedGrounding = JSON.parse(response.text.trim());
+      const parsedGrounding = JSON.parse(responseText(response).trim());
       const cleanGrounding = parsedGrounding.map((res: any) => {
         let cleanUrl = res.url || "";
         if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
@@ -1169,25 +1292,27 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
     } catch (err: any) {
       const errStr = String(err);
       if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-        console.warn("[Unified API Engine Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+        logger.warn("[Unified API Engine Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
         geminiRateLimitActive = true;
         rateLimitResetTime = Date.now() + 120000; // 2 minutes
       }
-      console.error("[Unified API Engine Warning] Google Search Grounding failed for remaining platforms:", err);
+      logger.error("[Unified API Engine Warning] Google Search Grounding failed for remaining platforms:", err);
     }
   }
 
   // 5. Fallback Generation: If the total results are still empty (e.g. if APIs and Grounding failed or are blocked),
   // return high-quality localized fallback signals across all 8 platforms so S.M.I.P always works reliably!
   if (mergedResults.length === 0) {
-    console.log(`[Unified API Engine] Performing elegant fallback generation for "${query}" across 8 platforms...`);
+    logger.info(`[Unified API Engine] Performing elegant fallback generation for "${query}" across 8 platforms...`);
     const fallback = localGenerateMonitorResults(query, selectedPlatforms);
     mergedResults.push(...fallback);
   }
 
-  // Set trackerId on all results and return
+  // Set trackerId on all results and return. Anything that did not come from
+  // the local generator is a genuine network/grounding result.
   return mergedResults.map((item, index) => ({
     ...item,
+    isSimulated: item.isSimulated === true,
     id: `mr-${Date.now()}-${index}`,
     trackerId: tracker.id
   }));
@@ -1223,6 +1348,13 @@ function constructOfficialPlatformSearchUrl(platform: string, query: string): st
 
 // Local Fallback Mock Generator for Active Search Grounding Results (Used when search tools/scopes fail)
 function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) {
+  if (!SIMULATED_DATA_ENABLED) {
+    logger.info(
+      "[Simulation] Disabled via ENABLE_SIMULATED_DATA=false — returning no synthetic mentions."
+    );
+    return [];
+  }
+
   const selectedPlatforms = platforms && platforms.length > 0 ? platforms : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
   
   // List of high-fidelity global cities with coordinates
@@ -1326,7 +1458,10 @@ function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) 
       date: new Date(Date.now() - Math.random() * 172800000).toISOString(),
       country: region.country,
       latitude: region.lat,
-      longitude: region.lng
+      longitude: region.lng,
+      // Explicit provenance: this record was generated locally, not scraped
+      // from a real network. The UI renders a SIMULATED badge for it.
+      isSimulated: true
     });
   }
   
@@ -1337,6 +1472,18 @@ function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) 
 // API ROUTES
 // ==========================================
 
+// 0. Health & readiness probe (used by load balancers and uptime monitors)
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptimeSeconds: Math.round(process.uptime()),
+    version: process.env.npm_package_version || "unknown",
+    geminiConfigured: isGeminiKeyValid(),
+    simulatedDataEnabled: SIMULATED_DATA_ENABLED,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // 1. Get Trackers
 app.get("/api/trackers", (req, res) => {
   const db = getDB();
@@ -1344,18 +1491,36 @@ app.get("/api/trackers", (req, res) => {
 });
 
 // 2. Add Tracker
+const ALLOWED_TRACKER_TYPES = ["brand", "hashtag", "url", "topic", "product"];
+const ALLOWED_PLATFORMS = ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "x", "youtube", "linkedin", "reddit"];
+
 app.post("/api/trackers", (req, res) => {
-  const { type, query, platforms } = req.body;
-  if (!type || !query) {
+  const { type, query, platforms } = req.body || {};
+  if (typeof type !== "string" || typeof query !== "string") {
     return res.status(400).json({ error: "Type and query are required." });
   }
+
+  const cleanQuery = query.trim();
+  if (cleanQuery.length < 1 || cleanQuery.length > 200) {
+    return res.status(400).json({ error: "Query harus terdiri dari 1-200 karakter." });
+  }
+  if (!ALLOWED_TRACKER_TYPES.includes(type)) {
+    return res.status(400).json({ error: "Tipe tracker tidak dikenal." });
+  }
+
+  const requestedPlatforms = Array.isArray(platforms) ? platforms : [];
+  const cleanPlatforms = requestedPlatforms
+    .filter((p: any) => typeof p === "string" && ALLOWED_PLATFORMS.includes(p.toLowerCase()))
+    .map((p: string) => p.toLowerCase());
 
   const db = getDB();
   const newTracker = {
     id: `t-${Date.now()}`,
     type,
-    query,
-    platforms: platforms || ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"],
+    query: cleanQuery,
+    platforms: cleanPlatforms.length > 0
+      ? cleanPlatforms
+      : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"],
     createdAt: new Date().toISOString()
   };
 
@@ -1407,6 +1572,16 @@ app.post("/api/analyze-url", async (req, res) => {
   let scrapedDesc = rawText || "";
   let scrapedImg = "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=300&q=80";
   let platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other' = manualPlatform || "other";
+
+  // Reject unsupported / internal URLs up front so the client gets a clear 400
+  // instead of a silently fabricated analysis of a URL we never fetched.
+  if (url) {
+    try {
+      validateScrapeUrl(url);
+    } catch (validationErr: any) {
+      return res.status(400).json({ error: validationErr.message });
+    }
+  }
 
   try {
     if (url) {
@@ -1467,19 +1642,19 @@ app.post("/api/analyze-url", async (req, res) => {
           }
         });
 
-        geminiResult = JSON.parse(response.text.trim());
+        geminiResult = JSON.parse(responseText(response).trim());
       } catch (err: any) {
         const errStr = String(err);
         if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-          console.warn("[Gemini API Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+          logger.warn("[Gemini API Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
           geminiRateLimitActive = true;
           rateLimitResetTime = Date.now() + 120000; // 2 minutes
         }
-        console.warn("[Gemini API Warning] Analysis API call failed with error details:", err?.message || err);
-        console.log("Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
+        logger.warn("[Gemini API Warning] Analysis API call failed with error details:", err?.message || err);
+        logger.info("Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
       }
     } else {
-      console.log("[S.M.I.P Server] GEMINI_API_KEY is not configured or is a placeholder. Bypassing Gemini API and using local high-accuracy heuristic analyzer.");
+      logger.info("[S.M.I.P Server] GEMINI_API_KEY is not configured or is a placeholder. Bypassing Gemini API and using local high-accuracy heuristic analyzer.");
     }
 
     if (!geminiResult) {
@@ -1517,8 +1692,9 @@ app.post("/api/analyze-url", async (req, res) => {
 
     res.json(newAnalysis);
   } catch (err: any) {
-    console.error("Critical error in /api/analyze-url:", err);
-    res.status(500).json({ error: "Failed to perform sentiment analysis: " + err.message });
+    logger.error("Critical error in /api/analyze-url:", err);
+    logger.error("Failed to perform sentiment analysis:", err);
+    res.status(500).json({ error: "Gagal melakukan analisis sentimen. Silakan coba lagi." });
   }
 });
 
@@ -1536,7 +1712,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
   }
 
   try {
-    console.log(`[Social Intelligence Engine] Running unified social signal search for: "${tracker.query}"...`);
+    logger.info(`[Social Intelligence Engine] Running unified social signal search for: "${tracker.query}"...`);
     const formattedResults = await fetchUnifiedSocialSignals(tracker);
 
     // Save newly found results to local DB
@@ -1549,7 +1725,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
     broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
     res.json(formattedResults);
   } catch (err: any) {
-    console.log("[Social Intelligence Engine] Status: Mengaktifkan pemantauan real-time via mesin pemicu monitoring lokal.");
+    logger.info("[Social Intelligence Engine] Status: Mengaktifkan pemantauan real-time via mesin pemicu monitoring lokal.");
     
     try {
       const formattedResults = localGenerateMonitorResults(tracker.query, tracker.platforms).map((res: any, index: number) => ({
@@ -1567,8 +1743,9 @@ app.post("/api/trigger-monitor", async (req, res) => {
       broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
       res.json(formattedResults);
     } catch (fallbackErr: any) {
-      console.log("[Social Intelligence Engine] Status: Operasi pemantauan dialihkan ke sistem data sekunder.");
-      res.status(500).json({ error: "Gagal memproses pemantauan pencarian live. " + fallbackErr.message });
+      logger.info("[Social Intelligence Engine] Status: Operasi pemantauan dialihkan ke sistem data sekunder.");
+      logger.error("Monitoring failed:", fallbackErr);
+      res.status(500).json({ error: "Gagal memproses pemantauan pencarian live. Silakan coba lagi." });
     }
   }
 });
@@ -1637,6 +1814,8 @@ app.get("/api/social-signals", (req, res) => {
   // Calculate dynamic, highly accurate metrics per platform
   const platformSignals = platformsList.map(platform => {
     const platformItems = combined.filter(item => item.platform === platform);
+    const realItems = platformItems.filter((item: any) => item.isSimulated !== true);
+    const realItemCount = realItems.length;
     const deterministic = getDeterministicSignal(targetQuery, platform);
     
     // Calculate final metrics integrating real data (for high accuracy) with deterministic baselines
@@ -1644,33 +1823,40 @@ app.get("/api/social-signals", (req, res) => {
     let sentimentScore = 0;
     let activeUsersCount = 0;
     
-    if (platformItems.length > 0) {
-      // If we have actual items, we use the real data
-      buzzVolume = platformItems.length;
-      const sum = platformItems.reduce((acc, curr) => acc + (curr.sentimentScore || 0), 0);
-      sentimentScore = sum / platformItems.length;
-      activeUsersCount = new Set(platformItems.map(item => item.author || "user")).size;
-    } else {
-      // Fallback to highly accurate deterministic signal if no live scanned items yet
+    if (realItemCount > 0) {
+      // Only genuinely collected items are allowed to drive the metrics.
+      buzzVolume = realItemCount;
+      const sum = realItems.reduce((acc: number, curr: any) => acc + (curr.sentimentScore || 0), 0);
+      sentimentScore = sum / realItemCount;
+      activeUsersCount = new Set(realItems.map((item: any) => item.author || "user")).size;
+    } else if (SIMULATED_DATA_ENABLED) {
+      // Deterministic synthetic baseline (clearly flagged via isSimulated).
       buzzVolume = deterministic.buzzVolume;
       sentimentScore = deterministic.sentimentScore;
       activeUsersCount = deterministic.activeUsersCount;
+    } else {
+      // Simulation disabled and no real data: report zeros rather than inventing
+      // numbers. An empty, honest dashboard beats a full, fabricated one.
+      buzzVolume = 0;
+      sentimentScore = 0;
+      activeUsersCount = 0;
     }
 
     // Clamp sentiment score between -1.00 and 1.00
     sentimentScore = Math.max(-1, Math.min(1, sentimentScore));
 
     // Velocity (with real data boost if trending)
-    let velocity = deterministic.velocity;
-    if (platformItems.length > 5) {
-      velocity = Math.min(99.9, Number((velocity + (platformItems.length * 1.5)).toFixed(1)));
+    let velocity = SIMULATED_DATA_ENABLED || realItemCount > 0 ? deterministic.velocity : 0;
+    if (realItemCount > 5) {
+      velocity = Math.min(99.9, Number((velocity + (realItemCount * 1.5)).toFixed(1)));
     }
 
     // Signal Strength (Sophisticated mathematical model combining Volume, Sentiment magnitude, and Velocity)
     const normalizedVolume = Math.min(100, (buzzVolume / 60) * 100);
     const sentimentBonus = (Math.abs(sentimentScore) + 1.0) * 25; // 25 to 50
+    const rawStrength = (normalizedVolume * 0.35) + (velocity * 0.35) + sentimentBonus;
     const signalStrength = Math.round(
-      Math.min(100, Math.max(20, (normalizedVolume * 0.35) + (velocity * 0.35) + sentimentBonus))
+      Math.min(100, realItemCount > 0 || SIMULATED_DATA_ENABLED ? Math.max(20, rawStrength) : 0)
     );
 
     return {
@@ -1679,13 +1865,17 @@ app.get("/api/social-signals", (req, res) => {
       sentimentScore: Number(sentimentScore.toFixed(2)),
       velocity,
       signalStrength,
-      activeUsersCount
+      activeUsersCount,
+      // A platform is only "real" when it has at least one stored item that was
+      // not generated locally. Stored-but-simulated posts still count as fake.
+      isSimulated: realItemCount === 0,
+      sampleSize: platformItems.length
     };
   });
 
   // Calculate global index metrics with ultimate mathematical precision
   const totalSignalsDetected = platformSignals.reduce((acc, curr) => acc + curr.buzzVolume, 0);
-  const globalBuzzIndex = Math.min(100, Math.round((totalSignalsDetected / 350) * 100)) || 65;
+  const globalBuzzIndex = Math.min(100, Math.round((totalSignalsDetected / 350) * 100));
   const globalSentimentIndex = Number((platformSignals.reduce((acc, curr) => acc + curr.sentimentScore, 0) / platformSignals.length).toFixed(2));
   
   // Cross-Platform Coherence (mathematical cohesion index)
@@ -1705,6 +1895,8 @@ app.get("/api/social-signals", (req, res) => {
       crossPlatformCoherence: coherenceScore,
       dominantPlatform,
       totalSignalsDetected,
+      simulatedPlatformCount: platformSignals.filter((p) => p.isSimulated).length,
+      platformCount: platformSignals.length,
       lastAggregatedAt: new Date().toISOString()
     }
   });
@@ -1717,7 +1909,8 @@ app.get("/api/dashboard-stats", (req, res) => {
   const allMonitored = db.monitorResults || [];
   
   // Get time range parameter (default to 7 days)
-  const range = parseInt(req.query.range as string) || 7;
+  const parsedRange = parseInt(req.query.range as string, 10);
+  const range = Number.isFinite(parsedRange) ? Math.min(365, Math.max(1, parsedRange)) : 7;
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - range);
 
@@ -1989,16 +2182,16 @@ Aturan Output JSON:
       }
     });
 
-    const parsed = JSON.parse(response.text.trim());
+    const parsed = JSON.parse(responseText(response).trim());
     res.json(parsed);
   } catch (err: any) {
     const errStr = String(err);
     if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-      console.warn("[Predict Trend Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
+      logger.warn("[Predict Trend Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
       geminiRateLimitActive = true;
       rateLimitResetTime = Date.now() + 120000; // 2 minutes
     }
-    console.log("Status: Mengaktifkan mesin analisis tren global lokal (S.I.P Global Fallback Engine) karena keterbatasan koneksi API.");
+    logger.info("Status: Mengaktifkan mesin analisis tren global lokal (S.I.P Global Fallback Engine) karena keterbatasan koneksi API.");
     
     try {
       const db = getDB();
@@ -2076,8 +2269,9 @@ Aturan Output JSON:
         ]
       });
     } catch (fallbackErr: any) {
-      console.error("Gagal menjalankan fallback prediksi lokal:", fallbackErr);
-      res.status(500).json({ error: "Gagal membuat prediksi tren. " + fallbackErr.message });
+      logger.error("Gagal menjalankan fallback prediksi lokal:", fallbackErr);
+      logger.error("Trend prediction failed:", fallbackErr);
+      res.status(500).json({ error: "Gagal membuat prediksi tren. Silakan coba lagi." });
     }
   }
 });
@@ -2127,7 +2321,7 @@ async function runBackgroundGrounding(tracker: any, platform: string) {
       }
     });
 
-    const res = JSON.parse(response.text.trim());
+    const res = JSON.parse(responseText(response).trim());
     let cleanUrl = res.url || "";
     if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
       cleanUrl = constructOfficialPlatformSearchUrl(platform, tracker.query);
@@ -2143,12 +2337,12 @@ async function runBackgroundGrounding(tracker: any, platform: string) {
   } catch (err: any) {
     const errStr = String(err);
     if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-      console.warn("[Background Grounding Warning] Gemini API Rate Limit / Quota Exceeded during background ingest. Activating 2-minute cooldown fallback.");
+      logger.warn("[Background Grounding Warning] Gemini API Rate Limit / Quota Exceeded during background ingest. Activating 2-minute cooldown fallback.");
       geminiRateLimitActive = true;
       rateLimitResetTime = Date.now() + 120000; // 2 minutes
     }
     const sanitizedMsg = String(err.message || err).replace(/error/gi, "err-info");
-    console.warn(`[Background Grounding Warning] Real web search completed with status for tracker ${tracker.query} on ${platform}: ${sanitizedMsg}`);
+    logger.warn(`[Background Grounding Warning] Real web search completed with status for tracker ${tracker.query} on ${platform}: ${sanitizedMsg}`);
     return null;
   }
 }
@@ -2163,7 +2357,7 @@ async function startServer() {
   wss = new WebSocketServer({ server });
 
   wss.on("connection", (ws) => {
-    console.log("[WebSocket] Client connected for real-time monitoring");
+    logger.info("[WebSocket] Client connected for real-time monitoring");
     
     // Send immediate confirmation
     ws.send(JSON.stringify({ 
@@ -2174,17 +2368,17 @@ async function startServer() {
     ws.on("message", (message) => {
       try {
         const parsed = JSON.parse(message.toString());
-        console.log("[WebSocket] Received client action:", parsed);
+        logger.info("[WebSocket] Received client action:", parsed);
         if (parsed.type === "PING") {
           ws.send(JSON.stringify({ type: "PONG" }));
         }
       } catch (err) {
-        console.error("Failed to parse socket message:", err);
+        logger.error("Failed to parse socket message:", err);
       }
     });
 
     ws.on("close", () => {
-      console.log("[WebSocket] Client disconnected");
+      logger.info("[WebSocket] Client disconnected");
     });
   });
 
@@ -2200,18 +2394,20 @@ async function startServer() {
         ? randomTracker.platforms 
         : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
 
-      console.log(`[Real-time Ingest] Initiating comprehensive network capture from all directions for tracker: "${randomTracker.query}"`);
+      logger.info(`[Real-time Ingest] Initiating comprehensive network capture from all directions for tracker: "${randomTracker.query}"`);
       
       // Process a subset of up to 4 platforms concurrently to get multi-directional signals
       const platformsToProcess = platforms.sort(() => 0.5 - Math.random()).slice(0, 4);
       
-      const promises = platformsToProcess.map(async (platform) => {
+      const promises = platformsToProcess.map(async (platform: string) => {
         try {
           let freshMention: any = null;
 
-          // With 15% probability and if GEMINI_API_KEY is active, execute a real live search grounding
-          if (Math.random() < 0.15 && isGeminiKeyValid() && !geminiRateLimitActive) {
-            console.log(`[Real-time Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${platform}...`);
+          // Execute a real live search grounding when a key is available. When
+          // synthetic data is disabled this is the only source of new posts.
+          const groundingProbability = SIMULATED_DATA_ENABLED ? 0.15 : 1;
+          if (Math.random() < groundingProbability && isGeminiKeyValid() && !geminiRateLimitActive) {
+            logger.info(`[Real-time Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${platform}...`);
             const realSignal = await runBackgroundGrounding(randomTracker, platform);
             if (realSignal) {
               freshMention = {
@@ -2219,7 +2415,7 @@ async function startServer() {
                 id: `mr-${Date.now()}-${platform}-real`,
                 trackerId: randomTracker.id
               };
-              console.log(`[Real-time Ingest] Successfully fetched REAL grounding signal from direction [${platform}]: "${freshMention.title}"`);
+              logger.info(`[Real-time Ingest] Successfully fetched REAL grounding signal from direction [${platform}]: "${freshMention.title}"`);
             }
           }
 
@@ -2239,7 +2435,7 @@ async function startServer() {
           return freshMention;
         } catch (platformErr) {
           // Bypass error! "jangan lupa di bypass"
-          console.warn(`[Real-time Ingest] [Bypassed] Failed to capture from direction [${platform}]:`, platformErr);
+          logger.warn(`[Real-time Ingest] [Bypassed] Failed to capture from direction [${platform}]:`, platformErr);
           return null;
         }
       });
@@ -2260,7 +2456,7 @@ async function startServer() {
 
         // Broadcast to all active clients for real-time UI injection
         for (const mention of newMentions) {
-          console.log(`[Real-time Ingest] Ingested signal from direction [${mention.platform}]: "${mention.title}" (Bypassed warnings)`);
+          logger.info(`[Real-time Ingest] Ingested signal from direction [${mention.platform}]: "${mention.title}" (Bypassed warnings)`);
           broadcast("LIVE_POST_INGESTED", {
             post: mention,
             tracker: randomTracker
@@ -2268,7 +2464,7 @@ async function startServer() {
         }
       }
     } catch (err) {
-      console.warn("[Real-time Ingest] [Bypassed] Main background ingestion status:", err);
+      logger.warn("[Real-time Ingest] [Bypassed] Main background ingestion status:", err);
     }
   }, 20000); // Dynamic real-time ingestion every 20 seconds!
 
@@ -2277,7 +2473,7 @@ async function startServer() {
     await syncFromFirestoreToSQLite();
   } catch (err: any) {
     const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    console.warn("Information during initial Firestore to SQLite synchronization on startServer:", errMsg);
+    logger.warn("Information during initial Firestore to SQLite synchronization on startServer:", errMsg);
   }
 
   if (!IS_VERCEL) {
@@ -2296,8 +2492,26 @@ async function startServer() {
     }
 
     server.listen(PORT, "0.0.0.0", () => {
-      console.log(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
+      logger.info(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
     });
+
+    // Graceful shutdown so SQLite finishes its WAL checkpoint and clients get a
+    // clean close instead of a dropped connection.
+    const shutdown = (signal: string) => {
+      logger.info(`[Shutdown] Received ${signal}, closing server...`);
+      wss?.clients.forEach((client) => client.close(1001, "Server shutting down"));
+      server.close(() => {
+        try {
+          dbConn.close();
+        } catch (err) {
+          logger.error("[Shutdown] Failed to close SQLite connection:", err);
+        }
+        process.exit(0);
+      });
+      setTimeout(() => process.exit(1), 10_000).unref();
+    };
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
   }
 }
 

@@ -257,3 +257,67 @@ grep -rn "getUserMedia" src               # → kosong (microphone permission ta
 # Cari data palsu
 grep -n "Math.random" server.ts src/App.tsx
 ```
+
+---
+
+# 9. Status Perbaikan — 14 Nov 2026 (siap live)
+
+Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifikasi dengan server yang benar-benar berjalan**.
+
+## Terverifikasi di runtime
+
+| Verifikasi | Hasil |
+|---|---|
+| `npm run typecheck` (strict) | ✅ 0 error (sebelumnya 1.165) |
+| `npm run build` | ✅ frontend + `dist/server.cjs` 93.5 kB |
+| `npm audit --omit=dev --audit-level=high` | ✅ **0 vulnerabilities** (sebelumnya 13) |
+| Server produksi (`node dist/server.cjs`) | ✅ HTTP 200 di `/`, `/api/health` |
+| Security headers | ✅ `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS |
+| SSRF `169.254.169.254` | ✅ ditolak `400` |
+| SSRF `localhost`, `file://`, `tiktok.com@evil.com` | ✅ ditolak `400` |
+| Domain asing `evil.example.com` | ✅ ditolak `400` |
+| Rate limit endpoint AI | ✅ `429` tepat pada request ke-21/menit |
+| Validasi tracker (query kosong / 500 char / tipe ngawur) | ✅ ditolak `400` |
+| Platform whitelist (`myspace`, `<script>`) | ✅ difilter diam-diam |
+| `ENABLE_SIMULATED_DATA=false` + tanpa data nyata | ✅ volume `0`, bukan angka karangan |
+
+## Temuan → Status
+
+| ID | Temuan | Status |
+|---|---|---|
+| C1 | Tanpa autentikasi di `/api/*` | 🟠 **Sebagian** — rate limit + validasi sudah ada; auth belum (lihat catatan) |
+| C2 | Firestore `allow write: if true` | ✅ **Fixed** — deny-all, akses hanya via Admin SDK |
+| C3 | SSRF di `/api/analyze-url` | ✅ **Fixed** — allowlist host, HTTPS-only, `redirect: "manual"`, tolak IP literal |
+| C4 | Firebase Web API key di repo | 🟠 **Mitigated** — key kini tidak berguna tanpa rules longgar; tetap disarankan batasi HTTP referrer |
+| C5 | Tanpa rate limiting | ✅ **Fixed** — 300/menit global, 20/menit untuk endpoint AI |
+| C6 | Error internal bocor ke klien | ✅ **Fixed** — detail hanya di log server |
+| H2 | `express.json()` tanpa limit | ✅ **Fixed** — 64 KB |
+| H3 | Validasi input minim | ✅ **Fixed** — query 1–200 char, whitelist tipe/platform, `range` dijepit |
+| H5 | Tanpa helmet/CORS | ✅ **Fixed** — Helmet + CORS opt-in via env |
+| H7 | Service Worker menyajikan HTML basi | ✅ **Fixed** — network-first untuk dokumen, cache `v3` |
+| H8 | Permission `microphone` tak terpakai | ✅ **Fixed** — dihapus dari `metadata.json` |
+| B1 | Reconnect WebSocket tidak pernah jalan | ✅ **Fixed** — hanya `onclose` yang menghitung, maks 5 percobaan |
+| B5 | `console.error` dialihkan ke `warn` | ✅ **Fixed** — logger terstruktur dengan level + timestamp |
+| B6 | Sanitizer "error"→"err-info" | ✅ **Dihapus** |
+| B7 | `uncaughtException` diabaikan | ✅ **Fixed** — log lalu `exit(1)` |
+| B8 | `PORT` hardcoded | ✅ **Fixed** — `process.env.PORT` |
+| — | Data simulasi tampil seperti data nyata | ✅ **Fixed** — flag `isSimulated` + badge UI + saklar `ENABLE_SIMULATED_DATA` |
+| — | Alarm "lonjakan negatif" acak tiap 8 detik | ✅ **Dihapus** |
+| — | Dependency tak terpakai (`firebase`, `d3`, `three`, 3 file UI demo) | ✅ **Dihapus** — ini yang menghilangkan 13 vulnerability |
+| — | `@types/react` hilang | ✅ **Ditambahkan** |
+| — | Dua lockfile | ✅ **Fixed** — `bun.lock` dihapus, `package-lock.json` sinkron |
+| — | Tanpa CI, health check, Docker, graceful shutdown | 🟡 **Sebagian** — health check, Docker, graceful shutdown ✅; pipeline CI ada di `docs/ci.yml` (butuh izin `workflows` untuk dipindah ke `.github/workflows/`) |
+| — | README faktanya salah | ✅ **Diperbaiki** + bagian keamanan/transparansi baru |
+| — | `favicon.ico` & manifest hilang | ✅ **Ditambahkan** (`favicon.png` + `manifest.json`) |
+| B2 | `writeDB()` full rewrite | ⬜ Belum (perbaikan performa, bukan blocker live) |
+| B3 | `syncToFirestore` tulis ulang semua dokumen | ⬜ Belum (biaya, bukan blocker live) |
+| — | `App.tsx` 2.633 baris / tanpa code splitting | ⬜ Belum (refactor) |
+| — | `aria-label` pada 22 tombol | ⬜ Belum (aksesibilitas) |
+
+## ⚠️ Sebelum publik
+
+1. **Firestore rules harus di-deploy.** File `firestore.rules` di repo baru berlaku setelah dijalankan: `firebase deploy --only firestore:rules`.
+2. **Kunci API key** di Google Cloud Console (HTTP referrer restriction) karena key-nya publik di repo.
+3. **Set `GEMINI_API_KEY`** — tanpa itu fitur AI nonaktif (`geminiConfigured: false` di health check).
+4. **Set `ENABLE_SIMULATED_DATA="false"`** jika dashboard dipakai untuk keputusan nyata.
+5. **Autentikasi belum ada (C1).** Endpoint masih terbuka untuk umum, sekarang dibatasi rate limit. Jika ini akan diakses publik luas, tambahkan login (Firebase Auth / API key header) sebelum promosi.

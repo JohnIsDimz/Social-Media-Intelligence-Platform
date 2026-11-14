@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.github
+src/data
+*.sqlite*
+.env
+.env.*
+!.env.example
+AUDIT.md

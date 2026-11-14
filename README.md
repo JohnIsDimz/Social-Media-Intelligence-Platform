@@ -9,7 +9,7 @@ Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform
 Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang menjamin penyajian data secara instan, interaktif, dan andal.
 
 ### 1. Antarmuka Pengguna (Frontend Stack)
-*   **React 18 & Vite**: Kerangka kerja utama dengan bundler ultra-cepat untuk rendering visual yang responsif.
+*   **React 19 & Vite**: Kerangka kerja utama dengan bundler ultra-cepat untuk rendering visual yang responsif.
 *   **Tailwind CSS**: Desain visual presisi tinggi dengan pendekatan modern, kontras yang seimbang, dan ramah pengguna.
 *   **Recharts & D3**: Komponen visualisasi interaktif untuk grafik tren sentimen, sebaran emosi (joy, sadness, anger, dll), serta perbandingan pangsa suara (*share of voice*).
 *   **Framer Motion (motion/react)**: Animasi transisi antar-elemen yang halus, denyut emosi (*emotion pulse*), dan efek transisi panel yang elegan.
@@ -32,14 +32,15 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 *   **Reddit Public API (Bebas Autentikasi)**: S.M.I.P memanfaatkan endpoint publik Reddit (`.json`) secara dinamis tanpa kredensial sama sekali untuk menarik postingan teranyar secara instan dan riil.
 
 ### 4. Penyimpanan Data (Database)
-*   **db.json**: Database berbasis file lokal cepat untuk menyimpan daftar pelacakan (*trackers*), log anomali, dan ringkasan tren. Di lingkungan serverless (seperti Vercel), penyimpanan ini secara cerdas dialihkan ke folder `/tmp` agar penulisan data tidak terhambat.
+*   **SQLite (`better-sqlite3`)**: Penyimpanan utama untuk *trackers*, analyzed posts, dan monitor results. Di lingkungan serverless (Vercel) file database dialihkan ke `/tmp`; di deployment persisten tersimpan di `src/data/database.sqlite` (tidak di-commit).
+*   **Firestore (opsional)**: Sinkronisasi lewat Firebase Admin SDK. Jika kredensial tidak tersedia, aplikasi tetap berjalan penuh dengan cache SQLite lokal.
 
 ---
 
 ## 🔔 Sistem Notifikasi Latar Belakang (Background Notification)
 
 S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service Worker**. 
-*   **Cara Kerja**: Saat backend berjalan di latar belakang dan melakukan *auto-polling* data live, sistem memancarkan event ke frontend. Jika tab browser terbuka, notifikasi browser langsung dikirim. Jika browser ditutup atau berjalan di latar belakang, **Service Worker** (`/sw.js`) yang terdaftar akan menangkap sinyal push dan menampilkan notifikasi pop-up sistem operasi.
+*   **Cara Kerja**: Saat backend mendeteksi sinyal baru, event dikirim lewat WebSocket (atau auto-polling 8 detik bila WebSocket gagal). Selama tab browser masih terbuka — termasuk di latar belakang — notifikasi desktop ditampilkan via Notifications API. **Catatan:** notifikasi *saat browser benar-benar ditutup* memerlukan Web Push (VAPID + endpoint server pengirim push) yang belum diimplementasikan di versi ini.
 *   **Cara Mengaktifkan**:
     1.  Buka aplikasi S.M.I.P di browser Anda.
     2.  Klik tombol **NOTIF_OFF** (berlogo lonceng redup) di bagian kanan atas header.
@@ -47,6 +48,33 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
     4.  Status akan berubah menjadi **NOTIF_ON** dengan ikon lonceng biru berdenyut aktif.
 
 ---
+
+## 🔐 Keamanan & Transparansi Data
+
+### Yang sudah diterapkan
+*   **SSRF protection**: `/api/analyze-url` hanya boleh mengambil (HTTPS, tanpa redirect) tautan dari domain media sosial yang di-allowlist. Alamat IP internal, `localhost`, kredensial di URL, dan port kustom ditolak dengan `400`.
+*   **Security headers** via Helmet (`X-Frame-Options`, `X-Content-Type-Options`, HSTS, `Referrer-Policy`), `X-Powered-By` disembunyikan.
+*   **Rate limiting**: 300 req/menit per IP untuk seluruh `/api`, dan **20 req/menit** untuk endpoint berbayar (analisis AI, trigger monitor, prediksi tren).
+*   **Validasi input**: request body dibatasi 64 KB, `query` tracker 1–200 karakter, tipe & platform di-whitelist, parameter `range` dijepit ke 1–365.
+*   **Error tidak bocor**: kegagalan internal dicatat di server, klien hanya menerima pesan generik.
+*   **Firestore tertutup**: `firestore.rules` menolak semua akses dari klien (`allow read, write: if false`). Semua akses lewat Admin SDK di server.
+*   **Tanpa dependency rentan**: `npm audit --omit=dev` → **0 vulnerabilities**.
+
+### Transparansi data (penting!)
+S.M.I.P dapat berjalan dalam dua mode, dikendalikan `ENABLE_SIMULATED_DATA`:
+
+| Mode | Perilaku |
+|---|---|
+| `true` (default, demo) | Jika data nyata tidak tersedia, engine membuat *sinyal simulasi*. Setiap record diberi `isSimulated: true` dan UI menampilkan badge **SIMULASI** berwarna kuning. |
+| `false` (produksi) | Tidak ada data yang dikarang. Platform tanpa data nyata melaporkan volume `0` dan ditandai `isSimulated: true`. |
+
+> **Rekomendasi:** untuk deployment publik yang dipakai mengambil keputusan, set `ENABLE_SIMULATED_DATA="false"` dan sediakan `GEMINI_API_KEY`. Dashboard kosong lebih baik daripada dashboard yang berisi angka karangan.
+
+### Variabel lingkungan
+Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Gemini, port, CORS, trust proxy, Firestore, sumber data opsional, dan saklar simulasi).
+
+### Health check
+`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, simulatedDataEnabled }`. Cocok untuk load balancer dan uptime monitor.
 
 ## 💻 Cara Menjalankan Secara Lokal (Local Development)
 
