@@ -32,8 +32,9 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 *   **Reddit Public API (Bebas Autentikasi)**: S.M.I.P memanfaatkan endpoint publik Reddit (`.json`) secara dinamis tanpa kredensial sama sekali untuk menarik postingan teranyar secara instan dan riil.
 
 ### 4. Penyimpanan Data (Database)
-*   **SQLite via `node:sqlite`** (modul bawaan Node 22, tanpa modul native): penyimpanan utama untuk trackers, analyzed posts, dan monitor results. Di lingkungan serverless (Vercel) file dialihkan ke `/tmp`; di VPS tersimpan di `src/data/database.sqlite` dan harus di-mount sebagai volume (tidak di-commit).
-*   **Firestore (opsional)**: mirror lewat Firebase Admin SDK, sifatnya **inkremental**: setiap perubahan lokal mencatat dokumen yang berubah ke antrean (`src/lib/firestoreMirror.ts`), lalu antrean itu di-flush dalam batch maksimal 200 tulisan setiap 1,5 detik. Tidak ada pembacaan koleksi dan tidak ada penulisan ulang seluruh mirror, sehingga biaya Firestore sebanding dengan jumlah perubahan, bukan jumlah data. Bila kredensial tidak tersedia, mirror dimatikan sekali dan aplikasi tetap berjalan penuh dengan SQLite lokal.
+*   **Supabase (Postgres) sebagai satu-satunya penyimpanan.** Akses lewat REST API PostgREST dengan `@supabase/supabase-js` dan `service_role` key di server. Tidak ada database lokal, tidak ada file SQLite, tidak ada Firebase: container bersifat stateless dan bisa dibuang kapan saja tanpa kehilangan data. Skema ada di [`supabase/schema.sql`](supabase/schema.sql), panduan lengkap di [`docs/SUPABASE.md`](docs/SUPABASE.md).
+*   **Penulisan idempoten dan hemat**: semua simpan adalah upsert per `id`, kiriman dikirim per 200 baris, riwayat dipangkas otomatis (1.000 mention, 200 analisis) berdasarkan daftar `id`.
+*   **Gagal dengan jujur**: bila Supabase tidak dikonfigurasi atau tidak terjangkau, endpoint baca membalas `[]` dengan header `X-Data-Status: unavailable`, `/api/health` membalas `503` + alasan, dan dashboard menampilkan spanduk. Tidak ada baris yang dikarang.
 
 ---
 
@@ -57,7 +58,7 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 *   **Rate limiting**: 300 req/menit per IP untuk seluruh `/api`, dan **20 req/menit** untuk endpoint berbayar (analisis AI, trigger monitor, prediksi tren).
 *   **Validasi input**: request body dibatasi 64 KB, `query` tracker 1–200 karakter, tipe & platform di-whitelist, parameter `range` dijepit ke 1–365.
 *   **Error tidak bocor**: kegagalan internal dicatat di server, klien hanya menerima pesan generik.
-*   **Firestore tertutup**: `firestore.rules` menolak semua akses dari klien (`allow read, write: if false`). Semua akses lewat Admin SDK di server.
+*   **Tabel tertutup untuk publik**: `supabase/schema.sql` mengaktifkan Row Level Security tanpa policy dan mencabut hak `anon`/`authenticated`. Kunci `service_role` hanya ada di server, tidak pernah dikirim ke browser.
 *   **Tanpa dependency rentan**: `npm audit --omit=dev` → **0 vulnerabilities**.
 
 ### Penyedia AI
@@ -95,7 +96,7 @@ Deteksi egress: sebelum menyalahkan API, server memeriksa apakah host-nya sendir
 **Catatan hasil audit di sandbox pengembangan ini:** egress HTTP keluar dari sandbox hanya diizinkan untuk domain tertentu (allowlist sandbox menolak `api.sakelar.web.id` saat TLS handshake), sehingga `reddit.com`, `hn.algolia.com`, `news.google.com`, `public.api.bsky.app`, `stackexchange.com`, `dev.to`, dan lainnya mengembalikan `ECONNRESET`; `api.github.com` mengembalikan `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (intercept TLS). Artinya **di sandbox ini dashboard tetap kosong**, sedangkan di host biasa (VPS, Cloud Run, Railway, laptop) kolektor publik akan langsung berjalan tanpa kunci API apa pun.
 
 **Titik mati yang ditemukan dan sudah diperbaiki:**
-* Database gagal boot bila native binding `better-sqlite3` tidak tersedia untuk versi Node yang dipakai (persis yang terjadi di produksi/container baru). Diganti adapter `node:sqlite` (`src/lib/sqlite.ts`) yang mengimplementasikan `prepare/run/all/get/exec/pragma/transaction/close`, jadi server tidak lagi bergantung pada build native.
+* Database lokal membuat container stateful: file harus di-volume, di-backup, dan hilang saat host diganti. Seluruh penyimpanan kini di Supabase, jadi satu proses Node tanpa state apa pun sudah cukup.
 * `constructOfficialPlatformSearchUrl` terhapus bersama generator simulasi tetapi masih dipakai jalur grounding → `ReferenceError` saat grounding dipanggil. Dipulihkan dan diperluas ke seluruh kanal.
 * `@keyframes pulse-soft` tersisa separuh setelah titik berkedip dihapus → Tailwind gagal mem-parse `src/index.css` ("Missing opening {"). Dibersihkan.
 * `ALLOWED_PLATFORMS` hanya berisi 8 kanal, sehingga kanal baru ditolak diam-diam saat tracker dibuat. Kini bersumber dari katalog bersama `src/channels.ts`.
@@ -119,7 +120,7 @@ Konsekuensinya:
 Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pada setiap `POST`/`PUT`/`PATCH`/`DELETE` di bawah `/api`. Rute `GET` tetap publik agar dashboard dan uptime check tidak perlu menyimpan token. Perbandingan token memakai `timingSafeEqual`. Bila variabel kosong (mode pengembangan lokal), auth dimatikan.
 
 ### Variabel lingkungan
-Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (AI gateway, port, CORS, trust proxy, Firestore, dan sumber data opsional).
+Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Supabase, AI gateway, port, CORS, trust proxy, dan sumber data opsional).
 
 ### Health check
 `GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
@@ -137,8 +138,8 @@ curl -s localhost:3000/api/health | jq
 
 Yang sudah disiapkan untuk produksi:
 * `Dockerfile` 3-stage tanpa toolchain native (tidak ada modul C yang perlu dikompilasi), user non-root, healthcheck ke `/api/health`.
-* `docker-compose.yml` — port hanya di-bind ke `127.0.0.1`, volume untuk SQLite, log diputar 3×10 MB, `no-new-privileges`.
-* `deploy/smip.service` — unit systemd dengan `ProtectSystem=strict` dan akses tulis hanya ke `src/data`.
+* `docker-compose.yml` — port hanya di-bind ke `127.0.0.1`, tanpa volume (stateless), log diputar 3×10 MB, `no-new-privileges`.
+* `deploy/smip.service` — unit systemd dengan `ProtectSystem=strict`; aplikasi tidak menulis apa pun ke disk.
 * `deploy/nginx.conf` — TLS, HSTS, upgrade `/ws`, cache `/assets` setahun, `X-Forwarded-For` agar rate limit memakai IP asli.
 * CSP via helmet (self + Google Fonts), `X-Frame-Options`, `X-Content-Type-Options`, dan JSON 404 untuk rute `/api` yang tidak dikenal.
 
@@ -163,8 +164,8 @@ Buka `http://localhost:3000` di browser Anda untuk masuk ke antarmuka dashboard 
 
 ```bash
 npm run verify   # type-check + unit test + build
-npm test         # unit test antrean mirror Firestore (tanpa jaringan/kredensial)
+npm test         # unit test lapisan Supabase (tanpa proyek/kredensial sungguhan)
 npm run lint     # type-check saja
 ```
 
-Unit test di `tests/mirror.test.ts` memakai klien Firestore palsu: yang diuji adalah dokumen mana yang ditulis untuk sekumpulan perubahan lokal (dedup, batch, delete, kegagalan transien, backlog, shutdown).
+Unit test di `tests/supabase.test.ts` menjalankan kode `src/lib/supabaseDb.ts` terhadap server PostgREST tiruan di localhost: bentuk baris camelCase vs kolom snake_case, upsert yang idempoten, hapus tracker beserta mention-nya, penggantian hasil scan, pemangkasan riwayat, pemecahan 450 baris menjadi 3 permintaan, serta empat kondisi gagal (belum dikonfigurasi, tidak terjangkau, tabel belum ada, normal).

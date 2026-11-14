@@ -23,12 +23,11 @@ ExecStart=/usr/bin/node dist/server.cjs
 Restart=always
 RestartSec=5
 
-# Hardening: the app only needs to write its SQLite cache.
+# Hardening: the app writes nothing to disk — storage is Supabase over HTTPS.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/smip/src/data
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

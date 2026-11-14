@@ -18,13 +18,20 @@ import {
   AiError,
 } from "./src/lib/aiProvider.ts";
 import {
-  createFirestoreMirror,
-  seedOperations,
-  toAnalyzedDoc,
-  toMentionDoc,
-  toTrackerDoc,
-  type MirrorOp
-} from "./src/lib/firestoreMirror.ts";
+  dbConfigSummary,
+  dbStatus,
+  listTrackers,
+  listAnalyzedPosts,
+  listMentions,
+  loadDatabase,
+  pingDatabase,
+  pruneHistories,
+  removeTracker,
+  replaceTrackerMentions,
+  upsertAnalyzedPost,
+  upsertMentions,
+  upsertTracker,
+} from "./src/lib/supabaseDb.ts";
 
 dotenv.config();
 
@@ -222,655 +229,94 @@ function describeAiFailure(err: unknown): string {
   return String((err as any)?.message || err);
 }
 
-// Database: node:sqlite behind a small better-sqlite3-compatible adapter, so a
-// missing native binary can never stop the server from booting.
-import Database from "./src/lib/sqlite.ts";
-
-const IS_VERCEL = !!process.env.VERCEL;
-const SQLITE_DB_PATH = IS_VERCEL
-  ? path.join("/tmp", "database.sqlite")
-  : path.join(process.cwd(), "src", "data", "database.sqlite");
-
-// Ensure directory exists
-fs.mkdirSync(path.dirname(SQLITE_DB_PATH), { recursive: true });
-
-// Initialize database connection
-const dbConn = new Database(SQLITE_DB_PATH);
-
-// Enable WAL mode for better performance
-dbConn.pragma("journal_mode = WAL");
-
-// Setup clean empty tables
-dbConn.exec(`
-  CREATE TABLE IF NOT EXISTS trackers (
-    id TEXT PRIMARY KEY,
-    type TEXT,
-    query TEXT,
-    platforms TEXT,
-    createdAt TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS analyzed_posts (
-    id TEXT PRIMARY KEY,
-    url TEXT,
-    platform TEXT,
-    title TEXT,
-    description TEXT,
-    imageUrl TEXT,
-    sentiment TEXT,
-    sentimentScore REAL,
-    emotion TEXT,
-    engagement TEXT,
-    hashtags TEXT,
-    analyzedAt TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS monitor_results (
-    id TEXT PRIMARY KEY,
-    platform TEXT,
-    url TEXT,
-    author TEXT,
-    title TEXT,
-    content TEXT,
-    sentiment TEXT,
-    sentimentScore REAL,
-    emotion TEXT,
-    engagement TEXT,
-    date TEXT,
-    trackerId TEXT,
-    country TEXT,
-    latitude REAL,
-    longitude REAL
-  );
-`);
-
-// Indexes the targeted writes rely on: deletes and reads are always scoped by
-// tracker or by recency, so both get an index instead of a table scan.
-dbConn.exec(`
-  CREATE INDEX IF NOT EXISTS idx_mentions_tracker ON monitor_results(trackerId);
-  CREATE INDEX IF NOT EXISTS idx_mentions_date ON monitor_results(date);
-  CREATE INDEX IF NOT EXISTS idx_analyzed_date ON analyzed_posts(analyzedAt);
-`);
-
-// Run dynamic column additions if tables already exist but lack coordinates/country columns
-try {
-  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN country TEXT;");
-} catch (e) {}
-try {
-  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN latitude REAL;");
-} catch (e) {}
-try {
-  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN longitude REAL;");
-} catch (e) {}
-try {
-  dbConn.exec("ALTER TABLE monitor_results ADD COLUMN isSimulated INTEGER;");
-} catch (e) {}
-
 // ==========================================
-// FIREBASE / FIRESTORE SYNC LOGIC
+// DATABASE: SUPABASE (Postgres over REST)
 // ==========================================
-import { initializeApp, getApps, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
-
-let firebaseConfig: any = {};
-try {
-  let foundPath = "";
-  
-  // 1. Check process.cwd()
-  const cwdPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(cwdPath)) {
-    foundPath = cwdPath;
-  }
-
-  // 2. Check __dirname safely (without throwing ReferenceError if running as ES module in dev mode)
-  if (!foundPath) {
-    let resolvedDirname = "";
-    try {
-      resolvedDirname = __dirname;
-    } catch (e) {
-      // In ES modules __dirname is not defined
-    }
-    if (resolvedDirname) {
-      const parentDirConfig = path.join(resolvedDirname, "../firebase-applet-config.json");
-      const sameDirConfig = path.join(resolvedDirname, "firebase-applet-config.json");
-      if (fs.existsSync(parentDirConfig)) {
-        foundPath = parentDirConfig;
-      } else if (fs.existsSync(sameDirConfig)) {
-        foundPath = sameDirConfig;
-      }
-    }
-  }
-
-  // 3. Check absolute container paths
-  if (!foundPath) {
-    if (fs.existsSync("/app/firebase-applet-config.json")) {
-      foundPath = "/app/firebase-applet-config.json";
-    } else if (fs.existsSync("/firebase-applet-config.json")) {
-      foundPath = "/firebase-applet-config.json";
-    }
-  }
-
-  if (foundPath) {
-    firebaseConfig = JSON.parse(fs.readFileSync(foundPath, "utf-8"));
-    logger.info(`[Firebase Init] Successfully loaded config from absolute path: ${foundPath}`);
-  } else {
-    logger.warn("[Firebase Init] firebase-applet-config.json not found in any standard path.");
-  }
-} catch (err) {
-  logger.warn("[Firebase Init] Failed to read firebase-applet-config.json locally:", err);
-}
-
-if (!getApps().length) {
-  let adminCredential: any = null;
-
-  // Supports initializing with a service account on external hosting providers like Railway
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    try {
-      const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      adminCredential = cert(sa);
-      logger.info("[Firebase Init] Initializing with service account credential from FIREBASE_SERVICE_ACCOUNT_JSON.");
-    } catch (err) {
-      logger.error("[Firebase Init] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", err);
-    }
-  } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-    try {
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-      adminCredential = cert({
-        projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: privateKey,
-      });
-      logger.info("[Firebase Init] Initializing with service account credential from individual environment variables.");
-    } catch (err) {
-      logger.error("[Firebase Init] Failed to initialize with service account environment variables:", err);
-    }
-  }
-
-  const initOptions: any = {
-    projectId: firebaseConfig.projectId || process.env.FIREBASE_PROJECT_ID || "aplikasi-smip",
-  };
-
-  if (adminCredential) {
-    initOptions.credential = adminCredential;
-  }
-
-  initializeApp(initOptions);
-}
-
-let useDefaultDb = false;
-let disableFirestoreSync = false;
-
-// Globally handle unhandled rejections and uncaught exceptions to ensure the server never crashes
-process.on("unhandledRejection", (reason: any) => {
-  const reasonStr = String(reason?.stack || reason || "");
-  const isCredentialIssue =
-    reasonStr.includes("credentials") ||
-    reasonStr.includes("ADC") ||
-    reasonStr.includes("GoogleAuth") ||
-    reasonStr.includes("application_default_credentials");
-
-  if (isCredentialIssue) {
-    // Expected when Firebase is not configured. One line, then run on SQLite.
-    if (!disableFirestoreSync) {
-      logger.warn(
-        "[Firebase Sync] Firestore credentials unavailable — running on the local SQLite cache only."
-      );
-    }
-    disableFirestoreSync = true;
-    return;
-  }
-  logger.error("[Unhandled Rejection]", reason);
-});
-
-process.on("uncaughtException", (error: any) => {
-  // Never keep running after an uncaught exception: process state may be corrupt.
-  logger.error("[Uncaught Exception] shutting down", error);
-  process.exit(1);
-});
-
-function getFirestoreInstance() {
-  if (useDefaultDb) {
-    return getFirestore();
-  }
-  if (firebaseConfig.firestoreDatabaseId) {
-    try {
-      return getFirestore(firebaseConfig.firestoreDatabaseId);
-    } catch (err) {
-      logger.warn("[Firebase Sync] Failed to get named Firestore instance, falling back to default:", err);
-      useDefaultDb = true;
-      return getFirestore();
-    }
-  }
-  return getFirestore();
-}
-
-async function syncFromFirestoreToSQLite() {
-  if (disableFirestoreSync) {
-    logger.info("[Firebase Sync] Sync is disabled. Running on local SQLite cache.");
-    return;
-  }
-  try {
-    logger.info("[Firebase Sync] Loading initial database from Firestore...");
-    let db = getFirestoreInstance();
-    
-    // 1. Fetch Trackers (with dynamic fallback for the first operation)
-    let trackersSnap;
-    try {
-      trackersSnap = await db.collection("trackers").get();
-    } catch (err: any) {
-      const errMsg = String(err);
-      if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
-        logger.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
-        useDefaultDb = true;
-        try {
-          db = getFirestoreInstance();
-          trackersSnap = await db.collection("trackers").get();
-        } catch (innerErr) {
-          logger.warn("[Firebase Sync] Default database failed during init. Disabling Firestore sync and running locally.");
-          disableFirestoreSync = true;
-          return;
-        }
-      } else {
-        logger.warn("[Firebase Sync] Firestore query failed during init. Disabling Firestore sync and running locally.");
-        disableFirestoreSync = true;
-        return;
-      }
-    }
-    
-    const trackers: any[] = [];
-    trackersSnap.forEach((doc: any) => {
-      trackers.push({ id: doc.id, ...doc.data() });
-    });
-    
-    // 2. Fetch Analyzed Posts
-    const analyzedSnap = await db.collection("analyzed_posts").get();
-    const analyzedPosts: any[] = [];
-    analyzedSnap.forEach((doc: any) => {
-      analyzedPosts.push({ id: doc.id, ...doc.data() });
-    });
-    
-    // 3. Fetch Monitor Results (supports up to 1000 items)
-    const monitorSnap = await db.collection("monitor_results").get();
-    const monitorResults: any[] = [];
-    monitorSnap.forEach((doc: any) => {
-      monitorResults.push({ id: doc.id, ...doc.data() });
-    });
-
-    logger.info(`[Firebase Sync] Loaded from Firestore: ${trackers.length} trackers, ${analyzedPosts.length} analyzed posts, ${monitorResults.length} monitor results.`);
-
-    // If Firestore has data, overwrite our local SQLite database cache with it
-    if (trackers.length > 0 || analyzedPosts.length > 0 || monitorResults.length > 0) {
-      logger.info("[Firebase Sync] Populating local SQLite cache with Firestore data...");
-      
-      const syncTransaction = dbConn.transaction(() => {
-        // Clear local
-        dbConn.prepare("DELETE FROM trackers").run();
-        dbConn.prepare("DELETE FROM analyzed_posts").run();
-        dbConn.prepare("DELETE FROM monitor_results").run();
-        
-        // Insert trackers
-        const insertTracker = dbConn.prepare(
-          "INSERT INTO trackers (id, type, query, platforms, createdAt) VALUES (?, ?, ?, ?, ?)"
-        );
-        for (const t of trackers) {
-          insertTracker.run(t.id, t.type, t.query, JSON.stringify(t.platforms || []), t.createdAt);
-        }
-
-        // Insert analyzed posts
-        const insertAnalyzedPost = dbConn.prepare(
-          "INSERT INTO analyzed_posts (id, url, platform, title, description, imageUrl, sentiment, sentimentScore, emotion, engagement, hashtags, analyzedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
-        for (const ap of analyzedPosts) {
-          insertAnalyzedPost.run(
-            ap.id,
-            ap.url,
-            ap.platform,
-            ap.title,
-            ap.description,
-            ap.imageUrl,
-            ap.sentiment,
-            ap.sentimentScore,
-            ap.emotion,
-            ap.engagement,
-            JSON.stringify(ap.hashtags || []),
-            ap.analyzedAt
-          );
-        }
-
-        // Insert monitor results
-        const insertMonitorResult = dbConn.prepare(
-          "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        );
-        for (const mr of monitorResults) {
-          insertMonitorResult.run(
-            mr.id,
-            mr.platform,
-            mr.url,
-            mr.author,
-            mr.title,
-            mr.content,
-            mr.sentiment,
-            mr.sentimentScore,
-            mr.emotion,
-            mr.engagement,
-            mr.date,
-            mr.trackerId,
-            mr.country || "Global",
-            mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
-            mr.isSimulated === true ? 1 : 0
-          );
-        }
-      });
-      syncTransaction();
-      logger.info("[Firebase Sync] Local SQLite cache populated successfully!");
-    } else {
-      logger.info("[Firebase Sync] Firestore is empty. Initializing with local or default seed data...");
-      const localData = getDB();
-      await seedFirestoreMirror(localData);
-    }
-  } catch (err: any) {
-    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    logger.warn("[Firebase Sync] Information loading initial database from Firestore:", errMsg);
-  }
-}
-
-/* ---------------------------------------------------------------------------
- * Firestore mirror
- *
- * The old sync read every collection, diffed it in memory and rewrote every
- * document — the whole mirror on each change, and a billed read per document.
- * On a 1000-mention dataset that is thousands of Firestore operations for one
- * new mention.
- *
- * Instead the write helpers above record which documents actually changed
- * (set/delete) in a queue. The queue is flushed in debounced batches: one
- * commit per 200 operations, only the touched documents, no reads.
- * ------------------------------------------------------------------------- */
-
-const firestoreMirror = createFirestoreMirror({
-  getDb: () => getFirestoreInstance() as any,
-  onUnavailable: (reason) => {
-    logger.warn("[Firebase Sync] Firestore unavailable — mirror disabled, local SQLite only.", reason);
-    disableFirestoreSync = true;
-  },
-  onInfo: (message) => logger.info(message),
-  onWarn: (message, err) => logger.warn(message, err)
-});
-
-/** Records one changed document. Flushing is debounced and batched. */
-function queueMirrorOp(op: MirrorOp) {
-  if (disableFirestoreSync) return;
-  firestoreMirror.queue(op);
-}
+// SQLite and Firebase are gone. Every read and write goes to Supabase through
+// `src/lib/supabaseDb.ts`; the schema is `supabase/schema.sql`. When the
+// database is unreachable the API answers with empty data and a reason instead
+// of inventing numbers, and /api/health reports the connection state.
 
 /**
- * Seeds the mirror once, when the remote database is empty. This is the only
- * path that writes documents not produced by a local change, so it is capped.
+ * Loads the whole dataset for the aggregation endpoints.
+ *
+ * Aggregation happens in the API rather than in SQL because the dashboard needs
+ * the same numbers as the rows it shows; `ok`/`error` travel with the data so a
+ * failed query degrades to an honest empty state.
  */
-async function seedFirestoreMirror(data: any): Promise<boolean> {
-  if (disableFirestoreSync) return false;
-  try {
-    for (const op of seedOperations(data)) firestoreMirror.queue(op);
-    const written = await firestoreMirror.flushNow();
-    logger.info(`[Firebase Sync] Seeded ${written} document(s) into an empty Firestore.`);
-    return true;
-  } catch (err: any) {
-    logger.warn("[Firebase Sync] Could not seed the mirror:", err?.message || err);
-    return false;
-  }
-}
-
-function getDB() {
-  try {
-    const trackers = dbConn.prepare("SELECT * FROM trackers").all().map((t: any) => ({
-      ...t,
-      platforms: JSON.parse(t.platforms || "[]")
-    }));
-    
-    const analyzedPosts = dbConn.prepare("SELECT * FROM analyzed_posts").all().map((ap: any) => ({
-      ...ap,
-      sentimentScore: Number(ap.sentimentScore || 0),
-      hashtags: JSON.parse(ap.hashtags || "[]")
-    }));
-    
-    const monitorResults = dbConn.prepare("SELECT * FROM monitor_results").all().map((mr: any) => ({
-      ...mr,
-      sentimentScore: Number(mr.sentimentScore || 0),
-      country: mr.country || "Global",
-      latitude: mr.latitude !== null && mr.latitude !== undefined ? Number(mr.latitude) : null,
-      longitude: mr.longitude !== null && mr.longitude !== undefined ? Number(mr.longitude) : null,
-      isSimulated: mr.isSimulated === 1
-    }));
-
-    return { trackers, analyzedPosts, monitorResults };
-  } catch (err) {
-    logger.error("Error reading database from SQLite:", err);
-    return { trackers: [], analyzedPosts: [], monitorResults: [] };
-  }
+async function getDB() {
+  const data = await loadDatabase();
+  return {
+    trackers: data.trackers,
+    analyzedPosts: data.analyzedPosts,
+    monitorResults: data.monitorResults,
+    ok: data.ok,
+    error: data.error
+  };
 }
 
 /* ---------------------------------------------------------------------------
- * Targeted writes
- *
- * The old writeDB() deleted every row of every table and re-inserted the whole
- * in-memory snapshot on every mutation. On a VPS with a real dataset that means
- * a full table rewrite for a single added mention, and it briefly empties the
- * tables inside the transaction.
- *
- * Each mutation now touches only the rows it actually changed: upsert the one
- * record, delete the one row, or replace the results of one tracker. Writes are
- * wrapped in a transaction so a failure cannot leave a half-applied change.
+ * Writes go straight to Supabase. The helpers below keep the call sites readable
+ * and make the failure mode explicit: a write returns false on failure, and the
+ * caller decides whether that is worth reporting to the client.
  * ------------------------------------------------------------------------- */
 
-function runInTransaction<T>(fn: () => T): T {
-  return dbConn.transaction(fn)();
-}
-
-const SQL_UPSERT_TRACKER = `
-  INSERT INTO trackers (id, type, query, platforms, createdAt)
-  VALUES (?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    type = excluded.type,
-    query = excluded.query,
-    platforms = excluded.platforms,
-    createdAt = excluded.createdAt
-`;
-
-const SQL_UPSERT_ANALYZED = `
-  INSERT INTO analyzed_posts (id, url, platform, title, description, imageUrl, sentiment, sentimentScore, emotion, engagement, hashtags, analyzedAt)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    url = excluded.url,
-    platform = excluded.platform,
-    title = excluded.title,
-    description = excluded.description,
-    imageUrl = excluded.imageUrl,
-    sentiment = excluded.sentiment,
-    sentimentScore = excluded.sentimentScore,
-    emotion = excluded.emotion,
-    engagement = excluded.engagement,
-    hashtags = excluded.hashtags,
-    analyzedAt = excluded.analyzedAt
-`;
-
-const SQL_UPSERT_MENTION = `
-  INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    platform = excluded.platform,
-    url = excluded.url,
-    author = excluded.author,
-    title = excluded.title,
-    content = excluded.content,
-    sentiment = excluded.sentiment,
-    sentimentScore = excluded.sentimentScore,
-    emotion = excluded.emotion,
-    engagement = excluded.engagement,
-    date = excluded.date,
-    trackerId = excluded.trackerId,
-    country = excluded.country,
-    latitude = excluded.latitude,
-    longitude = excluded.longitude,
-    isSimulated = excluded.isSimulated
-`;
-
-function bindMention(stmt: any, mr: any) {
-  stmt.run(
-    mr.id,
-    mr.platform || "unknown",
-    mr.url || "",
-    mr.author || "",
-    mr.title || "",
-    mr.content || "",
-    mr.sentiment || "neutral",
-    Number(mr.sentimentScore || 0),
-    mr.emotion || "Neutral",
-    mr.engagement || "Low",
-    mr.date || new Date().toISOString(),
-    mr.trackerId || "",
-    mr.country || "Global",
-    mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-    mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
-    mr.isSimulated === true ? 1 : 0
-  );
-}
-
-/** Inserts or updates a single tracker row. */
-function saveTracker(tracker: any): boolean {
-  if (!tracker?.id) return false;
+/** Records one tracker, or updates it if the id already exists. */
+async function saveTracker(tracker: any): Promise<boolean> {
   try {
-    dbConn
-      .prepare(SQL_UPSERT_TRACKER)
-      .run(
-        tracker.id,
-        tracker.type || "brand",
-        tracker.query || "",
-        JSON.stringify(tracker.platforms || []),
-        tracker.createdAt || new Date().toISOString()
-      );
-    queueMirrorOp({ kind: "set", collection: "trackers", id: tracker.id, data: toTrackerDoc(tracker) });
-    return true;
+    return await upsertTracker(tracker);
   } catch (err) {
     logger.error("[DB] Failed to save tracker:", err);
     return false;
   }
 }
 
-/** Removes a tracker and, in the same transaction, the mentions it produced. */
-function deleteTracker(id: string): boolean {
+/** Removes a tracker together with the mentions it produced. */
+async function deleteTracker(id: string): Promise<boolean> {
   try {
-    runInTransaction(() => {
-      dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(id);
-      dbConn.prepare("DELETE FROM trackers WHERE id = ?").run(id);
-    });
-    queueMirrorOp({ kind: "delete", collection: "trackers", id });
-    return true;
+    return await removeTracker(id);
   } catch (err) {
     logger.error("[DB] Failed to delete tracker:", err);
     return false;
   }
 }
 
-/** Inserts or updates one analysed post. */
-function saveAnalyzedPost(post: any): boolean {
-  if (!post?.id) return false;
+/** Records one analysed post. */
+async function saveAnalyzedPost(post: any): Promise<boolean> {
   try {
-    dbConn
-      .prepare(SQL_UPSERT_ANALYZED)
-      .run(
-        post.id,
-        post.url || "",
-        post.platform || "other",
-        post.title || "",
-        post.description || "",
-        post.imageUrl || "",
-        post.sentiment || "neutral",
-        Number(post.sentimentScore || 0),
-        post.emotion || "Neutral",
-        post.engagement || "Low",
-        JSON.stringify(post.hashtags || []),
-        post.analyzedAt || new Date().toISOString()
-      );
-    queueMirrorOp({ kind: "set", collection: "analyzed_posts", id: post.id, data: toAnalyzedDoc(post) });
-    return true;
+    return await upsertAnalyzedPost(post);
   } catch (err) {
     logger.error("[DB] Failed to save analysed post:", err);
     return false;
   }
 }
 
-/** Inserts or updates many mentions in one transaction. */
-function saveMentions(mentions: any[]): number {
-  const rows = (mentions || []).filter((m: any) => m?.id);
-  if (rows.length === 0) return 0;
+/** Records many mentions. Returns how many were written. */
+async function saveMentions(mentions: any[]): Promise<number> {
   try {
-    runInTransaction(() => {
-      const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
-      for (const mr of rows) bindMention(stmt, mr);
-    });
-    for (const mr of rows) {
-      queueMirrorOp({ kind: "set", collection: "monitor_results", id: mr.id, data: toMentionDoc(mr) });
-    }
-    return rows.length;
+    return await upsertMentions(mentions);
   } catch (err) {
     logger.error("[DB] Failed to save mentions:", err);
     return 0;
   }
 }
 
-/**
- * Replaces everything collected for one tracker. Used by a manual scan, where
- * the fresh result set is authoritative for that tracker only.
- */
-function replaceMentionsForTracker(trackerId: string, mentions: any[]): number {
+/** A manual scan replaces everything collected for that tracker. */
+async function replaceMentionsForTracker(trackerId: string, mentions: any[]): Promise<number> {
   try {
-    // The rows about to disappear must be deleted from the mirror too.
-    const stale = dbConn
-      .prepare("SELECT id FROM monitor_results WHERE trackerId = ?")
-      .all(trackerId) as any[];
-    runInTransaction(() => {
-      dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(trackerId);
-      const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
-      for (const mr of mentions || []) {
-        if (mr?.id) bindMention(stmt, { ...mr, trackerId });
-      }
-    });
-    for (const row of stale) {
-      queueMirrorOp({ kind: "delete", collection: "monitor_results", id: row.id });
-    }
-    for (const mr of mentions || []) {
-      if (mr?.id) queueMirrorOp({ kind: "set", collection: "monitor_results", id: mr.id, data: toMentionDoc({ ...mr, trackerId }) });
-    }
-    return (mentions || []).length;
+    return await replaceTrackerMentions(trackerId, mentions);
   } catch (err) {
     logger.error("[DB] Failed to replace tracker mentions:", err);
     return 0;
   }
 }
 
-/** Keeps the newest `max` mentions and deletes the rest, in one statement. */
-function pruneMentions(max = 1000): number {
+/** Trims history so the tables cannot grow without bound. */
+async function pruneMentions(max = 1000): Promise<number> {
   try {
-    const before = dbConn.prepare("SELECT COUNT(*) AS c FROM monitor_results").get() as any;
-    const total = Number(before?.c || 0);
-    if (total <= max) return 0;
-    const doomed = dbConn
-      .prepare(
-        "SELECT id FROM monitor_results WHERE rowid NOT IN (SELECT rowid FROM monitor_results ORDER BY rowid DESC LIMIT ?)"
-      )
-      .all(max) as any[];
-    dbConn
-      .prepare(
-        "DELETE FROM monitor_results WHERE rowid NOT IN (SELECT rowid FROM monitor_results ORDER BY rowid DESC LIMIT ?)"
-      )
-      .run(max);
-    for (const row of doomed) {
-      queueMirrorOp({ kind: "delete", collection: "monitor_results", id: row.id });
-    }
-    return total - max;
+    return await pruneHistories(max);
   } catch (err) {
-    logger.error("[DB] Failed to prune mentions:", err);
+    logger.error("[DB] Failed to prune history:", err);
     return 0;
   }
 }
@@ -1859,6 +1305,7 @@ async function buildChannelHealth(force = false) {
     grounding,
     ai,
     egress,
+    database: dbStatus(),
     checkedAt: new Date().toISOString(),
     channels,
     summary: {
@@ -1900,11 +1347,25 @@ app.get("/api/channel-health", async (req, res) => {
   res.status(anyDown ? 503 : 200).json(health);
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
+app.get("/api/health", async (req, res) => {
+  // A health check that says "ok" while the database is unreachable is worse
+  // than no health check, so the database state is part of the answer.
+  const db = dbStatus();
+  const database = {
+    provider: "supabase",
+    configured: db.configured,
+    connected: db.connected,
+    reason: db.reason,
+    detail: db.detail,
+    projectHost: db.projectHost,
+    lastCheckedAt: db.lastCheckedAt,
+  };
+  const degraded = db.configured && !db.connected;
+  res.status(degraded ? 503 : 200).json({
+    status: degraded ? "degraded" : "ok",
     uptimeSeconds: Math.round(process.uptime()),
     version: process.env.npm_package_version || "unknown",
+    database,
     ai: aiSummary(),
     collectors: {
       grounding: aiConfig().enabled,
@@ -1917,8 +1378,13 @@ app.get("/api/health", (req, res) => {
 });
 
 // 1. Get Trackers
-app.get("/api/trackers", (req, res) => {
-  const db = getDB();
+app.get("/api/trackers", async (req, res) => {
+  const db = await getDB();
+  if (!db.ok) {
+    // Empty data with a reason, never fabricated rows.
+    res.setHeader("X-Data-Status", "unavailable");
+    return res.json([]);
+  }
   res.json(db.trackers);
 });
 
@@ -1926,7 +1392,7 @@ app.get("/api/trackers", (req, res) => {
 const ALLOWED_TRACKER_TYPES = ["brand", "hashtag", "url", "topic", "product"];
 const ALLOWED_PLATFORMS = [...CHANNEL_KEYS, "x"];
 
-app.post("/api/trackers", (req, res) => {
+app.post("/api/trackers", async (req, res) => {
   const { type, query, platforms } = req.body || {};
   if (typeof type !== "string" || typeof query !== "string") {
     return res.status(400).json({ error: "Type and query are required." });
@@ -1945,7 +1411,7 @@ app.post("/api/trackers", (req, res) => {
     .filter((p: any) => typeof p === "string" && ALLOWED_PLATFORMS.includes(p.toLowerCase()))
     .map((p: string) => p.toLowerCase());
 
-  const db = getDB();
+  const db = await getDB();
   const newTracker = {
     id: `t-${Date.now()}`,
     type,
@@ -1954,30 +1420,29 @@ app.post("/api/trackers", (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  saveTracker(newTracker);
+  await saveTracker(newTracker);
   broadcast("SYNC", { event: "tracker_added", tracker: newTracker });
   res.json(newTracker);
 });
 
 // 3. Delete Tracker
-app.delete("/api/trackers/:id", (req, res) => {
+app.delete("/api/trackers/:id", async (req, res) => {
   const { id } = req.params;
-  const db = getDB();
   
-  deleteTracker(id);
+  await deleteTracker(id);
   broadcast("SYNC", { event: "tracker_deleted", trackerId: id });
   res.json({ success: true, message: "Tracker deleted successfully" });
 });
 
 // 4. Get Analyzed Posts
-app.get("/api/analyzed-posts", (req, res) => {
-  const db = getDB();
+app.get("/api/analyzed-posts", async (req, res) => {
+  const db = await getDB();
   res.json(db.analyzedPosts);
 });
 
 // 4b. Get Monitor Results
-app.get("/api/monitor-results", (req, res) => {
-  const db = getDB();
+app.get("/api/monitor-results", async (req, res) => {
+  const db = await getDB();
   const { trackerId } = req.query;
   if (trackerId) {
     const filtered = db.monitorResults.filter((mr: any) => mr.trackerId === trackerId);
@@ -2085,7 +1550,7 @@ app.post("/api/analyze-url", async (req, res) => {
       };
     }
 
-    const db = getDB();
+    const db = await getDB();
     const newAnalysis = {
       id: `ap-${Date.now()}`,
       url: url || `manual-text-${Date.now()}`,
@@ -2101,7 +1566,7 @@ app.post("/api/analyze-url", async (req, res) => {
       analyzedAt: new Date().toISOString()
     };
 
-    saveAnalyzedPost(newAnalysis);
+    await saveAnalyzedPost(newAnalysis);
     broadcast("SYNC", { event: "post_analyzed", post: newAnalysis });
 
     res.json(newAnalysis);
@@ -2119,7 +1584,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
     return res.status(400).json({ error: "trackerId is required" });
   }
 
-  const db = getDB();
+  const db = await getDB();
   const tracker = db.trackers.find((t: any) => t.id === trackerId);
   if (!tracker) {
     return res.status(404).json({ error: "Tracker not found" });
@@ -2130,7 +1595,7 @@ app.post("/api/trigger-monitor", async (req, res) => {
     const formattedResults = await fetchUnifiedSocialSignals(tracker);
 
     // A manual scan is authoritative for this tracker: replace its rows only.
-    replaceMentionsForTracker(trackerId, formattedResults);
+    await replaceMentionsForTracker(trackerId, formattedResults);
     
     broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
     res.json(formattedResults);
@@ -2143,10 +1608,12 @@ app.post("/api/trigger-monitor", async (req, res) => {
 });
 
 let lastMonitorRefreshAt = 0;
+/** When each tracker was last scanned, kept in memory (not a database column). */
+const lastScanAt = new Map<string, number>();
 
 // 6b. Get Cross-Platform Social Signals & Aggregation Index (Universal Intelligence Signal Engine)
-app.get("/api/social-signals", (req, res) => {
-  const db = getDB();
+app.get("/api/social-signals", async (req, res) => {
+  const db = await getDB();
   const { trackerId } = req.query;
 
   let targetQuery = "Global Intel";
@@ -2274,8 +1741,8 @@ app.get("/api/social-signals", (req, res) => {
 });
 
 // 7. Get Aggregated Analytics & Stats for Dashboard Charts
-app.get("/api/dashboard-stats", (req, res) => {
-  const db = getDB();
+app.get("/api/dashboard-stats", async (req, res) => {
+  const db = await getDB();
   const allAnalyzed = db.analyzedPosts || [];
   const allMonitored = db.monitorResults || [];
   
@@ -2469,7 +1936,7 @@ app.get("/api/dashboard-stats", (req, res) => {
  *     dressed up as a prediction
  */
 app.get("/api/predict-trends", async (req, res) => {
-  const db = getDB();
+  const db = await getDB();
   const combined = [...(db.analyzedPosts || []), ...(db.monitorResults || [])];
 
   if (combined.length === 0) {
@@ -2652,17 +2119,16 @@ async function startServer() {
 
   setInterval(async () => {
     try {
-      const db = getDB();
+      const db = await getDB();
       if (!db.trackers || db.trackers.length === 0) return;
       if (Date.now() - lastMonitorRefreshAt < REFRESH_INTERVAL_MS) return;
       lastMonitorRefreshAt = Date.now();
 
-      // Refresh whichever tracker has gone longest without a scan.
-      const randomTracker =
-        [...db.trackers].sort(
-          (a: any, b: any) =>
-            new Date(a.lastScannedAt || 0).getTime() - new Date(b.lastScannedAt || 0).getTime()
-        )[0];
+      // Refresh whichever tracker has gone longest without a scan. Scan times are
+      // process-local bookkeeping, so they are not stored in the database.
+      const randomTracker = [...db.trackers].sort(
+        (a: any, b: any) => (lastScanAt.get(a.id) || 0) - (lastScanAt.get(b.id) || 0)
+      )[0];
 
       logger.info(`[Collector] Refreshing mentions for "${randomTracker.query}"…`);
 
@@ -2671,7 +2137,7 @@ async function startServer() {
         return [] as any[];
       });
 
-      randomTracker.lastScannedAt = new Date().toISOString();
+      lastScanAt.set(randomTracker.id, Date.now());
 
       const existingKeys = new Set(
         (db.monitorResults || []).map(
@@ -2683,8 +2149,8 @@ async function startServer() {
       );
 
       if (newMentions.length > 0) {
-        saveMentions(newMentions);
-        pruneMentions(1000);
+        await saveMentions(newMentions);
+        await pruneMentions(1000);
 
         // Broadcast to all active clients for real-time UI injection
         for (const mention of newMentions) {
@@ -2700,12 +2166,31 @@ async function startServer() {
     }
   }, 20_000);
 
-  // Load latest data from Firestore to populate our local SQLite cache on boot
-  try {
-    await syncFromFirestoreToSQLite();
-  } catch (err: any) {
-    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    logger.warn("Information during initial Firestore to SQLite synchronization on startServer:", errMsg);
+  // Check the Supabase connection once at boot so a missing schema or a wrong
+  // key shows up in the log and in /api/health immediately, not on first click.
+  const dbInfo = dbConfigSummary();
+  if (!dbInfo.configured) {
+    logger.warn(
+      "[Supabase] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set. " +
+        "The API will answer with empty data and reason \"not-configured\" until they are."
+    );
+  } else {
+    const boot = await pingDatabase();
+    if (boot.connected) {
+      logger.info(`[Supabase] Connected to ${boot.projectHost}; data layer ready.`);
+    } else if (boot.reason === "schema-missing") {
+      logger.warn(
+        `[Supabase] Connected to ${boot.projectHost} but the tables are missing. ` +
+          "Run supabase/schema.sql in the SQL editor. Detail: " +
+          (boot.detail || "")
+      );
+    } else {
+      logger.warn(
+        `[Supabase] Could not reach ${boot.projectHost} (${boot.reason || "unknown"}). ` +
+          "Serving empty data until it responds. Detail: " +
+          (boot.detail || "")
+      );
+    }
   }
 
   // Registered after every API route on purpose: an Express router matches in
@@ -2715,7 +2200,7 @@ async function startServer() {
     res.status(404).json({ error: `Unknown API route: ${req.method} ${req.originalUrl}` });
   });
 
-  if (!IS_VERCEL) {
+  if (true) {
     if (process.env.NODE_ENV !== "production") {
       const vite = await createViteServer({
         server: { middlewareMode: true },
@@ -2748,23 +2233,12 @@ async function startServer() {
       logger.info(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);
     });
 
-    // Graceful shutdown so SQLite finishes its WAL checkpoint and clients get a
-    // clean close instead of a dropped connection.
+    // Graceful shutdown: clients get a clean close. There is no local database
+    // to checkpoint; writes are committed to Supabase when they are made.
     const shutdown = (signal: string) => {
       logger.info(`[Shutdown] Received ${signal}, closing server...`);
       wss?.clients.forEach((client) => client.close(1001, "Server shutting down"));
-      // Give queued mirror writes one short chance to land, then stop the queue
-      // so a dead process cannot keep retrying.
-      void firestoreMirror
-        .flushNow()
-        .catch(() => 0)
-        .finally(() => firestoreMirror.dispose());
       server.close(() => {
-        try {
-          dbConn.close();
-        } catch (err) {
-          logger.error("[Shutdown] Failed to close SQLite connection:", err);
-        }
         process.exit(0);
       });
       setTimeout(() => process.exit(1), 10_000).unref();
@@ -2774,8 +2248,6 @@ async function startServer() {
   }
 }
 
-if (!IS_VERCEL) {
-  startServer();
-}
+startServer();
 
 export default app;

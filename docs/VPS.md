@@ -1,8 +1,9 @@
 # Deploying S.M.I.P on a VPS
 
-Two supported paths: Docker (recommended) or systemd + nginx. Both assume Node 22
-because the database uses the built-in `node:sqlite` module — there are no native
-compiled dependencies left, which is what used to break fresh installs.
+Two supported paths: Docker (recommended) or systemd + nginx. Both assume Node 22.
+Storage is Supabase over HTTPS, so the container and the host hold **no database
+state**: no volume to mount, no file to back up, nothing to lose on redeploy.
+Database setup lives in [`SUPABASE.md`](SUPABASE.md).
 
 ---
 
@@ -14,7 +15,8 @@ compiled dependencies left, which is what used to break fresh installs.
 | `AI_API_KEY` set | Without it there is no sentiment analysis, no forecast, and no search-grounded channels. The dashboard will be honestly empty. | Sakelar console |
 | `.env` not in git | It holds keys. `.gitignore` already covers it. | `git check-ignore -v .env` |
 | Port not exposed publicly | The app speaks plain HTTP. nginx/Caddy terminates TLS. | bind `127.0.0.1:3000` |
-| Volume on `src/data` | The SQLite file is the only store. Lose it and you lose collected mentions. | compose volume / `ReadWritePaths` |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set | Without them nothing is stored; the API serves empty data and `/api/health` says `not-configured`. | `curl -s localhost:3000/api/health` |
+| `supabase/schema.sql` applied | Connected but missing tables reports `schema-missing`; writes fail. | run it once in the SQL editor |
 | `TRUST_PROXY=1` | Behind a proxy, rate limiting must key on the real client IP, not the proxy's. | already the default |
 
 ---
@@ -25,7 +27,7 @@ compiled dependencies left, which is what used to break fresh installs.
 git clone https://github.com/JohnIsDimz/Social-Media-Intelligence-Platform.git
 cd Social-Media-Intelligence-Platform
 cp .env.example .env
-$EDITOR .env                 # AI_API_KEY, API_AUTH_TOKEN, APP_URL, CORS_ORIGINS
+$EDITOR .env                 # SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, AI_API_KEY, API_AUTH_TOKEN
 docker compose up -d --build
 docker compose logs -f --tail=50
 ```
@@ -79,13 +81,11 @@ The proxy passes `X-Forwarded-For`, and `/ws` is upgraded for the live feed.
 | `summary.needsKey` > 0 | Channels that need a credential | Add `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `GITHUB_TOKEN` |
 | `ai.enabled: false` | No AI key loaded | Check `.env`, restart, re-read `/api/health` |
 | `429` in logs | AI gateway rate limit; a 2-minute cooldown starts automatically | Nothing, unless it repeats |
-| Disk growth in `src/data` | Collected mentions (capped at 1000 rows server-side) | Back up the `.sqlite` file nightly |
+| `/api/health` returns `503` with `database.reason` | `unreachable` (network/URL) or `schema-missing` (tables absent) | fix the env or run `supabase/schema.sql` |
+| Disk growth | Not on this host: rows live in Supabase, histories are trimmed to 1000 mentions / 200 analyses | monitor *Database size* in the Supabase dashboard |
 
-Backup, one line in cron:
-
-```bash
-0 3 * * * sqlite3 /var/lib/docker/volumes/smip_smip-data/_data/database.sqlite ".backup /backup/smip-$(date +\%F).sqlite"
-```
+Backups are Supabase's job now (dashboard → Database → Backups, or `pg_dump`
+against the connection string). There is no local file to copy.
 
 ## 5. Reverse proxy + SPA routing
 
@@ -98,9 +98,9 @@ other path returns `index.html` with `Cache-Control: no-cache`, while hashed
 - **The collector runs in-process.** One background loop refreshes the stalest
   tracker every `INGEST_INTERVAL_MS` (default 120 s). Two instances on the same
   volume would duplicate work; run one.
-- **SQLite, not Postgres.** Fine for this workload (≤1000 mentions, single
-  writer). `writeDB()` still rewrites tables on each save (audit item B2) — it is
-  a performance ceiling, not a correctness bug, and it is next on the list.
+- **Supabase is a network hop.** Every read is an HTTPS round trip, so latency
+  is the distance to the Supabase region. Pick the region closest to the VPS.
+  The dashboard loads three bounded queries per view, not the whole table.
 - **In-memory rate limits** reset on restart and are per-process. With more than
   one instance you would need a shared store.
 - **No automatic retention.** Mentions are trimmed to 1000 rows; analysed posts

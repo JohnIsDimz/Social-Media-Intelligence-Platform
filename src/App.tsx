@@ -136,6 +136,13 @@ export default function App() {
       setCheckingSources(false);
     }
   };
+
+  // The data layer is Supabase; when it is not usable the dashboard must say so
+  // rather than showing an unexplained empty screen.
+  const databaseDown = Boolean(
+    sources?.database && sources.database.configured && !sources.database.connected
+  );
+  const databaseUnset = Boolean(sources?.database && !sources.database.configured);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
   
@@ -903,6 +910,27 @@ export default function App() {
         </RailDrawer>
 
         <main className="min-w-0 flex-1 px-5 pb-16 pt-6 sm:px-8 sm:pt-7">
+          {(databaseDown || databaseUnset) && (
+            <div
+              role="status"
+              className="mb-5 flex flex-col gap-1 rounded-[5px] border border-brick/30 bg-amber-soft/60 px-4 py-3 text-[12px]"
+            >
+              <span className="font-medium text-ink">
+                {databaseUnset
+                  ? "Database is not configured"
+                  : sources?.database?.reason === "schema-missing"
+                    ? "Database tables are missing"
+                    : "Database is unreachable"}
+              </span>
+              <span className="text-ink-2">
+                {databaseUnset
+                  ? "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, then restart. Nothing can be stored until then."
+                  : sources?.database?.reason === "schema-missing"
+                    ? "Connected to Supabase, but the tables do not exist yet. Run supabase/schema.sql in the SQL editor."
+                    : `Could not reach ${sources?.database?.projectHost}. Reads and writes fail until it responds; nothing shown here is estimated.`}
+              </span>
+            </div>
+          )}
           {isLoading && !stats ? (
             <div className="flex flex-col gap-3 py-16" aria-busy="true" aria-live="polite">
               <p className="text-[13px] text-ink-3">Loading collected data…</p>

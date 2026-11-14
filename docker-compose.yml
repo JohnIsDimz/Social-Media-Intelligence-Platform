@@ -17,18 +17,24 @@ services:
       PORT: "3000"
       # Behind nginx/Caddy, keep trust proxy on so rate limits see real client IPs.
       TRUST_PROXY: "1"
+      # Provided by .env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
+      # Without them the app starts but serves empty data and reports
+      # "database: not-configured" on /api/health.
     ports:
       # Bind to loopback only: the reverse proxy terminates TLS and is the only
       # thing that should reach the app directly.
       - "127.0.0.1:3000:3000"
-    volumes:
-      - smip-data:/app/src/data
+    # No volume: Supabase holds the data, so the container stays stateless and a
+    # redeploy or a wiped host loses nothing.
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        # Deployed state: liveness only. A 503 means Supabase is unreachable, not
+        # that the container is broken; restarting would not fix it. Get the
+        # reason from /api/health or the log line "[Supabase] ...".
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.status<600?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -40,6 +46,3 @@ services:
         max-file: "3"
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  smip-data:

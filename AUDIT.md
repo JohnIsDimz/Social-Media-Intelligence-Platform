@@ -54,9 +54,9 @@ LICENSE      : tidak ada
 | # | Temuan | Lokasi | Dampak |
 |---|---|---|---|
 | C1 | **Tidak ada autentikasi sama sekali** di seluruh `/api/*` | `server.ts:1341-2080` | Siapa pun bisa baca, tambah, hapus tracker dan memicu pemanggilan Gemini (biaya uang Anda). **Fixed:** `API_AUTH_TOKEN` + cek bearer constant-time pada semua rute mutasi |
-| C2 | **Firestore rules `allow read, write: if true`** untuk semua koleksi | `firestore.rules:8-20` | Database bisa di-wipe/diisi siapa pun dari internet memakai apiKey publik. (PR #1 sudah memperbaiki ini — **belum di-merge**) |
+| C2 | **Firestore rules `allow read, write: if true`** untuk semua koleksi | `firestore.rules:8-20` | Database bisa di-wipe/diisi siapa pun dari internet memakai apiKey publik. **Sudah tidak berlaku:** Firebase dihapus dari kode; penyimpanan kini Supabase dengan RLS aktif tanpa policy (`supabase/schema.sql`) |
 | C3 | **SSRF pada `/api/analyze-url`** — server melakukan `fetch()` ke URL sembarang dari input pengguna | `server.ts:1399` → `scrapeSocialUrl` `server.ts:741` | Penyerang bisa memindai jaringan internal (`http://169.254.169.254/`, `http://localhost:3000/...`, IP privat), jadi proxy baca internal. (PR #1 menambahkan allowlist host + `redirect: "manual"` — **belum di-merge**) |
-| C4 | **Firebase Web API key + project config di-commit** | `firebase-applet-config.json:4` | `AIzaSyBALulSjQnQ0Oof0BURVpIavr6IrIbfHrQ`. Untuk Firebase Web API key memang "boleh publik", **tapi hanya jika rules ketat**. Dikombinasikan dengan C2, ini = database terbuka. |
+| C4 | **Firebase Web API key + project config di-commit** | `firebase-applet-config.json:4` | `AIzaSyBALulSjQnQ0Oof0BURVpIavr6IrIbfHrQ`. **Sudah tidak berlaku:** file konfigurasi Firebase dihapus dari repo. Kunci baru (`SUPABASE_SERVICE_ROLE_KEY`) hanya ada di `.env` server dan tidak pernah dikirim ke browser. |
 | C5 | **Tanpa rate limiting / throttling** pada endpoint yang memanggil Gemini | semua route | Satu skrip bisa menghabiskan kuota Gemini berbayar dalam hitungan menit |
 | C6 | **Bocor detail error internal ke klien** | `server.ts:1521, 1571, 2080` (`+ err.message`) | Stack/konfigurasi internal (nama model, kuota, path) terekspos ke publik |
 
@@ -86,7 +86,7 @@ MODERATE  qs, postcss, baseline-browser-mapping
 Total: 13 (1 critical, 9 high, 3 moderate)
 ```
 
-`firebase` (client SDK) adalah **direct dependency yang tidak dipakai sama sekali** di `src/` — hanya `firebase-admin` yang digunakan di server. Menghapus `firebase` akan langsung menghilangkan 3 HIGH. `vite` di-upgrade ke ≥6.4.4/7.x.
+Catatan: `firebase` dan `firebase-admin` sudah tidak ada di `package.json`; sisa temuan di blok ini adalah kondisi saat audit. `firebase` (client SDK) waktu itu adalah **direct dependency yang tidak dipakai sama sekali** di `src/` — hanya `firebase-admin` yang digunakan di server. Menghapus `firebase` akan langsung menghilangkan 3 HIGH. `vite` di-upgrade ke ≥6.4.4/7.x.
 
 ### 2.4 Yang sudah benar
 - Semua query SQL pakai prepared statement (tidak ada string concatenation) → **tidak ada SQL injection**.
@@ -313,6 +313,7 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | — | Output model dipercaya mentah-mentah / bisa menyisipkan data tak relevan | DONE **Fixed** — jawaban wajib lolos JSON (`chatJson`), mention hasil grounding difilter harus memuat kata kunci, kegagalan provider diklasifikasikan (`auth`/`rate-limit`/`unavailable`/`bad-response`) dan tidak pernah masuk database |
 | — | Forecast mengarang angka saat API gagal | DONE **Fixed** — `422` bila belum ada data, `503` + `reason` bila AI mati; blok "fallback engine" berisi angka statis dihapus |
 | B2 | `writeDB()` full rewrite | DONE — penulisan terarah per baris (`saveTracker`, `deleteTracker`, `saveAnalyzedPost`, `saveMentions`, `replaceMentionsForTracker`, `pruneMentions`) dengan `INSERT … ON CONFLICT DO UPDATE` atau `DELETE … WHERE`, dalam transaksi; index `idx_mentions_tracker/idx_mentions_date/idx_analyzed_date` dipakai (diverifikasi lewat `EXPLAIN QUERY PLAN`); sinkron Firestore di-debounce 1,5 detik |
+| — | Migrasi penyimpanan: SQLite lokal + mirror Firestore → Supabase | DONE — `src/lib/supabaseDb.ts` menjadi satu-satunya lapisan data (REST/PostgREST, `service_role` di server), `supabase/schema.sql` membuat tabel + RLS tanpa policy, `firebase-admin` dan seluruh file Firebase dihapus, `node:sqlite` dan `src/data` dihapus, volume Docker dilepas (container stateless). Saat DB tidak siap: baca membalas `[]` + `X-Data-Status: unavailable`, `/api/health` 503 + alasan, dashboard menampilkan spanduk. Diuji 25 kasus di `tests/supabase.test.ts` |
 | — | Emoji di kode & dokumen | DONE — 0 emoji di seluruh repo (ts/tsx/css/html/json/md/js); status audit memakai kata DONE / PARTIAL / TODO |
 | — | Layout: dialog 25 kanal memotong tombol Save di layar pendek | DONE — `max-h-[90vh]` + isi `overflow-y-auto`, footer tombol dipin |
 | — | Layout: rail kiri tak bisa di-scroll di laptop pendek | DONE — `sticky top-0 max-h-screen overflow-y-auto` |

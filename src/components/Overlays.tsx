@@ -269,9 +269,19 @@ export interface AiInfo {
   format?: string;
 }
 
+export interface DatabaseInfo {
+  configured: boolean;
+  connected: boolean;
+  reason: "not-configured" | "unreachable" | "schema-missing" | null;
+  detail?: string | null;
+  projectHost?: string | null;
+}
+
 export interface DataSources {
   grounding: boolean;
   ai?: AiInfo;
+  /** Where collected rows are stored: Supabase Postgres over its REST API. */
+  database?: DatabaseInfo;
   /** Whether this host can reach the internet at all. */
   egress?: boolean;
   channels: Record<string, ChannelHealth>;
@@ -405,6 +415,31 @@ export function DataSourcesDialog({
             ) : (
               <span className="text-amber">
                 no key set — AI analysis and search-grounded lookup are off
+              </span>
+            )}
+          </div>
+        )}
+
+        {sources?.database && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-hair bg-paper-2/50 px-5 py-2.5 text-[12px]">
+            <span className="font-medium text-ink-2">Database</span>
+            {!sources.database.configured ? (
+              <span className="text-amber">
+                Supabase is not configured — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; nothing is being stored
+              </span>
+            ) : sources.database.connected ? (
+              <>
+                <span className="text-ink">Supabase</span>
+                <span className="text-ink-3">{sources.database.projectHost}</span>
+                <span className="text-teal">connected</span>
+              </>
+            ) : sources.database.reason === "schema-missing" ? (
+              <span className="text-brick">
+                tables missing on {sources.database.projectHost} — run supabase/schema.sql
+              </span>
+            ) : (
+              <span className="text-brick">
+                cannot reach {sources.database.projectHost} — nothing is being stored
               </span>
             )}
           </div>
