@@ -1077,4 +1077,17 @@ pengukuran.
 | Kuota gratis Tavily (1.000/bulan) | dicache 10 menit dan dibatasi 3 framing × 13 kanal, tetapi tetap bisa habis pada tracker besar; kegagalan menjadi `[]` + log, bukan data karangan |
 | Istilah Indonesia yang tidak ada di leksikon | skor netral, bukan tebakan; bagian ini hanya menyentuh koleksi otomatis, jalur analyzer memakai model |
 | Konektivitas nyata | tidak bisa diuji dari sandbox; audit jaringan akan menandai kanal `down` di sini dan `public` di VPS |
+### 19.9 Dua temuan terakhir (lanjutan pemeriksaan)
+
+- **Kunci API di query string.** `videos.list` mengirim `YOUTUBE_API_KEY` sebagai
+  parameter URL. URL adalah bagian permintaan yang paling sering masuk ke log,
+  proxy, dan pesan galat. Kunci kini dikirim sebagai header `X-Goog-Api-Key`, dan
+  satu asersi tes memastikan string `key=` tidak pernah muncul lagi di URL.
+- **Kode mati.** `constructOfficialPlatformSearchUrl` tidak dipanggil di mana pun
+  sejak jalur "grounding mengembalikan URL tebakan" dihapus. Fungsi 40 baris itu
+  dibuang, bukan dibiarkan menunggu dipakai lagi untuk hal yang justru melanggar
+  aturan (URL yang tidak berasal dari hasil pencarian).
+
+Total setelah dua perbaikan ini: `npm test` **205 lulus**, `tsc` bersih,
+`npm run build` ok, `npm audit` 0 kerentanan.
 

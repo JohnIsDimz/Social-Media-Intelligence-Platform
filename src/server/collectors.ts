@@ -483,9 +483,11 @@ async function fetchYouTubeViewCounts(items: YouTubeRssItem[]): Promise<Map<stri
   const counts = new Map<string, number>();
   const ids = items.slice(0, 50).map((i) => i.videoId);
   if (ids.length === 0) return counts;
+  // The key goes in a header rather than the query string: a URL is the one part
+  // of a request that ends up in logs, proxies and error messages.
   const json = await fetchJson(
-    `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids.join(",")}` +
-      `&key=${process.env.YOUTUBE_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids.join(",")}`,
+    { headers: { "X-Goog-Api-Key": String(process.env.YOUTUBE_API_KEY || "") } }
   );
   for (const item of json?.items || []) {
     const stats = item?.statistics || {};
@@ -1242,47 +1244,6 @@ export function parseTelegramCount(raw: string): number | undefined {
 }
 
 // REAL LIVE UNIFIED ENGINE: Combines official APIs, public search feeds, and Google Search Grounding
-/** Public search URL for a platform, used when grounding returns no direct link. */
-export function constructOfficialPlatformSearchUrl(platform: string, query: string): string {
-  const encQuery = encodeURIComponent(query);
-  const tag = encodeURIComponent(query.replace(/[\s#]+/g, ""));
-  switch (platform.toLowerCase()) {
-    case "twitter":
-    case "x":
-      return `https://x.com/search?q=${encQuery}`;
-    case "tiktok":
-      return `https://www.tiktok.com/search?q=${encQuery}`;
-    case "instagram":
-      return `https://www.instagram.com/explore/tags/${tag}/`;
-    case "facebook":
-      return `https://www.facebook.com/search/top?q=${encQuery}`;
-    case "youtube":
-      return `https://www.youtube.com/results?search_query=${encQuery}`;
-    case "linkedin":
-      return `https://www.linkedin.com/search/results/all/?keywords=${encQuery}`;
-    case "reddit":
-      return `https://www.reddit.com/search/?q=${encQuery}`;
-    case "threads":
-      return `https://www.threads.net/search?q=${encQuery}`;
-    case "telegram":
-      return `https://t.me/s/${tag}`;
-    case "bluesky":
-      return `https://bsky.app/search?q=${encQuery}`;
-    case "mastodon":
-      return `https://mastodon.social/search?q=${encQuery}`;
-    case "hackernews":
-      return `https://hn.algolia.com/?q=${encQuery}`;
-    case "github":
-      return `https://github.com/search?q=${encQuery}&type=issues`;
-    case "pinterest":
-      return `https://www.pinterest.com/search/pins/?q=${encQuery}`;
-    case "news":
-      return `https://news.google.com/search?q=${encQuery}`;
-    default:
-      return `https://www.google.com/search?q=${encQuery}`;
-  }
-}
-
 /** Maximum rows a single scan may return, so a wider net stays bounded. */
 export const MAX_ROWS_PER_SCAN = 400;
 /** How many search channels are queried at once. */

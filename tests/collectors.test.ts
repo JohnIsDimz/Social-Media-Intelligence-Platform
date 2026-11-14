@@ -173,6 +173,7 @@ async function main() {
     if (url.includes("feeds/videos.xml")) return { text: `<feed>${rssEntry}</feed>` };
     if (url.includes("/youtube/v3/videos")) {
       check("view counts use videos.list, not search.list", !url.includes("/search"), url.slice(0, 70));
+      check("the API key is never in the query string", !url.includes("key="), url.slice(-40));
       return { body: { items: [{ id: "abc123", statistics: { viewCount: "1200", likeCount: "30" } }] } };
     }
     return { status: 404, body: {} };
