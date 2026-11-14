@@ -738,6 +738,13 @@ Struktur layout dirapikan bersamaan, bukan hanya warnanya:
 - `server.ts` halaman `/login` — sebelumnya HTML polos tanpa gaya sama sekali
   (satu-satunya layar yang tidak ikut tema). Sekarang memakai latar petrol
   bergradien, kartu kaca, tombol gradien teal→cyan, dan pesan galat bergaya.
+- `ChannelsView.tsx` dan `AnalyzerView.tsx` — dua view ini sebelumnya hanya
+  garis-garis `border-t` di atas kanvas, jadi terasa seperti dokumen, bukan
+  dasbor. Sekarang keduanya kartu bertumpuk dengan jarak seragam; strip kanal
+  jadi pil teal, tab input jadi track berpil (bukan dua garis bawah), dan
+  keadaan kosong jadi kotak putus-putus `surface-2` supaya "belum ada data"
+  terbaca sebagai status, bukan sebagai halaman rusak. Input memakai
+  `--radius-control` yang sama dengan tabel dan tombol.
 
 Tabel 25 kanal tetap terbaca di 360px: `ChannelTable` menggulir horizontal di
 dalam kartunya sendiri (`overflow-x-auto` + `scrollbar-none`), jadi halaman tidak
