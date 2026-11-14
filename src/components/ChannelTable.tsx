@@ -5,35 +5,49 @@ export interface ChannelRow {
   platform: string;
   buzzVolume: number;
   sentimentScore: number;
-  velocity: number;
+  /** null when there is no earlier half-window to compare against. */
+  velocity: number | null;
   signalStrength: number;
   activeUsersCount: number;
+  /** Mean of the engagement counts the source published; null when none did. */
+  avgEngagement?: number | null;
+  engagementSamples?: number;
+  sampleSize?: number;
 }
 
 /**
- * The eight channels as a table, not eight identical cards. A table is how you
- * actually compare volume, sentiment and velocity across channels.
+ * Channels as a table, not identical cards: a table is how you actually compare
+ * volume, sentiment and velocity across channels.
+ *
+ * The catalogue has 25 channels, so rendering all of them means a wall of "no
+ * data" rows that buries the two that do have signal. Empty channels are
+ * therefore collapsed into one line that names them — the information is still
+ * there, it just does not shout over the data.
  */
 export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
   const maxVolume = Math.max(1, ...rows.map((r) => r.buzzVolume));
+  const filled = rows.filter((r) => r.buzzVolume > 0);
+  const empty = rows.filter((r) => r.buzzVolume === 0);
+  const visible = filled.length > 0 ? filled : rows;
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[620px] border-collapse text-[13px]">
+      <table className="w-full min-w-[680px] border-collapse text-[13px]">
         <caption className="sr-only">
           Volume, sentiment, velocity and signal strength for each social channel
         </caption>
         <thead>
           <tr className="border-b border-hair text-left">
-            <th scope="col" className="label py-2 pr-4 font-medium">Channel</th>
-            <th scope="col" className="label py-2 pr-4 font-medium">Volume</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Sentiment</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Velocity</th>
-            <th scope="col" className="label py-2 pr-1 text-right font-medium">Signal</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 font-medium">Channel</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 font-medium">Volume</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 text-right font-medium">Sentiment</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 text-right font-medium">Velocity</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 text-right font-medium">Engagement</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-1 text-right font-medium">Signal</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => {
+          {visible.map((r, i) => {
             const pct = Math.round((r.buzzVolume / maxVolume) * 100);
             const empty = r.buzzVolume === 0;
             const tone =
@@ -45,7 +59,7 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
             return (
               <tr
                 key={r.platform}
-                className="settle border-b border-hair/70 last:border-0"
+                className="settle border-b border-hair/60 transition-colors last:border-0 hover:bg-teal-soft/25"
                 style={{ animationDelay: `${60 + i * 40}ms` }}
               >
                 <th scope="row" className="py-2.5 pr-4 text-left font-medium text-ink">
@@ -65,13 +79,10 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
 
                 <td className="py-2.5 pr-4">
                   <span className="flex items-center gap-2">
-                    <span className="relative h-[3px] w-24 overflow-hidden rounded-full bg-paper-2">
+                    <span className="relative h-[4px] w-24 overflow-hidden rounded-full bg-paper-2">
                       <span
-                        className={cn(
-                          "absolute inset-y-0 left-0 rounded-full",
-                          "bg-teal"
-                        )}
-                        style={{ width: `${Math.max(3, pct)}%` }}
+                        className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-teal to-cyan transition-[width] duration-500"
+                        style={{ width: `${empty ? 0 : Math.max(4, pct)}%` }}
                       />
                     </span>
                     <span className="tnum text-ink-2">{empty ? "—" : fmt(r.buzzVolume)}</span>
@@ -83,8 +94,10 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
                 </td>
 
                 <td className="tnum py-2.5 pr-4 text-right text-ink-2">
-                  {empty ? (
-                    <span className="text-ink-3">—</span>
+                  {empty || r.velocity === null || r.velocity === undefined ? (
+                    <span className="text-ink-3" title="Not enough history in the window to compare halves">
+                      —
+                    </span>
                   ) : (
                     <span className="inline-flex items-center gap-1">
                       <span aria-hidden="true" className="text-ink-3">
@@ -95,17 +108,34 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
                   )}
                 </td>
 
+                {/* Engagement is only shown when the source published a count;
+                    a dash means "not measured", never "measured as zero". */}
+                <td className="tnum py-2.5 pr-4 text-right text-ink-2">
+                  {typeof r.avgEngagement === "number" ? (
+                    <span title={`Mean of ${r.engagementSamples ?? 0} published count(s)`}>
+                      {fmt(r.avgEngagement)}
+                      {(r.engagementSamples ?? 0) < (r.sampleSize ?? 0) && (
+                        <span className="text-ink-3"> of {r.sampleSize}</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-ink-3" title="This source does not publish engagement counts">
+                      —
+                    </span>
+                  )}
+                </td>
+
                 <td className="py-2.5 pl-1 pr-0 text-right">
                   <span className="inline-flex items-center justify-end gap-2">
-                    <span className="relative h-[6px] w-14 overflow-hidden rounded-[1px] bg-paper-2">
+                    <span className="relative h-[6px] w-14 overflow-hidden rounded-[2px] bg-paper-2">
                       <span
                         className={cn(
-                          "absolute inset-y-0 left-0",
+                          "absolute inset-y-0 left-0 rounded-[2px] transition-[width] duration-500",
                           r.signalStrength >= 70
-                            ? "bg-amber"
+                            ? "bg-gradient-to-r from-amber to-brick"
                             : r.signalStrength >= 40
-                              ? "bg-teal"
-                              : "bg-ink-3/45"
+                              ? "bg-gradient-to-r from-teal to-cyan"
+                              : "bg-ink-3/50"
                         )}
                         style={{ width: `${Math.max(2, r.signalStrength)}%` }}
                       />
@@ -121,6 +151,15 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
           })}
         </tbody>
       </table>
+
+      {filled.length > 0 && empty.length > 0 && (
+        <p className="mt-3 text-[12px] leading-relaxed text-ink-3">
+          <NoDataTag show className="mr-1.5 align-middle" />
+          {empty.length} channel{empty.length === 1 ? "" : "s"} with nothing collected{" "}
+          {empty.length === 1 ? "is" : "are"} hidden: {empty.map((r) => channelLabel(r.platform)).join(", ")}.
+          Nothing is estimated.
+        </p>
+      )}
     </div>
   );
 }

@@ -15,6 +15,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
+      # Reach the bundled SearXNG by service name, not loopback: inside this
+      # container 127.0.0.1 is the app itself. Override in .env if you run
+      # SearXNG elsewhere or use Tavily instead.
+      SEARXNG_URL: ${SEARXNG_URL:-http://searxng:8080}
       # Behind nginx/Caddy, keep trust proxy on so rate limits see real client IPs.
       TRUST_PROXY: "1"
       # Provided by .env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
@@ -44,5 +48,31 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+
+  # Free web search for the channels that have no public read API (TikTok,
+  # Instagram, ...). No key, no quota, no card. Remove this service if you use
+  # Tavily instead, and set SEARCH_API_KEY in .env.
+  #
+  # SearXNG refuses JSON requests until "json" is added to search.formats in
+  # its settings.yml; ./deploy/searxng/settings.yml already does that.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: smip-searxng
+    restart: unless-stopped
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # A random-looking value; SearXNG uses it to sign its own session data.
+      SEARXNG_BASE_URL: http://searxng:8080/
+    # Not published to the host: only the app container talks to it.
+    expose:
+      - "8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     security_opt:
       - no-new-privileges:true

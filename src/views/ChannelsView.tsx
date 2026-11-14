@@ -57,29 +57,45 @@ export function ChannelsView({
       </header>
 
       {tracker && tracker.platforms.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-hair py-2.5 text-[12px] text-ink-3">
-          <span>channels</span>
+        <div className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-control)] border border-hair bg-surface/80 px-3.5 py-2.5 text-[12px] text-ink-3 shadow-[var(--shadow-card)]">
+          <span className="mr-1 uppercase tracking-[0.08em] text-ink-3/80">channels</span>
           {tracker.platforms.map((p) => (
-            <span key={p} className="text-ink-2">
+            <span
+              key={p}
+              className="rounded-full border border-teal/25 bg-teal-soft/60 px-2.5 py-0.5 font-medium text-teal"
+            >
               {channelLabel(p)}
             </span>
           ))}
         </div>
       )}
 
-      <section aria-labelledby="mentions-title" className="pt-6">
-        <h2 id="mentions-title" className="sr-only">
-          Latest mentions
-        </h2>
+      <section
+        aria-labelledby="mentions-title"
+        className="card p-5 sm:p-6"
+      >
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2
+            id="mentions-title"
+            className="font-display text-[19px] font-semibold text-ink"
+          >
+            Latest mentions
+          </h2>
+          {results.length > 0 && (
+            <span className="tnum text-[12px] text-ink-3">
+              {fmt(results.length)} records
+            </span>
+          )}
+        </div>
 
         {results.length > 0 ? (
-          <div className="border-t border-hair">
+          <div>
             {results.slice(0, 60).map((r) => (
               <MentionRow key={r.id} item={r} />
             ))}
           </div>
         ) : (
-          <div className="border-t border-hair pt-6">
+          <div className="rounded-[var(--radius-control)] border border-dashed border-hair bg-surface-2 px-4 py-5">
             <p className="text-[14px] text-ink-2">
               {tracker
                 ? "No mentions collected for this tracker yet."
@@ -99,7 +115,7 @@ export function ChannelsView({
         )}
 
         {results.length > 60 && (
-          <p className={cn("pt-3 text-[12px] text-ink-3")}>
+          <p className={cn("mt-4 text-[12px] text-ink-3")}>
             Showing the 60 most recent of {fmt(results.length)} mentions.
           </p>
         )}

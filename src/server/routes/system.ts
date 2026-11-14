@@ -6,6 +6,7 @@
  */
 import type { Express } from "express";
 import { aiConfig, aiSummary } from "../../lib/aiProvider.ts";
+import { searchSummary } from "../search.ts";
 import { dbStatus } from "../../lib/supabaseDb.ts";
 import { buildChannelHealth } from "../network-audit.ts";
 
@@ -43,11 +44,32 @@ app.get("/api/health", async (_req, res) => {
     version: process.env.npm_package_version || "unknown",
     database,
     ai: aiSummary(),
+    search: searchSummary(),
+    // What actually collects, and how. `keyed` lists the optional credentials;
+    // none of the channels below needs one to return real rows.
     collectors: {
-      grounding: aiConfig().enabled,
-      reddit: true,
-      youtube: Boolean(process.env.YOUTUBE_API_KEY),
-      twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
+      grounding: aiConfig().enabled && searchSummary().enabled,
+      open: [
+        "reddit",
+        "youtube",
+        "medium",
+        "bluesky",
+        "mastodon",
+        "hackernews",
+        "news",
+        "lemmy",
+        "stackoverflow",
+        "devto",
+        "github",
+      ],
+      keyed: {
+        youtube: Boolean(process.env.YOUTUBE_API_KEY),
+        twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
+        reddit: Boolean(process.env.REDDIT_CLIENT_ID && process.env.REDDIT_CLIENT_SECRET),
+        twitch: Boolean(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET),
+        github: Boolean(process.env.GITHUB_TOKEN),
+      },
+      perScanRowCap: 400,
     },
     timestamp: new Date().toISOString(),
   });

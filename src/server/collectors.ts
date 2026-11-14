@@ -11,11 +11,17 @@
  *    inside `scrapeSocialUrl`), and every call has a timeout;
  *  - nothing here returns invented rows: a failed collector returns [].
  */
-import { CHANNEL_KEYS } from "../channels.ts";
 import { chatJson } from "../lib/aiProvider.ts";
 import { logger } from "./logger.ts";
+import {
+  CHANNEL_SEARCH_SITES,
+  queryVariantsFor,
+  searchConfig,
+  searchWeb,
+  type SearchResult,
+} from "./search.ts";
 import { aiCanSearch, describeAiFailure } from "./ai.ts";
-import { AiError } from "../lib/aiProvider.ts";
+import { analyzeSentiment, engagementGrade } from "./lexicon.ts";
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -78,10 +84,71 @@ export function validateScrapeUrl(value: string): URL {
   return parsed;
 }
 
+/* ---------------------------------------------------------------------------
+ * DNS-level SSRF guard
+ *
+ * `validateScrapeUrl` rejects IP literals and non-allowlisted hosts, but an
+ * allowlisted NAME can still resolve to a private address: a record pointed at
+ * 127.0.0.1 or 169.254.169.254 would pass the allowlist and then let the server
+ * read its own metadata service. So the hostname is resolved first and refused
+ * if any address is private, loopback, link-local or CGNAT.
+ *
+ * Known limit, stated rather than hidden: this is a check-then-fetch, so a
+ * hostile resolver could answer differently on the second lookup (DNS
+ * rebinding). Closing that fully requires pinning the resolved IP into the
+ * socket, which fetch() does not expose. The mitigation in place is that this
+ * route is behind auth, rate limited, and only ever fetches six allowlisted
+ * social hosts.
+ * ------------------------------------------------------------------------- */
+
+/** True for addresses that must never be reachable from a scrape. */
+export function isPrivateAddress(ip: string): boolean {
+  const family = ip.includes(":") ? 6 : 4;
+  if (family === 4) {
+    const parts = ip.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+    const [a, b] = parts;
+    return (
+      a === 0 ||                          // "this network"
+      a === 10 ||                         // private
+      a === 127 ||                        // loopback
+      (a === 169 && b === 254) ||         // link-local / cloud metadata
+      (a === 172 && b >= 16 && b <= 31) || // private
+      (a === 192 && b === 168) ||         // private
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      a >= 224                            // multicast / reserved
+    );
+  }
+  const lower = ip.toLowerCase();
+  if (lower === "::" || lower === "::1") return true;
+  if (lower.startsWith("fe80")) return true;              // link-local
+  if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true;      // unique local
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateAddress(mapped[1]);
+  return false;
+}
+
+/** Resolves a hostname and refuses it when any answer is a private address. */
+export async function assertPublicHost(hostname: string): Promise<void> {
+  const dns = await import("node:dns/promises");
+  let addresses: string[];
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    addresses = records.map((r) => r.address);
+  } catch {
+    throw new Error("That domain could not be resolved.");
+  }
+  if (addresses.length === 0) throw new Error("That domain could not be resolved.");
+  if (addresses.some(isPrivateAddress)) {
+    throw new Error("That domain resolves to a private address and cannot be fetched.");
+  }
+}
+
 // Scrape Social Media URL Meta Tags using rotating User-Agents and multi-fallback parsing
 export async function scrapeSocialUrl(url: string) {
   try {
     const parsedUrl = validateScrapeUrl(url);
+    await assertPublicHost(parsedUrl.hostname);
     const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
     const referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
 
@@ -155,21 +222,18 @@ export async function scrapeSocialUrl(url: string) {
       }
     } catch (_) {}
 
+    // No invented title, description or stock image. When the page has no
+    // metadata, the caller is told the fetch produced nothing usable instead of
+    // receiving a plausible-looking placeholder to analyse.
     return {
-      title: title || jsonLdTitle || "Social Media Content",
-      description: description || jsonLdDesc || "Public content scraped successfully.",
-      imageUrl: imageUrl || jsonLdImg || "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=300&q=80",
-      success: true
+      title: title || jsonLdTitle || "",
+      description: description || jsonLdDesc || "",
+      imageUrl: imageUrl || jsonLdImg || "",
+      success: Boolean(title || jsonLdTitle || description || jsonLdDesc),
     };
   } catch (err: any) {
     logger.warn(`Scrape failed for ${url}:`, err.message);
-    // Return gracefully so the analyser can estimate from what it did get
-    return {
-      title: "Scrape Link",
-      description: "URL inaccessible due to platform security restrictions, but metadata can be analyzed conceptually.",
-      imageUrl: "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=300&q=80",
-      success: false
-    };
+    return { title: "", description: "", imageUrl: "", success: false };
   }
 }
 
@@ -187,196 +251,315 @@ export function detectPlatform(url: string): 'tiktok' | 'instagram' | 'facebook'
   return "other";
 }
 
-// Local Fallback Heuristics for Sentiment Analysis (Used when external API keys or scopes are limited)
+/**
+ * Local, no-key sentiment analysis.
+ *
+ * Thin wrapper over `lexicon.ts` so the analyzer route keeps one call shape. Two
+ * earlier fallbacks are deliberately gone: a skeleton headline in Indonesian and
+ * three hashtags that were invented whenever a post had none. A post with no
+ * hashtags now reports none, and a title falls back to its own text.
+ */
 export function localAnalyzeSentiment(title?: string, content?: string) {
-  const safeTitle = title || "";
-  const safeContent = content || "";
-  const text = (safeTitle + " " + safeContent).toLowerCase();
-  
-  const posWords = ["bagus", "keren", "mantap", "hebat", "suka", "cinta", "puas", "rekomendasi", "juara", "enak", "bintang", "murah", "cepat", "ramah", "good", "love", "awesome", "perfect", "satisfied", "best", "hemat", "memuaskan", "terbaik"];
-  const negWords = ["jelek", "kecewa", "lambat", "mahal", "buruk", "kesal", "marah", "rugi", "penipu", "ngaco", "gagal", "error", "rusak", "benci", "bad", "slow", "fail", "broken", "worst", "parah", "lelet", "sulit", "kapok"];
-  
-  let posCount = 0;
-  let negCount = 0;
-  
-  posWords.forEach(w => {
-    const regex = new RegExp(w, 'gi');
-    const matches = text.match(regex);
-    if (matches) posCount += matches.length;
-  });
-  
-  negWords.forEach(w => {
-    const regex = new RegExp(w, 'gi');
-    const matches = text.match(regex);
-    if (matches) negCount += matches.length;
-  });
-  
-  let sentiment: "positive" | "neutral" | "negative" = "neutral";
-  let sentimentScore = 0.0;
-  let emotion = "Neutral";
-  
-  if (posCount > negCount) {
-    sentiment = "positive";
-    sentimentScore = Number(Math.min(1.0, 0.2 + (posCount - negCount) * 0.15).toFixed(2));
-    emotion = posCount > 2 ? "Joy" : "Love";
-  } else if (negCount > posCount) {
-    sentiment = "negative";
-    sentimentScore = Number(Math.max(-1.0, -0.2 - (negCount - posCount) * 0.15).toFixed(2));
-    emotion = text.includes("marah") || text.includes("kesal") || text.includes("parah") ? "Anger" : "Sadness";
-  } else {
-    sentiment = "neutral";
-    sentimentScore = 0.0;
-    emotion = "Neutral";
-  }
-  
-  const hashtagRegex = /#\w+/g;
-  const parsedHashtags = text.match(hashtagRegex) || [];
-  let hashtags: string[] = parsedHashtags.map(h => h.toLowerCase());
-  
-  if (hashtags.length === 0) {
-    hashtags = ["#brandmonitoring", "#analisissentimen", "#sosmed"];
-  }
-  
-  const refinedTitle = safeTitle.length > 50 ? safeTitle.substring(0, 47) + "..." : safeTitle || "Analisis Konten Sosmed";
-  const refinedDescription = safeContent.length > 150 ? safeContent.substring(0, 147) + "..." : safeContent || "No additional content description.";
-  
+  const result = analyzeSentiment(title, content);
+  const safeTitle = (title || "").trim();
+  const safeContent = (content || "").trim();
+  const summarySource = safeTitle || safeContent;
   return {
-    sentiment,
-    sentimentScore,
-    emotion,
-    engagement: safeContent.length > 100 ? "High" : (safeContent.length > 30 ? "Medium" : "Low"),
-    hashtags,
-    refinedTitle,
-    refinedDescription
+    sentiment: result.sentiment,
+    sentimentScore: result.sentimentScore,
+    emotion: result.emotion,
+    // Engagement is a property of the post on its platform. We have no count
+    // here, so we say nothing rather than inferring it from text length.
+    engagement: "",
+    hashtags: result.hashtags,
+    refinedTitle: summarySource.length > 50 ? summarySource.slice(0, 47) + "..." : summarySource,
+    refinedDescription:
+      safeContent.length > 150 ? safeContent.slice(0, 147) + "..." : safeContent,
   };
 }
 
-// REAL LIVE INTEGRATION: Fetch authentic public Reddit posts
-export async function fetchRealRedditPosts(query: string): Promise<any[]> {
+/* ---------------------------------------------------------------------------
+ * Reddit
+ *
+ * Two paths, both free:
+ *  - OAuth client-credentials when REDDIT_CLIENT_ID/SECRET are set. Reddit now
+ *    answers 403 to many anonymous .json calls, especially from cloud IPs, so a
+ *    registered "script" app is the reliable path.
+ *  - anonymous search.json otherwise, with a descriptive User-Agent Reddit
+ *    documents as required.
+ *
+ * The old collector asked for four posts and stamped every one with a US
+ * centroid. Both are fixed: 25 posts, three sort orders, and no coordinate,
+ * because Reddit's API does not publish where a post was read.
+ * ------------------------------------------------------------------------- */
+
+let redditToken: { value: string; expiresAt: number } | null = null;
+
+async function redditAccessToken(): Promise<string | null> {
+  const id = (process.env.REDDIT_CLIENT_ID || "").trim();
+  const secret = (process.env.REDDIT_CLIENT_SECRET || "").trim();
+  if (!id || !secret) return null;
+  if (redditToken && Date.now() < redditToken.expiresAt - 60_000) return redditToken.value;
+
   try {
-    const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=4&sort=new`;
-    const res = await fetch(url, {
+    const basic = Buffer.from(`${id}:${secret}`).toString("base64");
+    const res = await fetch("https://www.reddit.com/api/v1/access_token", {
+      method: "POST",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 SMIP-Engine/1.0"
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": REDDIT_UA,
+      },
+      body: "grant_type=client_credentials",
+      signal: AbortSignal.timeout(COLLECTOR_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      logger.warn(`[Reddit] Token request answered HTTP ${res.status}; falling back to anonymous.`);
+      return null;
+    }
+    const json: any = await res.json();
+    if (!json?.access_token) return null;
+    redditToken = {
+      value: json.access_token,
+      expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+    };
+    return redditToken.value;
+  } catch (err: any) {
+    logger.warn(`[Reddit] Token request failed (${err?.message || err}); using anonymous.`);
+    return null;
+  }
+}
+
+const REDDIT_UA = "web:smip-social-intelligence:1.1 (monitoring public discussion)";
+
+/** Reddit, newest + most upvoted this week. */
+export async function fetchRealRedditPosts(query: string): Promise<any[]> {
+  const token = await redditAccessToken();
+  const host = token ? "https://oauth.reddit.com" : "https://www.reddit.com";
+  const posts: any[] = [];
+  const seen = new Set<string>();
+
+  for (const [sort, range] of [["new", "week"], ["top", "week"]] as const) {
+    const url =
+      `${host}/search.json?q=${encodeURIComponent(query)}` +
+      `&limit=25&sort=${sort}&t=${range}&type=link`;
+
+    let json: any = null;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": REDDIT_UA,
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        signal: AbortSignal.timeout(COLLECTOR_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        logger.warn(
+          `[Reddit] ${sort} search answered HTTP ${res.status}` +
+            (res.status === 403 && !token
+              ? " — anonymous access is rate limited; set REDDIT_CLIENT_ID/SECRET for the OAuth path."
+              : ".")
+        );
+        continue;
       }
-    });
-    if (!res.ok) {
-      logger.warn(`[Reddit API] Fetch failed with status ${res.status}`);
-      return [];
+      json = await res.json();
+    } catch (err: any) {
+      logger.warn(`[Reddit] ${sort} search failed: ${err?.message || err}`);
+      continue;
     }
-    const json: any = await res.json();
-    if (!json.data || !json.data.children) return [];
 
-    const posts = json.data.children.map((child: any) => {
-      const p = child.data;
+    for (const child of json?.data?.children || []) {
+      const p = child?.data;
+      if (!p?.permalink || seen.has(p.permalink)) continue;
+      seen.add(p.permalink);
       const content = p.selftext || p.title || "";
-      const localAnalysis = localAnalyzeSentiment(p.title, content);
-      
-      return {
-        platform: "reddit",
-        url: `https://www.reddit.com${p.permalink}`,
-        author: `u/${p.author}`,
-        title: p.title || "Reddit Post",
-        content: content.slice(0, 280) || "No text content.",
-        sentiment: localAnalysis.sentiment,
-        sentimentScore: localAnalysis.sentimentScore,
-        emotion: localAnalysis.emotion,
-        engagement: p.score > 100 ? "High" : (p.score > 20 ? "Medium" : "Low"),
-        date: new Date(p.created_utc * 1000).toISOString(),
-        country: "Global",
-        latitude: 37.0902,
-        longitude: -95.7129
-      };
-    });
-    return posts;
-  } catch (err) {
-    logger.error("[Reddit API Error] Failed to fetch real Reddit posts:", err);
-    return [];
+      posts.push(
+        toMention({
+          platform: "reddit",
+          url: `https://www.reddit.com${p.permalink}`,
+          author: p.author ? `u/${p.author}` : "Reddit user",
+          title: p.title || "Reddit post",
+          content,
+          engagementValue: (p.score || 0) + (p.num_comments || 0),
+          date: p.created_utc ? new Date(p.created_utc * 1000).toISOString() : undefined,
+        })
+      );
+    }
   }
+
+  logger.info(`[Reddit] collected ${posts.length} post(s) for "${query}"${token ? "" : " (anonymous)"}.`);
+  return posts;
 }
 
-// REAL LIVE INTEGRATION: Fetch authentic YouTube videos if API key is provided
+/* ---------------------------------------------------------------------------
+ * YouTube
+ *
+ * Discovery without a key: YouTube publishes a public search RSS feed
+ * (feeds/videos.xml?search_query=…). It gives real titles, channel names and
+ * publish dates at no cost, which is what a "what is being said about us" scan
+ * needs.
+ *
+ * The Data API v3 adds real view/like counts, but search.list costs 100 of the
+ * 10,000 daily quota units — about 100 searches a day for the whole project
+ * (https://outlierkit.com/resources/youtube-search-api/). It is therefore used
+ * only for the most recent matches of one query, and only when a key exists.
+ * ------------------------------------------------------------------------- */
+
 export async function fetchRealYouTubeVideos(query: string): Promise<any[]> {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return [];
+  const rss = await fetchYouTubeRss(query);
+  const counts = process.env.YOUTUBE_API_KEY ? await fetchYouTubeViewCounts(rss) : new Map<string, number>();
+
+  return rss.map((item) =>
+    toMention({
+      platform: "youtube",
+      url: item.url,
+      author: item.author,
+      title: item.title,
+      content: item.description,
+      engagementValue: counts.get(item.videoId),
+      date: item.date,
+    })
+  );
+}
+
+interface YouTubeRssItem {
+  videoId: string;
+  url: string;
+  title: string;
+  author: string;
+  description: string;
+  date?: string;
+}
+
+/** Public RSS search. No key, no quota. */
+export async function fetchYouTubeRss(query: string): Promise<YouTubeRssItem[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&key=${apiKey}&maxResults=3`;
-    const res = await fetch(url);
+    const res = await fetch(
+      `https://www.youtube.com/feeds/videos.xml?search_query=${encodeURIComponent(query)}`,
+      { signal: controller.signal, headers: { "User-Agent": "SMIP-Engine/1.1" } }
+    );
     if (!res.ok) {
-      logger.warn(`[YouTube API] Fetch failed with status ${res.status}`);
+      logger.warn(`[YouTube] RSS answered HTTP ${res.status}`);
       return [];
     }
-    const json: any = await res.json();
-    if (!json.items) return [];
-
-    return json.items.map((item: any) => {
-      const snippet = item.snippet;
-      const videoId = item.id.videoId;
-      const localAnalysis = localAnalyzeSentiment(snippet.title, snippet.description);
-
-      return {
-        platform: "youtube",
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-        author: snippet.channelTitle || "@youtube_channel",
-        title: snippet.title || "YouTube Video",
-        content: (snippet.description || "No description available.").slice(0, 280),
-        sentiment: localAnalysis.sentiment,
-        sentimentScore: localAnalysis.sentimentScore,
-        emotion: localAnalysis.emotion,
-        engagement: "High",
-        date: snippet.publishedAt || new Date().toISOString(),
-        country: "Global",
-        latitude: 37.0902,
-        longitude: -95.7129
-      };
+    const xml = await res.text();
+    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].slice(0, 15);
+    return entries.flatMap((match) => {
+      const block = match[1];
+      const pick = (tag: string) =>
+        (block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`)) || [])[1] || "";
+      const videoId = decodeXml(pick("yt:videoId"));
+      const title = decodeXml(pick("title"));
+      if (!videoId || !title) return [];
+      return [
+        {
+          videoId,
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          title,
+          author: decodeXml(pick("name")) || "YouTube channel",
+          description: decodeXml(pick("media:description")),
+          date: pick("published") ? new Date(pick("published")).toISOString() : undefined,
+        } as YouTubeRssItem,
+      ];
     });
-  } catch (err) {
-    logger.error("[YouTube API Error] Failed to fetch real YouTube videos:", err);
+  } catch (err: any) {
+    logger.warn(`[YouTube] RSS failed: ${err?.message || err}`);
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-// REAL LIVE INTEGRATION: Fetch authentic recent tweets if bearer token is provided
+/**
+ * Real view counts for the videos RSS already found.
+ *
+ * One videos.list call (`part=statistics`, 1 quota unit) covers up to 50 ids, so
+ * this costs a fraction of a single search.list call and never widens the query.
+ */
+async function fetchYouTubeViewCounts(items: YouTubeRssItem[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  const ids = items.slice(0, 50).map((i) => i.videoId);
+  if (ids.length === 0) return counts;
+  // The key goes in a header rather than the query string: a URL is the one part
+  // of a request that ends up in logs, proxies and error messages.
+  const json = await fetchJson(
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids.join(",")}`,
+    { headers: { "X-Goog-Api-Key": String(process.env.YOUTUBE_API_KEY || "") } }
+  );
+  for (const item of json?.items || []) {
+    const stats = item?.statistics || {};
+    const views = Number(stats.viewCount);
+    const likes = Number(stats.likeCount);
+    if (Number.isFinite(views) || Number.isFinite(likes)) {
+      counts.set(String(item.id), (views || 0) + (likes || 0));
+    }
+  }
+  return counts;
+}
+
+/* ---------------------------------------------------------------------------
+ * X / Twitter
+ *
+ * The recent-search endpoint accepts max_results between 10 and 100. The old
+ * collector sent 4, which the API rejects, so a configured bearer token produced
+ * nothing while the channel looked healthy. It now asks for 25, requests the
+ * author expansion so the row shows a handle instead of "id:12345", and reports
+ * the real HTTP failure instead of an empty list that looks like silence.
+ * ------------------------------------------------------------------------- */
+
 export async function fetchRealTweets(query: string): Promise<any[]> {
   const token = process.env.TWITTER_BEARER_TOKEN;
   if (!token) return [];
   try {
-    const url = `https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(query)}&tweet.fields=created_at,public_metrics,author_id&max_results=4`;
+    const url =
+      `https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(query)}` +
+      `&tweet.fields=created_at,public_metrics,lang` +
+      `&expansions=author_id&user.fields=username,name` +
+      `&max_results=25`;
     const res = await fetch(url, {
-      headers: {
-        "Authorization": `Bearer ${token}`
-      }
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(COLLECTOR_TIMEOUT_MS),
     });
     if (!res.ok) {
-      logger.warn(`[Twitter API] Fetch failed with status ${res.status}`);
+      const detail = await res.text().catch(() => "");
+      logger.warn(
+        `[Twitter] Search answered HTTP ${res.status}` +
+          (res.status === 400 ? " — check the query and that the app has search access." : ".") +
+          (detail ? ` ${detail.slice(0, 200)}` : "")
+      );
       return [];
     }
     const json: any = await res.json();
-    if (!json.data) return [];
+    if (!Array.isArray(json?.data)) return [];
+
+    const users = new Map<string, string>();
+    for (const user of json?.includes?.users || []) {
+      const handle = user?.username ? `@${user.username}` : user?.name || "";
+      if (user?.id && handle) users.set(String(user.id), handle);
+    }
 
     return json.data.map((tweet: any) => {
-      const localAnalysis = localAnalyzeSentiment("", tweet.text);
       const metrics = tweet.public_metrics || {};
-      const engagementScore = (metrics.retweet_count || 0) + (metrics.like_count || 0);
-
-      return {
+      const engagement =
+        (metrics.retweet_count || 0) +
+        (metrics.like_count || 0) +
+        (metrics.reply_count || 0) +
+        (metrics.quote_count || 0);
+      return toMention({
         platform: "twitter",
-        url: `https://x.com/user/status/${tweet.id}`,
-        author: `id:${tweet.author_id}`,
-        title: "Tweet Mention",
-        content: (tweet.text || "No tweet content.").slice(0, 280),
-        sentiment: localAnalysis.sentiment,
-        sentimentScore: localAnalysis.sentimentScore,
-        emotion: localAnalysis.emotion,
-        engagement: engagementScore > 50 ? "High" : (engagementScore > 10 ? "Medium" : "Low"),
-        date: tweet.created_at || new Date().toISOString(),
-        country: "Global",
-        latitude: 37.0902,
-        longitude: -95.7129
-      };
+        url: `https://x.com/i/web/status/${tweet.id}`,
+        author: users.get(String(tweet.author_id)) || "X user",
+        title: (tweet.text || "").split("\n")[0].slice(0, 90) || "Post on X",
+        content: tweet.text || "",
+        engagementValue: engagement,
+        date: tweet.created_at ? new Date(tweet.created_at).toISOString() : undefined,
+      });
     });
-  } catch (err) {
-    logger.error("[Twitter API Error] Failed to fetch real tweets:", err);
+  } catch (err: any) {
+    logger.warn(`[Twitter] Search failed: ${err?.message || err}`);
     return [];
   }
 }
@@ -424,84 +607,204 @@ export function toMention(args: {
   author: string;
   title: string;
   content: string;
+  /** Real engagement count from the source. Omitted when the source has none. */
   engagementValue?: number;
   date?: string;
   country?: string;
 }): any {
   const local = localAnalyzeSentiment(args.title, args.content);
-  const engagementValue = args.engagementValue ?? 0;
-  return {
+  const grade = engagementGrade(args.engagementValue);
+  const mention: Record<string, any> = {
     platform: args.platform,
     url: args.url,
     author: args.author || "Public discussion",
-    title: args.title || `${args.platform} mention`,
+    title: (args.title || "").trim() || `${args.platform} mention`,
     content: (args.content || "").slice(0, 280),
     sentiment: local.sentiment,
     sentimentScore: local.sentimentScore,
     emotion: local.emotion,
-    engagement: engagementValue > 100 ? "High" : engagementValue > 20 ? "Medium" : "Low",
+    hashtags: local.hashtags,
     date: args.date || new Date().toISOString(),
     country: args.country || "Global",
-    latitude: 0,
-    longitude: 0,
   };
+  // Two fields, two meanings: the grade is a label the UI shows, the score is the
+  // raw count a ranking can actually use. Both are omitted when unmeasured, and
+  // no coordinate is attached because these APIs do not publish one.
+  if (grade) mention.engagement = grade;
+  if (args.engagementValue !== undefined) mention.engagementScore = args.engagementValue;
+  return mention;
 }
 
-/** Bluesky — public AT Protocol search, no credentials. */
+/** Bluesky — public AT Protocol search, no credentials. Paginated to 100 posts. */
 export async function fetchBlueskyPosts(query: string): Promise<any[]> {
-  const json = await fetchJson(
-    `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=5&sort=latest`
-  );
-  if (!json?.posts) return [];
-  return json.posts.map((post: any) =>
-    toMention({
-      platform: "bluesky",
-      url: `https://bsky.app/profile/${post.author?.handle}/post/${String(post.uri).split("/").pop()}`,
-      author: `@${post.author?.handle}`,
-      title: post.record?.text?.slice(0, 90) || "Bluesky post",
-      content: post.record?.text || "",
-      engagementValue: (post.likeCount || 0) + (post.repostCount || 0) + (post.replyCount || 0),
-      date: post.record?.createdAt ? new Date(post.record.createdAt).toISOString() : undefined,
-    })
-  );
+  const out: any[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  for (let page = 0; page < 2; page++) {
+    const params = new URLSearchParams({ q: query, limit: "50", sort: "latest" });
+    if (cursor) params.set("cursor", cursor);
+    const json = await fetchJson(
+      `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${params.toString()}`
+    );
+    if (!json?.posts?.length) break;
+    for (const post of json.posts) {
+      out.push(
+        toMention({
+          platform: "bluesky",
+          url: `https://bsky.app/profile/${post.author?.handle}/post/${String(post.uri).split("/").pop()}`,
+          author: post.author?.handle ? `@${post.author.handle}` : "Bluesky user",
+          title: post.record?.text?.slice(0, 90) || "Bluesky post",
+          content: post.record?.text || "",
+          engagementValue:
+            (post.likeCount || 0) + (post.repostCount || 0) + (post.replyCount || 0),
+          date: post.record?.createdAt ? new Date(post.record.createdAt).toISOString() : undefined,
+        })
+      );
+    }
+    // An API that returns the same cursor forever must not spin: stop when a
+    // cursor repeats, and stop when a page adds nothing new.
+    const next = json.cursor;
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
+  }
+  return out;
 }
 
-/** Mastodon — public search endpoint on a large instance. */
+/**
+ * Mastodon — hashtag timelines across instances, no credentials.
+ *
+ * Full-text status search is gated behind authentication on mastodon.social and
+ * returns an empty list to anonymous callers, which used to look exactly like
+ * "nobody is talking about us". Hashtag timelines are public, so that is the
+ * primary path; search stays as a secondary attempt on instances that allow it.
+ */
+const MASTODON_INSTANCES = () =>
+  (process.env.MASTODON_INSTANCES || "mastodon.social,mastodon.online,fosstodon.org")
+    .split(",")
+    .map((h) => h.trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""))
+    .filter(Boolean);
+
+/** Hashtag candidates from a keyword: the whole phrase, then its first word. */
+export function hashtagCandidates(query: string): string[] {
+  const clean = query.replace(/^#/, "").trim();
+  const words = clean.split(/\s+/).filter(Boolean);
+  const candidates = [clean.replace(/\s+/g, ""), ...(words.length > 1 ? [words[0]] : [])];
+  return [...new Set(candidates.map((c) => c.toLowerCase()))].filter((c) => c.length > 1);
+}
+
+/** Public hashtag timelines: the reliable anonymous path. */
 export async function fetchMastodonPosts(query: string): Promise<any[]> {
-  const json = await fetchJson(
-    `https://mastodon.social/api/v2/search?q=${encodeURIComponent(query)}&type=statuses&limit=5&resolve=false`
-  );
-  const statuses = json?.statuses || [];
-  return statuses.map((st: any) =>
-    toMention({
-      platform: "mastodon",
-      url: st.url || st.uri,
-      author: `@${st.account?.acct}`,
-      title: (st.content || "").replace(/<[^>]*>/g, "").slice(0, 90) || "Mastodon post",
-      content: (st.content || "").replace(/<[^>]*>/g, ""),
-      engagementValue: (st.reblogs_count || 0) + (st.favourites_count || 0) + (st.replies_count || 0),
-      date: st.created_at ? new Date(st.created_at).toISOString() : undefined,
-    })
-  );
+  const out: any[] = [];
+  const seen = new Set<string>();
+  const tags = hashtagCandidates(query);
+
+  for (const instance of MASTODON_INSTANCES()) {
+    for (const tag of tags) {
+      const json = await fetchJson(
+        `https://${instance}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=20`
+      );
+      for (const st of Array.isArray(json) ? json : []) {
+        const url = st.url || st.uri;
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        const text = String(st.content || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+        out.push(
+          toMention({
+            platform: "mastodon",
+            url,
+            author: st.account?.acct ? `@${st.account.acct}` : "Mastodon user",
+            title: text.slice(0, 90) || "Mastodon post",
+            content: text,
+            engagementValue:
+              (st.reblogs_count || 0) + (st.favourites_count || 0) + (st.replies_count || 0),
+            date: st.created_at ? new Date(st.created_at).toISOString() : undefined,
+          })
+        );
+      }
+    }
+  }
+
+  // Secondary: instances that still allow anonymous status search.
+  for (const instance of MASTODON_INSTANCES().slice(0, 2)) {
+    const json = await fetchJson(
+      `https://${instance}/api/v2/search?q=${encodeURIComponent(query)}&type=statuses&limit=10&resolve=false`
+    );
+    for (const st of json?.statuses || []) {
+      const url = st.url || st.uri;
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      const text = String(st.content || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      out.push(
+        toMention({
+          platform: "mastodon",
+          url,
+          author: st.account?.acct ? `@${st.account.acct}` : "Mastodon user",
+          title: text.slice(0, 90) || "Mastodon post",
+          content: text,
+          engagementValue:
+            (st.reblogs_count || 0) + (st.favourites_count || 0) + (st.replies_count || 0),
+          date: st.created_at ? new Date(st.created_at).toISOString() : undefined,
+        })
+      );
+    }
+  }
+
+  logger.info(`[Mastodon] collected ${out.length} status(es) for "${query}" from ${MASTODON_INSTANCES().length} instance(s).`);
+  return out;
 }
 
-/** Hacker News — Algolia's public search API. */
+/**
+ * Hacker News — Algolia's public search API.
+ *
+ * Stories alone are headlines; the disagreement and the detail live in comments.
+ * This asks for both, and for the last 30 days, so the feed is current rather
+ * than "best of all time".
+ */
 export async function fetchHackerNews(query: string): Promise<any[]> {
-  const json = await fetchJson(
-    `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=5`
-  );
-  if (!json?.hits) return [];
-  return json.hits.map((hit: any) =>
-    toMention({
-      platform: "hackernews",
-      url: hit.url || `https://news.ycombinator.com/item?id=${hit.objectID}`,
-      author: hit.author || "HN user",
-      title: hit.title || hit.story_title || "Hacker News story",
-      content: hit.comment_text || hit.story_text || hit.title || "",
-      engagementValue: hit.points || 0,
-      date: hit.created_at ? new Date(hit.created_at).toISOString() : undefined,
-    })
-  );
+  const since = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+  const params = (tags: string) =>
+    `query=${encodeURIComponent(query)}&tags=${tags}&hitsPerPage=40` +
+    `&numericFilters=created_at_i>${since}`;
+
+  const [stories, comments] = await Promise.all([
+    fetchJson(`https://hn.algolia.com/api/v1/search?${params("story")}`),
+    fetchJson(`https://hn.algolia.com/api/v1/search?${params("comment")}`),
+  ]);
+
+  const out: any[] = [];
+  for (const hit of stories?.hits || []) {
+    out.push(
+      toMention({
+        platform: "hackernews",
+        url: hit.url || `https://news.ycombinator.com/item?id=${hit.objectID}`,
+        author: hit.author || "HN user",
+        title: hit.title || hit.story_title || "Hacker News story",
+        content: hit.story_text || hit.title || "",
+        engagementValue: (hit.points || 0) + (hit.num_comments || 0),
+        date: hit.created_at ? new Date(hit.created_at).toISOString() : undefined,
+      })
+    );
+  }
+  for (const hit of comments?.hits || []) {
+    const text = String(hit.comment_text || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    out.push(
+      toMention({
+        platform: "hackernews",
+        url: `https://news.ycombinator.com/item?id=${hit.objectID}`,
+        author: hit.author || "HN user",
+        title: text.slice(0, 90),
+        content: text,
+        engagementValue: hit.points || 0,
+        date: hit.created_at ? new Date(hit.created_at).toISOString() : undefined,
+      })
+    );
+  }
+  return out;
 }
 
 export function decodeXml(value: string): string {
@@ -515,13 +818,22 @@ export function decodeXml(value: string): string {
     .trim();
 }
 
-/** Google News — public RSS, parsed without a dependency. */
+/**
+ * Google News — public RSS, parsed without a dependency.
+ *
+ * The locale follows SEARCH_LANGUAGE: an Indonesian tracker with hl=en-US gets
+ * English coverage of an Indonesian brand, which is the wrong half of the story.
+ */
 export async function fetchGoogleNews(query: string): Promise<any[]> {
+  const lang = (process.env.SEARCH_LANGUAGE || "en").toLowerCase();
+  const locale =
+    lang === "id" ? { hl: "id", gl: "ID", ceid: "ID:id" } : { hl: "en-US", gl: "US", ceid: "US:en" };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
   try {
     const res = await fetch(
-      `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`,
+      `https://news.google.com/rss/search?q=${encodeURIComponent(query)}` +
+        `&hl=${locale.hl}&gl=${locale.gl}&ceid=${locale.ceid}`,
       { signal: controller.signal, headers: { "User-Agent": "SMIP-Engine/1.1" } }
     );
     if (!res.ok) {
@@ -529,8 +841,8 @@ export async function fetchGoogleNews(query: string): Promise<any[]> {
       return [];
     }
     const xml = await res.text();
-    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
-    return items.map((match) => {
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
+    return items.flatMap((match) => {
       const block = match[1];
       const pick = (tag: string) =>
         (block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`)) || [])[1] || "";
@@ -538,15 +850,18 @@ export async function fetchGoogleNews(query: string): Promise<any[]> {
       const link = decodeXml(pick("link"));
       const pub = pick("pubDate");
       const source = decodeXml(pick("source")) || "a news outlet";
-      return toMention({
-        platform: "news",
-        url: link,
-        author: source,
-        title,
-        content: `${title} — published by ${source}.`,
-        engagementValue: 50,
-        date: pub ? new Date(pub).toISOString() : undefined,
-      });
+      if (!title || !link) return [];
+      return [
+        toMention({
+          platform: "news",
+          url: link,
+          author: source,
+          title,
+          content: `${title} - published by ${source}.`,
+          // A news item has no engagement count we can see; do not invent one.
+          date: pub ? new Date(pub).toISOString() : undefined,
+        }),
+      ];
     });
   } catch (err: any) {
     logger.warn(`[Collector] Google News failed: ${err?.message || err}`);
@@ -556,176 +871,465 @@ export async function fetchGoogleNews(query: string): Promise<any[]> {
   }
 }
 
-/** Lemmy — public search on a large instance. */
+/**
+ * Lemmy — public search on a large instance.
+ *
+ * Two passes (newest, then best of the week) because a loud thread can be a few
+ * days old and would be missed by a purely chronological query.
+ */
 export async function fetchLemmyPosts(query: string): Promise<any[]> {
-  const json = await fetchJson(
-    `https://lemmy.world/api/v3/search?q=${encodeURIComponent(query)}&type_=Posts&sort=New&limit=5`
-  );
-  const posts = json?.posts || [];
-  return posts.map((entry: any) => {
-    const p = entry.post || {};
-    return toMention({
-      platform: "lemmy",
-      url: p.ap_id || `https://lemmy.world/post/${p.id}`,
-      author: entry.creator?.name ? `@${entry.creator.name}` : "Lemmy user",
-      title: p.name || "Lemmy post",
-      content: p.body || p.name || "",
-      engagementValue: (p.counts?.score || 0) + (p.counts?.comments || 0),
-      date: p.published ? new Date(p.published).toISOString() : undefined,
-    });
-  });
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const sort of ["New", "TopWeek"]) {
+    const json = await fetchJson(
+      `https://lemmy.world/api/v3/search?q=${encodeURIComponent(query)}&type_=Posts&sort=${sort}&limit=40`
+    );
+    for (const entry of json?.posts || []) {
+      const p = entry.post || {};
+      const url = p.ap_id || `https://lemmy.world/post/${p.id}`;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      out.push(
+        toMention({
+          platform: "lemmy",
+          url,
+          author: entry.creator?.name ? `@${entry.creator.name}` : "Lemmy user",
+          title: p.name || "Lemmy post",
+          content: p.body || p.name || "",
+          engagementValue: (p.counts?.score || 0) + (p.counts?.comments || 0),
+          date: p.published ? new Date(p.published).toISOString() : undefined,
+        })
+      );
+    }
+  }
+  return out;
 }
 
 /** GitHub — public search API (unauthenticated is rate limited but works). */
 export async function fetchGitHubIssues(query: string): Promise<any[]> {
-  const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  const json = await fetchJson(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=created&order=desc&per_page=5`,
+
+  const out: any[] = [];
+  const seen = new Set<string>();
+  // Newest first, then the most-commented of the last month: a reopened complaint
+  // is fresh signal even when it was filed long ago.
+  for (const sort of ["created", "comments"]) {
+    const json = await fetchJson(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(query + " is:issue")}` +
+        `&sort=${sort}&order=desc&per_page=50`,
+      { headers }
+    );
+    for (const item of json?.items || []) {
+      if (!item?.html_url || seen.has(item.html_url)) continue;
+      seen.add(item.html_url);
+      out.push(
+        toMention({
+          platform: "github",
+          url: item.html_url,
+          author: item.user?.login ? `@${item.user.login}` : "GitHub user",
+          title: item.title || "GitHub issue",
+          content: item.body || item.title || "",
+          engagementValue: (item.comments || 0) + (item.reactions?.total_count || 0),
+          date: item.created_at ? new Date(item.created_at).toISOString() : undefined,
+        })
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Stack Overflow — public Stack Exchange API.
+ *
+ * Newest questions catch a fresh breakage; upvoted questions catch the ones that
+ * keep biting people. Both are free within the anonymous quota (300/day per IP),
+ * and 50 per pass keeps one scan far below it.
+ */
+export async function fetchStackOverflow(query: string): Promise<any[]> {
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const sort of ["creation", "votes"]) {
+    const json = await fetchJson(
+      `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=${sort}` +
+        `&q=${encodeURIComponent(query)}&site=stackoverflow&pagesize=50&filter=default`
+    );
+    for (const item of json?.items || []) {
+      if (!item?.link || seen.has(item.link)) continue;
+      seen.add(item.link);
+      out.push(
+        toMention({
+          platform: "stackoverflow",
+          url: item.link,
+          author: item.owner?.display_name || "Stack Overflow user",
+          title: item.title || "Stack Overflow question",
+          content: `${item.title || ""} - ${(item.tags || []).join(", ")}`,
+          engagementValue: (item.score || 0) + (item.answer_count || 0),
+          date: item.creation_date ? new Date(item.creation_date * 1000).toISOString() : undefined,
+        })
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * DEV Community — public articles API.
+ *
+ * The old collector read `/articles?top=30` (a popularity ranking of the whole
+ * site) and then filtered it client-side, so it could only ever find a keyword
+ * that happened to be in that week's top list. DEV exposes real filters, which
+ * are used instead: by tag, and by a search term.
+ */
+export async function fetchDevTo(query: string): Promise<any[]> {
+  const needle = query.replace(/^#/, "").trim();
+  const tag = needle.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const urls = [
+    `https://dev.to/api/articles/latest?tag=${encodeURIComponent(tag)}&per_page=60`,
+    `https://dev.to/api/articles?per_page=60&page=1`,
+  ].filter(Boolean);
+
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const url of urls) {
+    const json = await fetchJson(url);
+    for (const a of Array.isArray(json) ? json : []) {
+      const hay = `${a.title} ${a.description || ""} ${(a.tags || a.tag_list || []).join(" ")}`.toLowerCase();
+      if (!hay.includes(needle.toLowerCase())) continue;
+      if (!a.url || seen.has(a.url)) continue;
+      seen.add(a.url);
+      out.push(
+        toMention({
+          platform: "devto",
+          url: a.url,
+          author: a.user?.name || "DEV author",
+          title: a.title || "DEV article",
+          content: a.description || a.title || "",
+          engagementValue: (a.public_reactions_count || 0) + (a.comments_count || 0),
+          date: a.published_at ? new Date(a.published_at).toISOString() : undefined,
+        })
+      );
+    }
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------------------
+ * Twitch
+ *
+ * Helix needs an app access token (client-credentials). Registration is free and
+ * needs no card. What the open API actually exposes is stream and category
+ * metadata, not chat: this collector reports the live streams and the top games
+ * matching the keyword, and the channel label says so rather than implying chat
+ * is read.
+ * ------------------------------------------------------------------------- */
+
+let twitchToken: { value: string; expiresAt: number } | null = null;
+
+async function twitchAccessToken(): Promise<string | null> {
+  const id = (process.env.TWITCH_CLIENT_ID || "").trim();
+  const secret = (process.env.TWITCH_CLIENT_SECRET || "").trim();
+  if (!id || !secret) return null;
+  if (twitchToken && Date.now() < twitchToken.expiresAt - 60_000) return twitchToken.value;
+  try {
+    const res = await fetch(
+      `https://id.twitch.tv/oauth2/token?client_id=${encodeURIComponent(id)}` +
+        `&client_secret=${encodeURIComponent(secret)}&grant_type=client_credentials`,
+      { method: "POST", signal: AbortSignal.timeout(COLLECTOR_TIMEOUT_MS) }
+    );
+    if (!res.ok) {
+      logger.warn(`[Twitch] Token request answered HTTP ${res.status}`);
+      return null;
+    }
+    const json: any = await res.json();
+    if (!json?.access_token) return null;
+    twitchToken = {
+      value: json.access_token,
+      expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+    };
+    return twitchToken.value;
+  } catch (err: any) {
+    logger.warn(`[Twitch] Token request failed: ${err?.message || err}`);
+    return null;
+  }
+}
+
+export async function fetchTwitchStreams(query: string): Promise<any[]> {
+  const token = await twitchAccessToken();
+  const clientId = (process.env.TWITCH_CLIENT_ID || "").trim();
+  if (!token || !clientId) {
+    logger.info("[Twitch] TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET not set; skipping.");
+    return [];
+  }
+  const headers = { "Client-Id": clientId, Authorization: `Bearer ${token}` };
+
+  // 1. Streams whose title mentions the keyword: that is a real "someone is
+  //    talking about this right now" signal.
+  const streams = await fetchJson(
+    `https://api.twitch.tv/helix/search/channels?query=${encodeURIComponent(query)}&first=20`,
     { headers }
   );
-  if (!json?.items) return [];
-  return json.items.map((item: any) =>
-    toMention({
-      platform: "github",
-      url: item.html_url,
-      author: item.user?.login ? `@${item.user.login}` : "GitHub user",
-      title: item.title || "GitHub issue",
-      content: item.body || item.title || "",
-      engagementValue: (item.comments || 0) + (item.reactions?.total_count || 0),
-      date: item.created_at ? new Date(item.created_at).toISOString() : undefined,
-    })
-  );
-}
-
-/** Stack Overflow — public Stack Exchange API. */
-export async function fetchStackOverflow(query: string): Promise<any[]> {
-  const json = await fetchJson(
-    `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=creation&q=${encodeURIComponent(
-      query
-    )}&site=stackoverflow&pagesize=5&filter=default`
-  );
-  if (!json?.items) return [];
-  return json.items.map((item: any) =>
-    toMention({
-      platform: "stackoverflow",
-      url: item.link,
-      author: item.owner?.display_name || "Stack Overflow user",
-      title: item.title || "Stack Overflow question",
-      content: `${item.title || ""} — ${(item.tags || []).join(", ")}`,
-      engagementValue: (item.score || 0) + (item.answer_count || 0) + (item.view_count || 0) / 100,
-      date: item.creation_date ? new Date(item.creation_date * 1000).toISOString() : undefined,
-    })
-  );
-}
-
-/** DEV Community — public articles API, filtered by the keyword. */
-export async function fetchDevTo(query: string): Promise<any[]> {
-  const json = await fetchJson("https://dev.to/api/articles?per_page=60&top=30");
-  const articles: any[] = Array.isArray(json) ? json : [];
-  const needle = query.replace(/^#/, "").toLowerCase();
-  return articles
-    .filter((a) => {
-      const hay = `${a.title} ${a.description || ""} ${(a.tags || a.tag_list || []).join(" ")}`.toLowerCase();
-      return hay.includes(needle);
-    })
-    .slice(0, 4)
-    .map((a) =>
+  const out: any[] = [];
+  for (const channel of streams?.data || []) {
+    out.push(
       toMention({
-        platform: "devto",
-        url: a.url,
-        author: a.user?.name || "DEV author",
-        title: a.title || "DEV article",
-        content: a.description || a.title || "",
-        engagementValue: (a.public_reactions_count || 0) + (a.comments_count || 0),
-        date: a.published_at ? new Date(a.published_at).toISOString() : undefined,
+        platform: "twitch",
+        url: `https://www.twitch.tv/${channel.broadcaster_login}`,
+        author: channel.display_name || channel.broadcaster_login,
+        title: channel.title || `${channel.display_name} on Twitch`,
+        content: channel.title || "",
+        // Twitch's search payload has no viewer count; live status is what it has.
+        date: channel.started_at ? new Date(channel.started_at).toISOString() : undefined,
       })
     );
+  }
+  return out;
+}
+
+/**
+ * Medium — public tag RSS.
+ *
+ * Medium has no free keyword-search API, but every tag has an RSS feed at
+ * `medium.com/feed/tag/<tag>`, which is public, keyless, and carries real dates
+ * and authors. This is the collector the catalogue promised ("publication posts
+ * via RSS") and never had.
+ */
+export async function fetchMedium(query: string): Promise<any[]> {
+  const tag = query
+    .replace(/^#/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!tag) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://medium.com/feed/tag/${encodeURIComponent(tag)}`, {
+      signal: controller.signal,
+      headers: { "User-Agent": "SMIP-Engine/1.1", Accept: "application/rss+xml, application/xml" },
+    });
+    if (!res.ok) {
+      logger.warn(`[Medium] feed answered HTTP ${res.status} for tag "${tag}"`);
+      return [];
+    }
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 20);
+    return items.flatMap((match) => {
+      const block = match[1];
+      const pick = (tagName: string) =>
+        (block.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)</${tagName}>`)) || [])[1] || "";
+      const title = decodeXml(pick("title"));
+      const link = decodeXml(pick("link"));
+      const description = decodeXml(pick("description"));
+      const pub = pick("pubDate");
+      const creator = decodeXml(pick("dc:creator")) || "Medium author";
+      if (!title || !link) return [];
+      return [
+        toMention({
+          platform: "medium",
+          url: link,
+          author: creator,
+          title,
+          content: description,
+          date: pub ? new Date(pub).toISOString() : undefined,
+        }),
+      ];
+    });
+  } catch (err: any) {
+    logger.warn(`[Medium] feed failed: ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Vimeo — public oEmbed metadata.
+ *
+ * oEmbed returns the title, author and thumbnail for one video URL, which is what
+ * the catalogue promised. Discovery still comes from search (there is no free
+ * keyword API); this turns those discovered links into structured rows with a
+ * real author instead of a search snippet.
+ */
+export async function fetchVimeoMetadata(url: string): Promise<any | null> {
+  const json = await fetchJson(
+    `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(url)}`
+  );
+  if (!json?.title) return null;
+  return toMention({
+    platform: "vimeo",
+    url,
+    author: json.author_name || "Vimeo creator",
+    title: json.title,
+    content: json.description || json.title,
+    date: json.upload_date ? new Date(json.upload_date).toISOString() : undefined,
+  });
+}
+
+/**
+ * Telegram — public channel previews.
+ *
+ * `t.me/s/<channel>` is the widget Telegram itself serves to the open web: post
+ * text, timestamp and view counter, no login. Bounded to the first 20 posts.
+ */
+export async function fetchTelegramChannel(channel: string): Promise<any[]> {
+  const handle = channel
+    .replace(/^#/, "")
+    .trim()
+    .replace(/^@/, "")
+    .replace(/[^A-Za-z0-9_]/g, "");
+  if (!handle) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://t.me/s/${handle}`, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; SMIP-Engine/1.1)" },
+    });
+    if (!res.ok) {
+      logger.warn(`[Telegram] t.me/s/${handle} answered HTTP ${res.status}`);
+      return [];
+    }
+    const html = await res.text();
+    const blocks = [...html.matchAll(/<div class="tgme_widget_message_wrap[\s\S]*?(?=<div class="tgme_widget_message_wrap|$)/g)]
+      .slice(0, 20);
+    const out: any[] = [];
+    for (const [block] of blocks) {
+      const textMatch = block.match(
+        /<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/
+      );
+      const text = textMatch ? decodeXml(textMatch[1].replace(/<br\s*\/?>/g, " ")) : "";
+      // Real widgets carry data-post; some layouts only carry the date link.
+      const permalink =
+        block.match(/data-post="([^"]+)"/) || block.match(/href="https:\/\/t\.me\/([^"?#]+)"/);
+      if (!text || !permalink) continue;
+      const time = block.match(/<time[^>]*datetime="([^"]+)"/);
+      const views = block.match(/tgme_widget_message_views">([^<]+)</);
+      out.push(
+        toMention({
+          platform: "telegram",
+          url: `https://t.me/${permalink[1]}`,
+          author: `@${handle}`,
+          title: text.slice(0, 90),
+          content: text,
+          engagementValue: views ? parseTelegramCount(views[1]) : undefined,
+          date: time ? new Date(time[1]).toISOString() : undefined,
+        })
+      );
+    }
+    logger.info(`[Telegram] collected ${out.length} post(s) from @${handle}.`);
+    return out;
+  } catch (err: any) {
+    logger.warn(`[Telegram] ${handle} failed: ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Telegram renders "1.2K", "3.4M" and "1 234" for view counts. */
+export function parseTelegramCount(raw: string): number | undefined {
+  const text = raw.trim().replace(/\s/g, "").replace(/,/g, ".");
+  const match = text.match(/^([\d.]+)\s*([KMB]?)$/i);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value)) return undefined;
+  const unit = match[2].toUpperCase();
+  const multiplier = unit === "K" ? 1e3 : unit === "M" ? 1e6 : unit === "B" ? 1e9 : 1;
+  return Math.round(value * multiplier);
 }
 
 // REAL LIVE UNIFIED ENGINE: Combines official APIs, public search feeds, and Google Search Grounding
-/** Public search URL for a platform, used when grounding returns no direct link. */
-export function constructOfficialPlatformSearchUrl(platform: string, query: string): string {
-  const encQuery = encodeURIComponent(query);
-  const tag = encodeURIComponent(query.replace(/[\s#]+/g, ""));
-  switch (platform.toLowerCase()) {
-    case "twitter":
-    case "x":
-      return `https://x.com/search?q=${encQuery}`;
-    case "tiktok":
-      return `https://www.tiktok.com/search?q=${encQuery}`;
-    case "instagram":
-      return `https://www.instagram.com/explore/tags/${tag}/`;
-    case "facebook":
-      return `https://www.facebook.com/search/top?q=${encQuery}`;
-    case "youtube":
-      return `https://www.youtube.com/results?search_query=${encQuery}`;
-    case "linkedin":
-      return `https://www.linkedin.com/search/results/all/?keywords=${encQuery}`;
-    case "reddit":
-      return `https://www.reddit.com/search/?q=${encQuery}`;
-    case "threads":
-      return `https://www.threads.net/search?q=${encQuery}`;
-    case "telegram":
-      return `https://t.me/s/${tag}`;
-    case "bluesky":
-      return `https://bsky.app/search?q=${encQuery}`;
-    case "mastodon":
-      return `https://mastodon.social/search?q=${encQuery}`;
-    case "hackernews":
-      return `https://hn.algolia.com/?q=${encQuery}`;
-    case "github":
-      return `https://github.com/search?q=${encQuery}&type=issues`;
-    case "pinterest":
-      return `https://www.pinterest.com/search/pins/?q=${encQuery}`;
-    case "news":
-      return `https://news.google.com/search?q=${encQuery}`;
-    default:
-      return `https://www.google.com/search?q=${encQuery}`;
-  }
+/** Maximum rows a single scan may return, so a wider net stays bounded. */
+export const MAX_ROWS_PER_SCAN = 400;
+/** How many search channels are queried at once. */
+const SEARCH_CONCURRENCY = 3;
+
+/** Runs `jobs` with at most `limit` in flight. Same work, a third of the wall-clock. */
+async function runPool<T, R>(items: T[], limit: number, job: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = index++;
+      results[current] = await job(items[current]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
+/**
+ * Collects signal for one tracker.
+ *
+ * Order of business, and why:
+ *  1. credentialled APIs and open public endpoints fan out in parallel;
+ *  2. only the channels that came back empty are handed to the search leg, so
+ *     the model is never asked to guess about a channel that already answered;
+ *  3. the search leg runs its channels concurrently and, inside a channel, tries
+ *     several query framings, keeping only mentions whose URL was in the results.
+ *
+ * No synthetic fallback exists here. An empty result is the honest answer, and
+ * the dashboard says which sources are configured so the emptiness is explained.
+ */
 export async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
-  const query = tracker.query;
-  const selectedPlatforms: string[] = tracker.platforms || [];
-  
+  const query = String(tracker?.query || "").trim();
+  const selectedPlatforms: string[] = (tracker?.platforms || []).map((p: string) =>
+    p.toLowerCase()
+  );
+  if (!query) return [];
+
   const apiTasks: { platform: string; promise: Promise<any[]> }[] = [];
-  
-  // 1. Reddit: Fetch real posts from Reddit public API if selected (requires no credentials!)
+
+  // 1. Channels with a documented read path that needs no AI.
   if (selectedPlatforms.includes("reddit")) {
-    logger.info(`[Unified API Engine] Querying public Reddit API for "${query}"...`);
     apiTasks.push({ platform: "reddit", promise: fetchRealRedditPosts(query) });
   }
-
-  // 2. YouTube: Fetch real videos from YouTube Data API v3 if API key is present
-  if (selectedPlatforms.includes("youtube") && process.env.YOUTUBE_API_KEY) {
-    logger.info(`[Unified API Engine] Querying official YouTube API for "${query}"...`);
+  if (selectedPlatforms.includes("youtube")) {
+    // RSS discovery needs no key; the key only adds view counts.
     apiTasks.push({ platform: "youtube", promise: fetchRealYouTubeVideos(query) });
   }
-
-  // 3. Twitter/X: Fetch real tweets from Twitter API v2 if Bearer Token is present
-  if ((selectedPlatforms.includes("twitter") || selectedPlatforms.includes("x")) && process.env.TWITTER_BEARER_TOKEN) {
-    const platformName = selectedPlatforms.includes("twitter") ? "twitter" : "x";
-    apiTasks.push({ platform: platformName, promise: fetchRealTweets(query) });
+  if (
+    (selectedPlatforms.includes("twitter") || selectedPlatforms.includes("x")) &&
+    process.env.TWITTER_BEARER_TOKEN
+  ) {
+    apiTasks.push({ platform: "twitter", promise: fetchRealTweets(query) });
+  }
+  if (selectedPlatforms.includes("medium")) {
+    apiTasks.push({ platform: "medium", promise: fetchMedium(query) });
+  }
+  if (selectedPlatforms.includes("twitch")) {
+    apiTasks.push({ platform: "twitch", promise: fetchTwitchStreams(query) });
+  }
+  if (selectedPlatforms.includes("telegram")) {
+    const handles = telegramHandlesFor(tracker);
+    if (handles.length > 0) {
+      apiTasks.push({
+        platform: "telegram",
+        promise: Promise.all(handles.map((h) => fetchTelegramChannel(h))).then((lists) => lists.flat()),
+      });
+    }
   }
 
-  // 3b. Open collectors: documented public endpoints, no credentials required.
-  const OPEN_COLLECTORS: Record<string, { run: () => Promise<any[]> }> = {
-    bluesky: { run: () => fetchBlueskyPosts(query) },
-    mastodon: { run: () => fetchMastodonPosts(query) },
-    hackernews: { run: () => fetchHackerNews(query) },
-    news: { run: () => fetchGoogleNews(query) },
-    lemmy: { run: () => fetchLemmyPosts(query) },
-    stackoverflow: { run: () => fetchStackOverflow(query) },
-    devto: { run: () => fetchDevTo(query) },
-    github: { run: () => fetchGitHubIssues(query) },
+  const OPEN_COLLECTORS: Record<string, () => Promise<any[]>> = {
+    bluesky: () => fetchBlueskyPosts(query),
+    mastodon: () => fetchMastodonPosts(query),
+    hackernews: () => fetchHackerNews(query),
+    news: () => fetchGoogleNews(query),
+    lemmy: () => fetchLemmyPosts(query),
+    stackoverflow: () => fetchStackOverflow(query),
+    devto: () => fetchDevTo(query),
+    github: () => fetchGitHubIssues(query),
   };
 
   for (const platform of selectedPlatforms) {
     const key = platform.toLowerCase();
     if (OPEN_COLLECTORS[key]) {
-      logger.info(`[Unified API Engine] Querying open ${key} endpoint for "${query}"...`);
-      apiTasks.push({ platform: key, promise: OPEN_COLLECTORS[key].run() });
+      apiTasks.push({ platform: key, promise: OPEN_COLLECTORS[key]() });
     }
   }
 
@@ -733,130 +1337,163 @@ export async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   const platformsWithResults = new Set<string>();
 
   if (apiTasks.length > 0) {
-    try {
-      const results = await Promise.all(
-        apiTasks.map(async (task) => {
-          try {
-            const res = await task.promise;
-            if (res && res.length > 0) {
-              platformsWithResults.add(task.platform.toLowerCase());
-              if (task.platform.toLowerCase() === "x" || task.platform.toLowerCase() === "twitter") {
-                platformsWithResults.add("twitter");
-                platformsWithResults.add("x");
-              }
-              return res;
-            }
-          } catch (taskErr) {
-            logger.warn(`[Unified API Engine] [Bypassed] Official API failed for platform ${task.platform}:`, taskErr);
+    const results = await Promise.all(
+      apiTasks.map(async (task) => {
+        try {
+          const res = await task.promise;
+          if (Array.isArray(res) && res.length > 0) {
+            platformsWithResults.add(task.platform.toLowerCase());
+            return res;
           }
-          return [];
-        })
-      );
-      for (const resList of results) {
-        mergedResults.push(...resList);
-      }
-    } catch (err) {
-      logger.warn("[Unified API Engine] [Bypassed] Error waiting for official APIs:", err);
-    }
+        } catch (err: any) {
+          logger.warn(`[Collector] ${task.platform} failed: ${err?.message || err}`);
+        }
+        return [] as any[];
+      })
+    );
+    for (const list of results) mergedResults.push(...list);
   }
 
-  // Find remaining platforms that either don't have official APIs or failed to return any results
-  const remainingPlatforms = selectedPlatforms.filter(p => !platformsWithResults.has(p.toLowerCase()));
+  // 2. Channels that have no read API, or answered nothing this cycle.
+  const remainingPlatforms = selectedPlatforms.filter(
+    (p) => !platformsWithResults.has(p.toLowerCase())
+  );
+  const searchTargets = remainingPlatforms.filter((p) => CHANNEL_SEARCH_SITES[p.toLowerCase()]);
+  const searchReady = searchTargets.length > 0 && aiCanSearch() && searchConfig().configured;
 
-  // 4. Grounding: If we have remaining platforms (e.g. Tiktok, Instagram, Facebook, WhatsApp, LinkedIn, etc.)
-  // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
-  if (remainingPlatforms.length > 0 && aiCanSearch()) {
-    try {
-      logger.info(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
-      const searchPlatformsStr = remainingPlatforms.join(", ");
-      const prompt = `Search the live web for recent public discussions, posts, reviews, or mentions of "${query}" specifically on social media platforms: ${searchPlatformsStr}.
-      Use Google Search grounding to retrieve real information.
-      Then, process up to 4 real search result mentions and format them into a structured JSON array.
-      
-      Each item in the array MUST contain:
-      - platform: one of ${JSON.stringify(CHANNEL_KEYS)}
-      - url: the actual source URL retrieved from the search grounding links
-      - author: name/handle of the poster or "Public Discussion"
-      - title: brief summary headline of the post/mention
-      - content: summary of what was said in the post or comment
-      - sentiment: "positive" | "neutral" | "negative"
-      - sentimentScore: number from -1 to 1 representing the emotion strength
-      - emotion: "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral"
-      - engagement: "High" | "Medium" | "Low"
-      - date: approximate ISO date (e.g. "2026-07-12T00:00:00.000Z")
-      - country: country of origin of this post or the brand mention (e.g. "United States", "Indonesia", "United Kingdom", "Japan", etc.)
-      - latitude: approximate latitude coordinate of the location
-      - longitude: approximate longitude coordinate of the location
-      
-      JSON Output Format should be a clean array of these objects:
-      [
-        { ... },
-        { ... }
-      ]`;
+  if (searchTargets.length > 0 && !searchReady) {
+    logger.info(
+      `[Search] Skipping ${searchTargets.length} channel(s) (${searchTargets.join(", ")}): ` +
+        (!aiCanSearch()
+          ? "no AI key configured."
+          : "no web search provider configured (set SEARCH_PROVIDER + SEARXNG_URL or SEARCH_API_KEY).")
+    );
+  }
 
-      const parsedGrounding = await chatJson<any[]>({
-        system:
-          "You are a media-intelligence collector. You are given web results from a search tool and must " +
-          "extract only mentions that actually appear in them. Never invent a post, an author, a URL or a date.",
-        prompt,
-        expectation: "an array of mention objects",
-        temperature: 0,
-        maxTokens: 2000,
-      });
+  if (searchReady) {
+    const perChannel = await runPool(searchTargets, SEARCH_CONCURRENCY, async (platform) => {
+      const key = platform.toLowerCase();
+      try {
+        // Several framings of one keyword: exact phrase, intent words, and the
+        // hashtag/handle form. Freshness is a week because that is what "live" means.
+        const seen = new Map<string, SearchResult>();
+        for (const variant of queryVariantsFor(key, query)) {
+          const results = await searchWeb(variant, 15, { freshness: "week" });
+          for (const r of results) if (!seen.has(r.url)) seen.set(r.url, r);
+        }
+        const results = [...seen.values()].slice(0, 30);
+        if (results.length === 0) {
+          logger.info(`[Search] ${key}: no results for this cycle.`);
+          return [];
+        }
 
-      if (!Array.isArray(parsedGrounding)) {
-        throw new AiError("Grounding did not return an array.", "bad-response");
-      }
-      if (parsedGrounding.length === 0) {
-        logger.info("[Unified API Engine] The model found no grounded mentions for this cycle.");
+        const listing = results
+          .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet.slice(0, 400)}`)
+          .join("\n");
+
+        const extracted = await chatJson<any[]>({
+          system:
+            "You extract social-media mentions from search results. Use ONLY the results given. " +
+            "Never invent a post, author, URL or date. If a result is not a mention of the keyword, skip it. " +
+            "Reply with a JSON array; return [] when nothing qualifies.",
+          prompt:
+            `Keyword: "${query}"\nChannel: ${key}\n\n` +
+            `Search results:\n${listing}\n\n` +
+            "Return up to 8 mentions as a JSON array. Each item: {\n" +
+            '  "url": one of the URLs above, copied exactly,\n' +
+            '  "author": the poster or site name from the result, or "Public discussion",\n' +
+            '  "title": short headline,\n' +
+            '  "content": what was said, in one or two sentences,\n' +
+            '  "sentiment": "positive" | "neutral" | "negative",\n' +
+            '  "sentimentScore": number from -1 to 1,\n' +
+            '  "emotion": "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral",\n' +
+            '  "engagement": "High" | "Medium" | "Low",\n' +
+            '  "date": the publication date shown in the result, or omit it\n' +
+            "}\nOnly include items whose url appears verbatim in the list above.",
+          expectation: "an array of mention objects",
+          temperature: 0,
+          maxTokens: 2200,
+        });
+
+        if (!Array.isArray(extracted) || extracted.length === 0) {
+          logger.info(`[Search] ${key}: model found no mention in ${results.length} result(s).`);
+          return [];
+        }
+
+        // Hard guard: a mention whose URL was not in the search results is a
+        // hallucination, whatever the model says.
+        const allowed = new Set(results.map((r) => r.url));
+        const grounded = extracted.filter(
+          (m: any) => typeof m?.url === "string" && allowed.has(m.url)
+        );
+        if (grounded.length !== extracted.length) {
+          logger.warn(
+            `[Search] ${key}: dropped ${extracted.length - grounded.length} mention(s) whose URL was not in the results.`
+          );
+        }
+        if (grounded.length === 0) return [];
+
+        logger.info(`[Search] ${key}: kept ${grounded.length}/${extracted.length} grounded mention(s).`);
+        return grounded.map((m: any) => {
+          const snippet = results.find((r) => r.url === m.url);
+          return {
+            ...m,
+            platform: key,
+            // Never default to "now": an invented timestamp distorts velocity.
+            date: m.date || undefined,
+            content: (m.content || snippet?.snippet || "").slice(0, 280),
+          };
+        });
+      } catch (err: any) {
+        logger.warn(`[Search] ${key} failed:`, describeAiFailure(err));
         return [];
       }
+    });
 
-      // The model is happy to return loosely-related chatter. Drop anything that
-      // never mentions the tracked keyword, so a channel is not "filled" with
-      // unrelated posts.
-      const keyword = query.replace(/^#/, "").toLowerCase().trim();
-      const relevant = parsedGrounding.filter((res: any) => {
-        if (!keyword) return true;
-        const hay = `${res?.title || ""} ${res?.content || ""} ${res?.author || ""}`.toLowerCase();
-        return hay.includes(keyword);
-      });
-      logger.info(
-        `[Unified API Engine] Grounded mentions kept: ${relevant.length}/${parsedGrounding.length} (keyword match).`
-      );
-
-      const cleanGrounding = relevant.map((res: any) => {
-        let cleanUrl = typeof res?.url === "string" ? res.url : "";
-        if (
-          !cleanUrl.startsWith("http") ||
-          cleanUrl.includes("example.com") ||
-          cleanUrl.includes("share/status/global")
-        ) {
-          cleanUrl = constructOfficialPlatformSearchUrl(res?.platform || "google", query);
-        }
-        return { ...res, url: cleanUrl };
-      });
-
-      mergedResults.push(...cleanGrounding);
-    } catch (err: any) {
-      logger.warn(
-        `[Unified API Engine] Model lookup failed for ${remainingPlatforms.join(", ")}:`,
-        describeAiFailure(err)
-      );
+    for (const list of perChannel) {
+      if (list.length > 0) {
+        platformsWithResults.add(list[0].platform);
+        mergedResults.push(...list);
+      }
     }
   }
 
-  // 5. No synthetic fallback. An empty result is the honest answer, and the UI
-  // tells the user which data sources are configured so they know why.
   if (mergedResults.length === 0) {
     logger.info(
       `[Unified API Engine] No collected mentions for "${query}". No placeholder data will be invented.`
     );
   }
 
-  return mergedResults.map((item, index) => ({
+  const bounded = mergedResults.slice(0, MAX_ROWS_PER_SCAN);
+  if (mergedResults.length > bounded.length) {
+    logger.info(
+      `[Unified API Engine] Kept ${bounded.length} of ${mergedResults.length} mention(s); the per-scan cap is ${MAX_ROWS_PER_SCAN}.`
+    );
+  }
+
+  const scanId = Date.now();
+  return bounded.map((item, index) => ({
     ...item,
-    id: `mr-${Date.now()}-${index}`,
-    trackerId: tracker.id
+    id: `mr-${scanId}-${index}`,
+    trackerId: tracker.id,
   }));
+}
+
+/**
+ * Which Telegram channels to read for a tracker.
+ *
+ * Telegram has no keyword search on the open web, so a handle has to be named.
+ * `tracker.accounts` is a free-form list of handles; when it is empty the tracker
+ * query itself is tried as a handle (a hashtag-style tracker often matches one).
+ */
+export function telegramHandlesFor(tracker: any): string[] {
+  const explicit: string[] = Array.isArray(tracker?.accounts) ? tracker.accounts : [];
+  const candidates = [...explicit, String(tracker?.query || "")];
+  return [
+    ...new Set(
+      candidates
+        .map((c) => String(c || "").replace(/^@/, "").replace(/^https?:\/\/t\.me\//, "").trim())
+        .filter((c) => /^[A-Za-z0-9_]{3,64}$/.test(c))
+    ),
+  ].slice(0, 5);
 }

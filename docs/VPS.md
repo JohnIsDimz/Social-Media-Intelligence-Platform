@@ -14,9 +14,14 @@ Database setup lives in [`SUPABASE.md`](SUPABASE.md).
 | `API_AUTH_TOKEN` set | Without it, anyone on the internet can create trackers and spend your AI credit. `POST/PUT/PATCH/DELETE` and the dashboard itself stay public otherwise. | `openssl rand -hex 32` |
 | `AI_API_KEY` set | Without it there is no sentiment analysis, no forecast, and no search-grounded channels. The dashboard will be honestly empty. | Sakelar console |
 | `.env` not in git | It holds keys. `.gitignore` already covers it. | `git check-ignore -v .env` |
+| Keys only in `.env` | The app reads every secret from `process.env`. There is no settings screen and no key field: any `POST/PUT/PATCH` to `/api/*` carrying a secret-named field is rejected with `400 credentials-not-accepted`. Edit `.env` on the server, then restart. | `grep -n "credentials-not-accepted" src/server/credentials.ts` |
 | Port not exposed publicly | The app speaks plain HTTP. nginx/Caddy terminates TLS. | bind `127.0.0.1:3000` |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set | Without them nothing is stored; the API serves empty data and `/api/health` says `not-configured`. | `curl -s localhost:3000/api/health` |
 | `supabase/schema.sql` applied | Connected but missing tables reports `schema-missing`; writes fail. | run it once in the SQL editor |
+| `SEARCH_LANGUAGE` matches your market | Search results are filtered to the last week; `en` covers English conversation, `id` also switches Google News to the Indonesian edition. | `SEARCH_LANGUAGE=id` |
+| Optional collector keys | Eleven channels collect with no key at all. These only deepen them: `REDDIT_CLIENT_ID`+`SECRET` (reliable Reddit), `YOUTUBE_API_KEY` (view counts), `TWITTER_BEARER_TOKEN` (X), `TWITCH_CLIENT_ID`+`SECRET`. All free, all in `.env`. | see `.env.example` |
+| `supabase/schema.sql` re-applied after upgrading | The file is idempotent and its tail adds the columns newer versions write (`engagement_score`, `query_variant`, `trackers.accounts`). Skipping it leaves writes silently narrowed. | run it again in the SQL editor |
+| `SEARCH_PROVIDER` set | Without it, the channels with no public read API (TikTok, Instagram, Facebook, ...) collect nothing, however many AI tokens you have. `searxng` costs nothing and needs no key. | `SEARCH_PROVIDER=searxng`, then `docker compose up -d searxng` |
 | `TRUST_PROXY=1` | Behind a proxy, rate limiting must key on the real client IP, not the proxy's. | already the default |
 
 ---

@@ -3,8 +3,12 @@
  *
  * Each channel declares how it can actually be collected:
  *   - `api`       a documented public/keyed API is queried directly
- *   - `grounding` no public read API; only reachable through search grounding
- *   - `none`      nothing collectable today (private/closed or no read access)
+ *   - `grounding` no public read API; only reachable through the model
+ *   - `none`      no collector is implemented, so nothing is collected
+ *
+ * `none` is not a placeholder for "probably works": the health report says so
+ * in as many words, and no credential is advertised for a channel that has no
+ * collector behind it.
  *
  * `endpoint` and `credential` are what the health probe uses, so the audit of
  * "which networks are dead" is driven by data instead of by guesswork.
@@ -28,17 +32,21 @@ export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     key: "reddit",
     label: "Reddit",
-    collects: "posts from public subreddit search",
+    collects: "posts and comments from public search",
     kind: "api",
+    // Optional: anonymous search.json still works but is rate limited to 403 from
+    // many hosts, so a "script" app is the reliable path. Both are free.
+    credential: "REDDIT_CLIENT_ID+REDDIT_CLIENT_SECRET",
     endpoint: "https://www.reddit.com/r/all/search.json?q=test&limit=1",
     okStatus: [200],
   },
   {
     key: "youtube",
     label: "YouTube",
-    collects: "videos matching the keyword",
+    collects: "videos matching the keyword (RSS discovery, view counts with a key)",
     kind: "api",
-    credential: "YOUTUBE_API_KEY",
+    // Discovery is the public RSS feed; the key only adds statistics.
+    credential: undefined,
     endpoint: "https://www.googleapis.com/youtube/v3/search?part=snippet&q=test&maxResults=1",
     okStatus: [200, 400, 403],
   },
@@ -113,7 +121,7 @@ export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     key: "medium",
     label: "Medium",
-    collects: "publication posts via RSS",
+    collects: "tag posts via public RSS",
     kind: "api",
     endpoint: "https://medium.com/feed/tag/technology",
   },
@@ -127,9 +135,12 @@ export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     key: "twitch",
     label: "Twitch",
-    collects: "stream channels and categories",
+    collects: "live streams and top games via Helix (app client-credentials, free)",
     kind: "api",
-    credential: "TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET",
+    // Free app registration, no card. Without the pair the channel is reported as
+    // needing a key rather than being silently skipped.
+    credential: "TWITCH_CLIENT_ID+TWITCH_CLIENT_SECRET",
+    // The probe cannot authenticate, so a 401 still proves the host is alive.
     endpoint: "https://api.twitch.tv/helix/games/top?first=1",
     okStatus: [200, 401, 403],
   },
@@ -166,8 +177,9 @@ export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     key: "telegram",
     label: "Telegram",
-    collects: "public channel posts, discovered through search",
-    kind: "grounding",
+    collects: "public channel posts, read from the t.me/s widget for the handles on the tracker",
+    kind: "api",
+    endpoint: "https://t.me/s/telegram",
   },
   {
     key: "discord",

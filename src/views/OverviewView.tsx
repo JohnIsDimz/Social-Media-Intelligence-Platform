@@ -4,7 +4,6 @@ import {
   signed,
   sentimentText,
   Metric,
-  Rule,
   Button,
   NoDataTag,
 } from "../lib/ui";
@@ -67,7 +66,7 @@ export function OverviewView({
 
   return (
     <div className="flex flex-col">
-      <section className="settle grid gap-6 pb-6 lg:grid-cols-[1fr_auto] lg:items-center lg:gap-10">
+      <section className="card settle mb-6 grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_auto] lg:items-center lg:gap-10">
         <div>
           <p className="text-[13px] text-ink-3">
             {activeQuery ? (
@@ -112,6 +111,12 @@ export function OverviewView({
           className="mx-auto lg:mx-0"
           size={176}
           state={radarState}
+          contacts={channels.map((c) => ({
+            platform: c.platform,
+            volume: c.buzzVolume,
+            strength: c.signalStrength,
+          }))}
+          rangeLabel={`outer ring = ${fmt(60)} mentions per channel; inner ring = stronger signal`}
           label={
             radarState === "scanning"
               ? "scanning"
@@ -133,12 +138,12 @@ export function OverviewView({
         />
       </section>
 
-      <section aria-label="Key figures" className="border-y border-hair">
-        <div className="grid grid-cols-2 sm:grid-cols-4">
-          <div className="border-b border-hair pr-4 sm:border-b-0 sm:border-r sm:pr-6">
+      <section aria-label="Key figures">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+          <div className="card px-4 py-3.5 transition-shadow hover:shadow-[var(--shadow-raised)]">
             <Metric label="Mentions collected" value={fmt(stats?.totalAnalyzed ?? 0)} hint="in this window" />
           </div>
-          <div className="border-b border-hair pl-4 sm:border-b-0 sm:border-r sm:px-6">
+          <div className="card px-4 py-3.5 transition-shadow hover:shadow-[var(--shadow-raised)]">
             <Metric
               label="Leading sentiment"
               value={sentimentText(overall)}
@@ -146,7 +151,7 @@ export function OverviewView({
               hint={<span className="tnum">mean score {signed(score)}</span>}
             />
           </div>
-          <div className="border-b border-hair pr-4 sm:border-b-0 sm:border-r sm:pr-6">
+          <div className="card px-4 py-3.5 transition-shadow hover:shadow-[var(--shadow-raised)]">
             <Metric
               label="Top emotion"
               value={topEmotion ? topEmotion.name : "—"}
@@ -157,7 +162,7 @@ export function OverviewView({
               }
             />
           </div>
-          <div className="pl-4 sm:pl-6">
+          <div className="card px-4 py-3.5 transition-shadow hover:shadow-[var(--shadow-raised)]">
             <Metric
               label="Channels with data"
               value={`${activePlatforms}/${platformCount}`}
@@ -167,7 +172,7 @@ export function OverviewView({
         </div>
       </section>
 
-      <section aria-labelledby="channels-title" className="pt-7">
+      <section aria-labelledby="channels-title" className="card mt-6 p-5 sm:p-6">
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 id="channels-title" className="font-display text-[19px] font-semibold text-ink">
             Channels
@@ -179,17 +184,15 @@ export function OverviewView({
           <p className="mt-3 flex items-start gap-2 text-[12px] leading-relaxed text-ink-3">
             <NoDataTag show />
             <span>
-              {platformCount - activePlatforms} channel
-              {platformCount - activePlatforms === 1 ? " has" : "s have"} no collected mentions yet.
-              Nothing is estimated — empty means empty.
+              {platformCount - activePlatforms} of {platformCount} channels have no collected
+              mentions yet. They are listed under the table and in Data sources, with the reason
+              for each. Nothing is estimated — empty means empty.
             </span>
           </p>
         )}
       </section>
 
-      <Rule className="mt-8" />
-
-      <div className="pt-7">
+      <div className="card mt-6 p-5 sm:p-6">
         <TrendForecast
           predictions={predictions}
           isLive={predictionsLive}
@@ -199,15 +202,16 @@ export function OverviewView({
         />
       </div>
 
-      <Rule className="mt-8" />
-
-      <div className="grid grid-cols-1 gap-x-10 gap-y-8 pt-7 lg:grid-cols-2">
-        <ShareOfVoice stats={stats} />
-        <EmotionBars stats={stats} />
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="card p-5 sm:p-6">
+          <ShareOfVoice stats={stats} />
+        </div>
+        <div className="card p-5 sm:p-6">
+          <EmotionBars stats={stats} />
+        </div>
       </div>
 
-      <Rule className="mt-8" />
-      <section aria-labelledby="alerts-title" className="pt-7">
+      <section aria-labelledby="alerts-title" className="card mt-6 p-5 sm:p-6">
         <h2 id="alerts-title" className="mb-3 font-display text-[19px] font-semibold text-ink">
           Needs attention
         </h2>

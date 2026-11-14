@@ -10,6 +10,7 @@ import { CHANNEL_SPECS } from "../channels.ts";
 import { aiSummary } from "../lib/aiProvider.ts";
 import { dbStatus } from "../lib/supabaseDb.ts";
 import { logger } from "./logger.ts";
+import { searchConfig } from "./search.ts";
 
 /* ---------------------------------------------------------------------------
  * Network audit
@@ -20,7 +21,15 @@ import { logger } from "./logger.ts";
  * ------------------------------------------------------------------------- */
 
 export interface ChannelHealth {
-  status: "configured" | "public" | "grounding" | "needs-key" | "closed" | "down" | "unverified";
+  status:
+    | "configured"
+    | "public"
+    | "grounding"
+    | "needs-key"
+    | "closed"
+    | "planned"
+    | "down"
+    | "unverified";
   detail: string;
 }
 
@@ -78,28 +87,46 @@ export async function buildChannelHealth(force = false) {
   }
 
   const ai = aiSummary();
-  const grounding = ai.enabled;
+  const search = searchConfig();
+  // A channel without a public read API needs BOTH legs: a search provider to
+  // find the pages, and a model to extract mentions from them.
+  const grounding = ai.enabled && search.configured;
   const egress = await detectEgress();
   const channels: Record<string, ChannelHealth> = {};
 
   await Promise.all(
     CHANNEL_SPECS.map(async (spec) => {
+      // A credential listed for a channel is optional when the endpoint still
+      // answers without it (YouTube RSS, anonymous Reddit). The probe decides:
+      // a reachable endpoint means the channel collects, key or no key.
       const hasCredential = spec.credential
         ? spec.credential.split("+").every((c) => Boolean(process.env[c.trim()]))
         : true;
 
       if (spec.kind === "grounding") {
+        const missing: string[] = [];
+        if (!search.configured) missing.push("a web search provider (SEARCH_PROVIDER + SEARXNG_URL or SEARCH_API_KEY)");
+        if (!ai.enabled) missing.push("an AI key (AI_API_KEY) for extraction");
+
         channels[spec.key] = {
           status: grounding ? "grounding" : "needs-key",
           detail: grounding
-            ? `No public read API. Collected through search-grounded lookup on ${ai.provider} (${ai.model}): ${spec.collects}.`
-            : `No public read API. Set AI_API_KEY (search-grounded lookup) to collect ${spec.collects}.`,
+            ? `No public read API. Found by ${search.provider} search, extracted by ${ai.provider} (${ai.model}): ${spec.collects}.`
+            : `No public read API. Needs ${missing.join(" and ")} to collect ${spec.collects}.`,
         };
         return;
       }
 
       if (spec.kind === "none") {
-        channels[spec.key] = { status: "closed", detail: spec.collects };
+        // No collector exists for this channel. Say that plainly instead of
+        // letting a reachable endpoint imply coverage that is not there, and keep
+        // it visually distinct from a channel that is genuinely private.
+        channels[spec.key] = {
+          status: "planned",
+          detail: spec.endpoint
+            ? `Not built yet, so nothing is collected — no key unlocks this. Endpoint is ${new URL(spec.endpoint).host} if a collector is added.`
+            : `Not built yet: ${spec.collects}.`,
+        };
         return;
       }
 
@@ -114,13 +141,21 @@ export async function buildChannelHealth(force = false) {
         return;
       }
 
+      // A channel whose credential is missing is only "needs-key" when the
+      // endpoint itself refuses anonymous access. YouTube's RSS feed and Reddit's
+      // anonymous search answer without a key, so they must not be filed as
+      // blocked; the probe below decides, and the key is mentioned as an upgrade.
       if (spec.credential && !hasCredential) {
         const probe = await probeEndpoint(spec);
+        const worksAnonymously =
+          probe.reachable && (probe.healthy || (probe.status > 0 && probe.status < 400));
         channels[spec.key] = {
-          status: probe.reachable ? "needs-key" : "down",
-          detail: probe.reachable
-            ? `Endpoint answers (HTTP ${probe.status}). Set ${spec.credential} to collect ${spec.collects}.`
-            : `Endpoint unreachable from this server (${probe.error}). Set ${spec.credential} on a host with network access.`,
+          status: worksAnonymously ? "public" : probe.reachable ? "needs-key" : "down",
+          detail: worksAnonymously
+            ? `Public access works (HTTP ${probe.status}): ${spec.collects}. ${spec.credential} is optional and adds depth.`
+            : probe.reachable
+              ? `Endpoint answers but refuses anonymous reads (HTTP ${probe.status}). Set ${spec.credential} to collect ${spec.collects}.`
+              : `Endpoint unreachable from this server (${probe.error}).`,
         };
         return;
       }
@@ -149,6 +184,7 @@ export async function buildChannelHealth(force = false) {
   const payload = {
     grounding,
     ai,
+    search: { ...search, enabled: search.configured },
     egress,
     database: dbStatus(),
     checkedAt: new Date().toISOString(),
@@ -159,6 +195,7 @@ export async function buildChannelHealth(force = false) {
       searchOnly: values.filter((v) => v.status === "grounding").length,
       needsKey: values.filter((v) => v.status === "needs-key").length,
       closed: values.filter((v) => v.status === "closed").length,
+      planned: values.filter((v) => v.status === "planned").length,
       down: values.filter((v) => v.status === "down").length,
       unverified: values.filter((v) => v.status === "unverified").length,
     },
@@ -167,7 +204,7 @@ export async function buildChannelHealth(force = false) {
   healthCache = { at: Date.now(), payload };
   logger.info(
     egress
-      ? `[Health] ${payload.summary.total} networks checked: ${payload.summary.reachable} reachable, ${payload.summary.needsKey} need a key, ${payload.summary.closed} closed, ${payload.summary.down} down.`
+      ? `[Health] ${payload.summary.total} networks checked: ${payload.summary.reachable} reachable, ${payload.summary.needsKey} need a key, ${payload.summary.planned} not built, ${payload.summary.closed} closed, ${payload.summary.down} down.`
       : `[Health] No outbound internet from this host; ${payload.summary.total} networks marked unverified instead of "down".`
   );
   return payload;

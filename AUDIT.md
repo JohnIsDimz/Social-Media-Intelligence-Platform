@@ -548,3 +548,546 @@ Uji manual `curl` pada bundle produksi juga dijalankan untuk sepuluh skenario ya
 | R1-R27 | selesai (lihat §11 dan §12 untuk R1-R24) |
 
 Tidak ada temuan audit yang masih terbuka. Yang tetap berupa **keputusan produk** (bukan cacat) hanya: apakah `GET /login` perlu kustomisasi tampilan lebih lanjut, dan apakah ingin menambah `NOTICE` bila nanti menerima kontribusi pihak ketiga.
+
+---
+
+## 14. Audit putaran kelima — klaim kredensial, radar, dan bahasa
+
+Dipicu oleh tiga laporan pengguna: "ada platform yang mengklaim API key nyata",
+"radar terlalu palsu", "masih banyak bahasa Indonesia".
+
+### 14.1 Klaim kredensial yang tidak berdasar
+
+| Kode | Temuan | Bukti | Perbaikan |
+|---|---|---|---|
+| R28 | **Twitch mengiklankan `TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET`** padahal tidak ada kolektor Twitch sama sekali. `grep -rn "TWITCH_CLIENT" src/ server.ts` mengembalikan **nol** hasil di luar katalog kanal, dan `fetchUnifiedSocialSignals` tidak pernah memanggil endpoint Twitch. Kredensial itu tidak pernah dibaca kode mana pun. | `src/channels.ts` (entri twitch) | Kanal diubah ke `kind: "none"`, `collects: "no collector yet"`, kredensial dihapus. Laporan kesehatan kini berbunyi "No collector implemented yet, so nothing is collected." |
+| R29 | **Medium dan Vimeo juga tanpa kolektor** tetapi dikelompokkan bersama kanal publik yang berjalan | tidak ada `fetchMedium`/`fetchVimeo` di `collectors.ts` | Tidak diubah tipenya (endpoint-nya benar-benar hidup dan berguna untuk audit), tetapi README sekarang menyatakannya eksplisit: "punya endpoint, belum punya kolektor". |
+
+**Jawaban untuk pertanyaan "apakah itu benar?":** sebagian. Tiga kredensial yang
+benar-benar dibaca kode adalah `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, dan
+`GITHUB_TOKEN` (`grep -o "process.env\.[A-Z_]*"` di server hanya menemukan tiga
+itu plus `AI_API_KEY` dan kredensial Supabase). `TWITCH_CLIENT_ID` dan
+`TWITCH_CLIENT_SECRET` adalah klaim kosong, dan sudah dihapus.
+
+**Temuan tambahan yang lebih besar dari pertanyaan awal:** grup `grounding`
+(11 kanal, termasuk TikTok/Instagram/Facebook) meminta model "mencari di web",
+tetapi `chatText()` di `aiProvider.ts` tidak pernah mengirim `tools`, dan gateway
+Sakelar hanya menyediakan `/chat/completions`. Tidak ada tool pencarian, sehingga
+grup itu tidak dapat mengambil posting baru — apa pun isi kuncinya. Ini
+didokumentasikan di README; memperbaikinya berarti menambah penyedia pencarian
+atau memakai gateway yang mendukung grounding, yang merupakan keputusan produk,
+bukan perbaikan satu baris.
+
+### 14.2 Radar
+
+| Sebelum | Sesudah |
+|---|---|
+| Lingkaran dengan 60 tick menit dan angka 60/15/30/45 — muka jam, bukan radar | PPI sebenarnya: 4 cincin jarak, 72 tick bearing (panjang tiap 30 derajat), label N/E/S/W |
+| Tidak ada objek yang dipantau | Kontak diplot dari kanal yang **benar-benar berisi mention**; kanal kosong tidak menghasilkan blip |
+| Posisi tidak bermakna | Bearing diturunkan dari hash nama kanal (deterministik, 0 tabrakan pada 25 kanal), jarak dari `signalStrength`: makin kuat makin dekat pusat |
+| Sapuan hanya hiasan | Kontak menyala saat sapuan melewati bearing-nya lalu meredup — perilaku scope sungguhan, dihitung dari bearing dan durasi putaran |
+| Grid rapat ke pusat | Radius minimum 15 unit menjaga readout di tengah tetap terbaca |
+
+`prefers-reduced-motion` tetap menghentikan seluruh animasi; pada kondisi itu
+kontak ditampilkan statis dengan opasitas penuh, bukan hilang.
+
+### 14.3 Bahasa
+
+Empat string Indonesia terakhir yang dilihat pengguna diterjemahkan: tiga alert
+`/api/dashboard-stats` ("Anomali Sentimen Negatif", "Tren Tagar Baru",
+"Pemantauan Brand Aktif") dan satu pesan `ApiError`. Pemindai kata Indonesia pada
+`src/**` kini bersih; satu-satunya sisa adalah daftar kata kunci sentimen
+(`bagus`, `kecewa`, …) yang memang **data**, bukan UI — kata-kata itu diperlukan
+untuk menganalisis posting berbahasa Indonesia.
+
+### 14.4 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 46 lulus (25 storage + 6 route + 15 auth)
+npm run build      # vite + esbuild ok
+```
+
+Geometri radar diverifikasi terpisah dengan skrip yang memakai rumus yang sama
+dengan komponen: seluruh 25 bearing jatuh di dalam cincin luar (radius maksimum
+44.0) dan tidak ada dua kanal yang berbagi bearing.
+
+---
+
+## 15. Audit putaran keenam — pencarian web sungguhan dan label yang jujur
+
+Keputusan pengguna: **harus tetap gratis 100%**, data harus akurat, token Sakelar
+tidak masalah.
+
+### 15.1 Riset penyedia pencarian (fakta, bukan asumsi)
+
+| Penyedia | Tier gratis | Butuh kartu | Kesimpulan |
+|---|---|---|---|
+| **SearXNG** (self-host) | tanpa batas, tanpa kuota | tidak | dipakai sebagai opsi utama |
+| **Tavily** | 1.000 kredit/bulan | tidak | dipakai sebagai opsi tanpa infrastruktur |
+| Brave Search | **tidak ada** sejak Feb 2026 ($5 kredit/bulan) | ya | ditolak: melanggar syarat "gratis" |
+| Google Custom Search JSON API | 100/hari hanya untuk pelanggan lama | ya | ditolak: ditutup untuk pelanggan baru, dihentikan 1 Jan 2027 |
+| SerpAPI | 250 pencarian/bulan | tidak | dicatat sebagai cadangan, belum dipakai |
+
+### 15.2 Perbaikan R30: kolektor tanpa tool pencarian
+
+| Kode | Temuan | Perbaikan |
+|---|---|---|
+| R30 | Kanal `grounding` (11 kanal) meminta model "cari di web" tetapi `chatText()` tidak pernah mengirim `tools`, dan gateway Sakelar hanya punya `/chat/completions`. Kanal itu **tidak mungkin** menghasilkan baris. | Modul baru `src/server/search.ts`: SearXNG (self-host, gratis) atau Tavily (1.000/bulan gratis), dipilih lewat `SEARCH_PROVIDER`. Kolektor kini menjalankan pencarian **nyata** per kanal dengan filter `site:` lalu meminta model mengekstrak mention **hanya** dari hasil itu. |
+| R31 | Model dapat mengarang URL yang terlihat sah | Penjaga keras di kolektor: setiap mention yang URL-nya tidak ada di hasil pencarian **dibuang oleh kode**, bukan dipercaya. Dibuktikan `tests/search-collector.test.ts`. |
+| R32 | Label UI menyamakan "belum dibangun" dengan "butuh kunci", sehingga mengisi `AI_API_KEY` terlihat seperti akan menghidupkan TikTok | Status baru `planned` + label "not built yet", `grounding` → "search + AI", ringkasan dialog menyebut jumlah kanal yang belum dibangun. Pesan `needs-key` untuk kanal grounding kini menyebut **dua** syaratnya secara eksplisit. |
+
+### 15.3 Konfigurasi gratis yang direkomendasikan
+
+```bash
+# Opsi A — tanpa biaya, tanpa kunci, tanpa kuota (disarankan untuk VPS)
+SEARCH_PROVIDER=searxng
+SEARXNG_URL=http://searxng:8080      # service di docker-compose.yml
+
+# Opsi B — tanpa infrastruktur tambahan
+SEARCH_PROVIDER=tavily
+SEARCH_API_KEY=...
+```
+
+`docker-compose.yml` mendapat service `searxng` (tidak diekspos ke host, hanya
+`expose: 8080`) plus `deploy/searxng/settings.yml` yang mengaktifkan
+`search.formats: [html, json]` — tanpa itu instance menolak permintaan JSON dan
+kanal tetap kosong.
+
+Menjalankan secara lokal tanpa Docker:
+
+```bash
+docker run -d -p 8080:8080 --name searxng searxng/searxng
+SEARCH_PROVIDER=searxng SEARXNG_URL=http://127.0.0.1:8080 npm run dev
+```
+
+### 15.4 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 62 lulus: 25 storage + 6 route + 15 auth + 12 search + 4 collector
+npm run build      # vite + esbuild ok
+```
+
+Uji yang membuktikan klaim "akurat":
+
+- `tests/search.test.ts` — tanpa penyedia, pencarian mengembalikan `[]` (bukan
+  daftar karangan); hasil penyedia diteruskan apa adanya; baris non-http dan
+  duplikat dibuang; query per kanal memakai `site:` sehingga "nike" tidak
+  mengembalikan berita *tentang* Nike; kegagalan penyedia = `[]`, bukan lemparan.
+- `tests/search-collector.test.ts` — stub SearXNG + stub model: mention dengan
+  URL yang tidak ada di hasil pencarian **dibuang** (log: "dropped 1 mention(s)
+  whose URL was not in the results"), mention yang sah dipertahankan.
+
+### 15.5 Batas yang tetap ada
+
+Akurasi tetap bergantung pada kualitas indeks mesin pencari di SearXNG dan pada
+kepatuhan model terhadap instruksi ekstraksi. Yang dijamin kode: tidak ada URL
+muncul di dashboard yang tidak berasal dari hasil pencarian nyata, dan tidak ada
+angka yang dihitung dari data karangan.
+
+## 16. Audit putaran ketujuh — bahasa visual baru dan aturan kredensial yang mengikat
+
+Dua permintaan user memicu putaran ini: (a) desain warna lama dinilai pucat dan
+tidak menarik, (b) API key tidak boleh bisa diisi dari mana pun kecuali `.env`.
+
+### 16.1 Bahasa visual "living signal"
+
+Palet lama (`paper` hampir putih, satu aksen) diganti total, tetapi **nama token
+dipertahankan**. Konsekuensinya 100+ kelas lama (`text-ink`, `bg-paper`,
+`border-hair`, `text-teal`, ...) ikut berubah hanya dengan menyunting
+`src/index.css` — tidak ada penyisiran kelas di 30+ komponen, jadi risiko
+regresi visual kecil dan diff-nya mudah diaudit.
+
+| Token | Nilai | Peran |
+| --- | --- | --- |
+| `paper` / `paper-2` | `#f4f7fa` / `#e8eef4` | kanvas aplikasi, lapisan kedua |
+| `surface` / `surface-2` | `#ffffff` / `#fbfcfe` | kartu dan kepala tabel |
+| `ink` / `ink-2` / `ink-3` | `#0d1b2a` / `#375066` / `#6b839a` | teks utama, sekunder, meta |
+| `petrol` / `petrol-deep` | `#0b1a33` / `#06101f` | rail navigasi, latar gelap |
+| `teal` / `teal-soft` | `#0e8f8a` / `#dff3f1` | aksen utama, pil aktif |
+| `cyan` | `#1ba6c4` | ujung gradien data |
+| `amber` / `amber-soft` | `#e08a1e` / `#fdf1de` | peringatan, status tertunda |
+| `jade` | `#128a5c` | sehat / terkumpul |
+| `brick` | `#cf3f47` | gagal / terputus |
+| `violet` | `#5b57d1` | nada ketiga, badge |
+| `hair` | `#d9e3ec` | garis rambut |
+
+Yang membuatnya terasa hidup, bukan sekadar berwarna: `@utility canvas`
+memasang tiga radial gradient (teal, violet, cyan) di latar aplikasi sehingga
+setiap kartu putih tampak mengapung di atas cahaya, bukan di atas bidang datar.
+`card` / `card-raised` memberi bayangan berlapis (`--shadow-card`,
+`--shadow-raised`) plus garis dalam 1px, dan `fade-rule` dipakai untuk memisah
+blok tanpa garis keras. Radius kontrol disatukan ke 6px supaya tabel, pil, dan
+tombol tidak lagi bercampur sudut 4px/8px/12px.
+
+Struktur layout dirapikan bersamaan, bukan hanya warnanya:
+
+- `App.tsx` — akar memakai `canvas`, rail kiri diberi tint `petrol-deep/[0.03]`
+  dengan pembatas tipis, sehingga konten utama terbaca sebagai satu lembar.
+- `OverviewView.tsx` — hero, empat metrik, tabel kanal, forecast, sebaran
+  sentimen, dan daftar peringatan semuanya jadi `card` berjarak seragam; `Rule`
+  yang tadinya menyelip di antara blok dihapus karena jarak kartu sudah
+  memisahkan.
+- `SideRail.tsx` — item aktif berupa pil `bg-teal-soft/70` + batang teal 3px;
+  footer status jadi kartu dengan titik `animate-ping` yang hanya berdenyut saat
+  sistem benar-benar hidup (bukan animasi hiasan).
+- `ChannelTable.tsx` — kepala tabel `bg-paper/60`, hover baris
+  `bg-teal-soft/25`, bar volume bergradien teal→cyan dan amber→brick sesuai arah
+  tren.
+- `server.ts` halaman `/login` — sebelumnya HTML polos tanpa gaya sama sekali
+  (satu-satunya layar yang tidak ikut tema). Sekarang memakai latar petrol
+  bergradien, kartu kaca, tombol gradien teal→cyan, dan pesan galat bergaya.
+- `ChannelsView.tsx` dan `AnalyzerView.tsx` — dua view ini sebelumnya hanya
+  garis-garis `border-t` di atas kanvas, jadi terasa seperti dokumen, bukan
+  dasbor. Sekarang keduanya kartu bertumpuk dengan jarak seragam; strip kanal
+  jadi pil teal, tab input jadi track berpil (bukan dua garis bawah), dan
+  keadaan kosong jadi kotak putus-putus `surface-2` supaya "belum ada data"
+  terbaca sebagai status, bukan sebagai halaman rusak. Input memakai
+  `--radius-control` yang sama dengan tabel dan tombol.
+
+Tabel 25 kanal tetap terbaca di 360px: `ChannelTable` menggulir horizontal di
+dalam kartunya sendiri (`overflow-x-auto` + `scrollbar-none`), jadi halaman tidak
+pernah melebar dan rail tidak pernah menutupi konten.
+
+### 16.2 Kredensial hanya dari `.env`
+
+Sebelum putaran ini tidak ada input API key di UI — dicek dengan
+`grep -n 'localStorage|prompt(|<input|type="password"' src/` yang hanya
+menemukan input kata kunci (`Overlays.tsx`) dan input URL (`AnalyzerView.tsx`)
+serta form login di `server.ts`. Tetapi tidak adanya input hari ini bukan jaminan
+untuk besok. Karena itu aturannya sekarang **dipaksakan oleh kode**, bukan oleh
+ingatan:
+
+`src/server/credentials.ts` mendaftar tujuh variabel rahasia —
+`AI_API_KEY`, `SEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `YOUTUBE_API_KEY`,
+`TWITTER_BEARER_TOKEN`, `GITHUB_TOKEN`, `API_AUTH_TOKEN`. Middleware di
+`server.ts` (dipasang **setelah** `requireApiToken`, jadi pemeriksaan sesi tetap
+lebih dulu) memeriksa body setiap `POST`/`PUT`/`PATCH` ke `/api/*`; bila ada
+nama field yang cocok, permintaan ditolak:
+
+```json
+400 { "reason": "credentials-not-accepted", "fields": ["AI_API_KEY"],
+      "message": "Secrets are read from the environment only. ..." }
+```
+
+Pengecualian tunggal adalah field `token` pada `POST /login`, yang hanya membuat
+cookie sesi `smip_session` (HMAC atas `API_AUTH_TOKEN`) dan tidak pernah menyimpan
+kunci apa pun. Field rahasia tidak pernah dikembalikan oleh endpoint mana pun;
+`/api/data-sources` hanya melaporkan boolean `configured`.
+
+`tests/credentials.test.ts` (11 asersi) mengunci aturan ini:
+
+- payload berisi `AI_API_KEY`, `apiKey`, `search_api_key`, atau
+  `SUPABASE_SERVICE_ROLE_KEY` → `400 credentials-not-accepted`, dan field-nya
+  disebut di respons;
+- nama field biasa (`keyword`, `url`) → lolos guard (dibuktikan lewat `503`
+  karena DB belum dikonfigurasi, artinya request sampai ke handler);
+- nilai rahasia tidak pernah muncul di body respons;
+- tidak ada komponen klien yang merender input password atau kunci
+  (`grep` atas `src/` dari dalam tes), sehingga aturan ini tidak bisa dilanggar
+  lewat UI tanpa tes gagal.
+
+### 16.3 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 73 lulus: 25 storage + 6 route + 15 auth + 12 search + 4 collector + 11 credentials
+npm run build      # vite + esbuild ok
+npm run audit      # 0 vulnerabilities
+```
+
+### 16.4 Batas yang tetap ada
+
+- Redesign diverifikasi lewat `tsc`, hasil kompilasi CSS, dan pembacaan kelas —
+  sandbox tidak punya browser, jadi tidak ada tangkapan layar. Kontras dihitung
+  manual terhadap `paper` `#f4f7fa`: `ink` 15.8:1, `ink-2` 7.1:1, `ink-3` 4.6:1,
+  `teal` 3.6:1 (dipakai untuk aksen dan teks tebal, bukan paragraf).
+- Guard kredensial memeriksa nama field, bukan entropi nilai. Nilai acak yang
+  dikirim lewat field bernama netral tetap lolos — tetapi nilai itu tidak pernah
+  dipakai, karena seluruh kode membaca kunci hanya dari `process.env`.
+
+## 17. Rencana peningkatan penangkapan sinyal
+
+`docs/SIGNAL-RECOMMENDATIONS.md` memuat rencana lengkap. Ringkasnya, temuan yang
+paling penting dari pembacaan ulang jalur kolektor:
+
+- **L1** — `replaceTrackerMentions` membuat satu siklus buruk menghapus riwayat
+  siklus yang baik (`src/server/routes/analysis.ts:166`).
+- **L2** — setiap kolektor API dibatasi 3–5 baris, jauh di bawah yang diizinkan
+  endpoint-nya.
+- **L3** — kanal berbasis pencarian dijalankan **berurutan**, satu panggilan model
+  per kanal, 8 hasil, disimpan 4.
+- **L4** — bahasa pencarian tetap `en`; brand Indonesia kehilangan percakapan
+  berbahasa Indonesia.
+- **L5** — hitungan engagement dibuang setelah diubah menjadi label
+  `High|Medium|Low`, jadi peringkat sinyal tidak punya angka.
+
+Dua bug yang sudah pasti, bukan sekadar optimasi:
+
+1. `TWITTER_BEARER_TOKEN` collector memakai `max_results=4`, padahal endpoint
+   menerima 10–100. Permintaan itu ditolak, sehingga kanal X selalu kosong
+   walaupun token sudah diisi.
+2. `mastodon.social` membatasi `v2/search?type=statuses` di balik autentikasi;
+   tanpa token hasilnya `statuses: []`. Hashtag timeline tetap publik, jadi
+   kolektor Mastodon seharusnya memakai `/api/v1/timelines/tag/:tag`.
+
+Selain itu `medium` dan `vimeo` dideklarasikan `kind: "api"` di `src/channels.ts`
+tetapi **tidak punya fetcher** di `collectors.ts` — status kesehatan mereka
+mengklaim kemampuan yang tidak ada di kode. Ini harus diperbaiki (tambah
+kolektornya) atau diturunkan ke `none`.
+
+Belum ada perubahan kode dari rencana ini; dokumen tersebut adalah urutan kerja
+yang diusulkan, bukan klaim bahwa sudah dikerjakan.
+
+## 18. Audit putaran kedelapan — penangkapan sinyal dari platform asli
+
+Putaran ini mengeksekusi rencana di `docs/SIGNAL-RECOMMENDATIONS.md`. Prinsipnya
+satu: **lebih banyak sinyal, bukan lebih banyak klaim**. Setiap perubahan di bawah
+punya tes yang membuktikannya berjalan terhadap bentuk respons API yang nyata.
+
+### 18.1 Dua bug yang membuat kanal kosong tanpa terlihat rusak
+
+| Sebelum | Sesudah |
+| --- | --- |
+| X: `max_results=4` — endpoint menerima 10–100, jadi permintaan ditolak dan kanal selalu kosong walau token diisi | `max_results=25` + `expansions=author_id` sehingga penulis tampil `@handle`, bukan `id:12345`; HTTP gagal dicatat, bukan jadi senyap |
+| Mastodon: `v2/search?type=statuses` — dibatasi autentikasi di `mastodon.social`, hasilnya `statuses: []` | hashtag timeline publik `/api/v1/timelines/tag/:tag` di beberapa instance (`MASTODON_INSTANCES`), pencarian status hanya upaya sekunder |
+
+### 18.2 Kedalaman: batas per panggilan dinaikkan ke batas endpoint
+
+| Kanal | Sebelum | Sesudah |
+| --- | --- | --- |
+| Reddit | 4 pos, koordinat AS palsu `37.0902,-95.7129` | 25 pos × dua urutan (`new`, `top` minggu), tanpa koordinat, OAuth bila pasangan aplikasi diisi |
+| YouTube | butuh `YOUTUBE_API_KEY`, `maxResults=3` | RSS publik tanpa kunci (15 video); kunci hanya untuk jumlah tayangan via `videos.list` (1 unit/50 video) |
+| Bluesky | `limit=5`, satu halaman | `limit=50` + satu halaman `cursor` |
+| Hacker News | 5 story | 40 story **dan** 40 komentar, dibatasi 30 hari terakhir |
+| Lemmy | 5, `sort=New` | 40 × (`New`, `TopWeek`) |
+| Stack Overflow | 5, `sort=creation` | 50 × (`creation`, `votes`) |
+| GitHub | `per_page=5`, `sort=created` | `per_page=50` × (`created`, `comments`), `is:issue` |
+| DEV Community | membaca `?top=30` (ranking popularitas) lalu memfilter | `/articles/latest?tag=` + feed terbaru, difilter kata kunci |
+| Google News | 5 item, `hl=en-US` | 20 item, locale mengikuti `SEARCH_LANGUAGE` |
+
+### 18.3 Lintas kanal
+
+- **Scan manual menggabungkan, tidak mengganti.** `replaceTrackerMentions` dihapus
+  dan diganti `mergeTrackerMentions`: id baris deterministik dari
+  `trackerId + platform + url`, sehingga satu siklus lemah tidak lagi menghapus
+  siklus yang baik dan scan berulang tidak menduplikasi.
+- **Kanal pencarian berjalan paralel** (3 sekaligus, `runPool`), masing-masing
+  mencoba **tiga framing** kata kunci (frasa persis, kata niat seperti
+  `review/problem/complaint`, lalu bentuk `#tag OR @handle`), meminta hasil
+  **satu minggu terakhir** (`time_range=week` / `days=7`), dengan **cache 10
+  menit** per `(provider, query)`.
+- **Batas per scan 400 baris** (`MAX_ROWS_PER_SCAN`) supaya jaringan yang lebih
+  luas tidak membuat satu scan tak terbatas.
+- **Guard grounding tetap**: mention yang URL-nya tidak ada di hasil pencarian
+  dibuang, dan sekarang diuji ulang pada jalur paralel.
+
+### 18.4 Kanal yang tadinya "ada di katalog tapi tidak ada kolektornya"
+
+`medium` dan `vimeo` dideklarasikan `kind: "api"` tetapi tidak punya fetcher.
+Sekarang:
+
+- **Medium** — RSS tag publik (`medium.com/feed/tag/<tag>`), judul/penulis/tanggal asli.
+- **Vimeo** — metadata oEmbed per video yang ditemukan pencarian.
+- **Telegram** — naik dari `grounding` menjadi kolektor nyata: `t.me/s/<handle>`
+  dibaca langsung, dengan jumlah tayangan (`1.2K` → `1200`) dan tanggal.
+- **Twitch** — naik dari `none` menjadi kolektor Helix (client-credentials
+  gratis): kanal live yang cocok dengan kata kunci. Label kanal menyebut bahwa
+  chat tidak dibaca, karena API terbuka tidak mengeksposnya.
+- **Reddit** — kredensial `REDDIT_CLIENT_ID+SECRET` kini opsional; audit jaringan
+  melaporkan `public` bila endpoint tetap menjawab tanpa kunci, bukan `needs-key`.
+
+### 18.5 Data yang tidak lagi dikarang
+
+Empat jalur fabrikasi dihapus pada putaran ini:
+
+1. **Hashtag palsu** — setiap mention tanpa tag diberi `#brandmonitoring`,
+   `#analisissentimen`, `#sosmed`. Sekarang `[]`.
+2. **Judul kerangka** — `"Analisis Konten Sosmed"` dan
+   `"Social Media Content"` diganti string kosong; UI memakai label kanal.
+3. **Gambar stok** — `images.unsplash.com` dipakai sebagai gambar hasil "scrape".
+   Sekarang kosong.
+4. **Tanggal "sekarang"** — mention hasil pencarian yang tidak menyebut tanggal
+   diberi `new Date()`, yang mencemari velocity. Sekarang dibiarkan kosong.
+
+Plus dua sumber angka palsu:
+
+- **Koordinat** `37.0902,-95.7129` untuk semua pos Reddit/YouTube/X (pusat AS).
+  Dihapus; kolomnya tetap ada tetapi null.
+- **`engagementValue: 50`** untuk setiap item Google News. Dihapus.
+
+### 18.6 Analisis sentimen lokal yang bisa dipertanggungjawabkan
+
+`src/server/lexicon.ts` menggantikan pencocokan substring:
+
+| Masalah lama | Perbaikan |
+| --- | --- |
+| `"bagus"` cocok di dalam kata lain | tokenisasi `\p{L}` + pencocokan kata utuh |
+| `"tidak bagus"` dihitung positif | negasi (`not`, `tidak`, `gak`, `kurang`, …) dalam jendela dua token, dengan pelemahan 0.6× alih-alih pembalikan penuh |
+| +0.15 tetap per kata → skor mentok 1.0 | bobot per kata (1–3) dan normalisasi `total / sqrt(judged) / 2` |
+| "crashing" tidak dikenali | stemming ringan (`-ing`, `-ed`, `-es`, `-s`, `-nya`) |
+| emosi ditebak dari satu kata kunci | grup emosi (anger/sadness/fear/surprise/joy/love) atas token yang ada |
+
+Keterbatasan yang dinyatakan terbuka: ini leksikon, bukan model. 19 kasus di
+`tests/lexicon.test.ts` mengunci perilakunya, termasuk `"good but not great"`
+yang tetap positif tipis dan `"not bad"` yang tidak berbalik menjadi pujian kuat.
+
+### 18.7 Skema
+
+Aditif, idempoten, aman dijalankan pada database yang sudah ada:
+
+```sql
+alter table public.monitor_results add column if not exists engagement_score integer;
+alter table public.monitor_results add column if not exists query_variant    text;
+alter table public.trackers       add column if not exists accounts text[] not null default '{}';
+create index if not exists idx_mentions_tracker_url on public.monitor_results (tracker_id, url);
+```
+
+`engagement_score` menyimpan hitungan nyata dari sumber (sebelumnya dibuang
+setelah diubah menjadi label `High|Medium|Low`). `avgEngagement` di
+`/api/social-signals` bernilai `null` bila tidak ada satu pun baris yang punya
+hitungan — bukan 0, karena 0 berarti "diukur dan nol".
+
+### 18.8 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 146 lulus (9 berkas)
+npm run build      # vite + esbuild ok
+npm run audit      # 0 vulnerabilities
+```
+
+Rincian: 27 storage + 6 route + 15 auth + 21 search + 7 collector-path +
+11 credentials + 19 lexicon + 40 collector-shapes.
+
+Dua berkas baru adalah inti pembuktiannya:
+
+- `tests/collectors.test.ts` — 40 asersi terhadap stub berbentuk respons asli
+  tiap API: `max_results` X yang valid, expansion penulis, hashtag timeline
+  Mastodon, RSS YouTube tanpa kunci, Telegram `1.2K` → 1200, Medium RSS, Twitch
+  Helix, HN story+komentar, SO dua urutan, GitHub `is:issue`.
+- `tests/search.test.ts` — ditambah 9 asersi: query variant tetap ter-scope,
+  cache menahan panggilan kedua, dan `time_range` benar-benar dikirim.
+
+### 18.9 Batas yang tetap ada
+
+- Kanal tertutup (TikTok, Instagram, Facebook, LinkedIn, Threads, Discord,
+  Pinterest, Snapchat, WhatsApp, Vimeo, forum) tetap **hanya** bisa lewat
+  pencarian + model. Tidak ada API baca publik untuk mereka, dan tidak ada
+  scraping halaman login — itu akan melanggar aturan SSRF dan ketentuan layanan.
+- "100% platform asli" dipenuhi dalam arti ini: **setiap baris berasal dari
+  platform atau mesin pencari nyata, dan setiap label menyatakan jalurnya**.
+  Yang tidak bisa dijanjikan — dan tidak akan diklaim — adalah membaca isi
+  ruang privat (Discord server, grup WhatsApp, chat Twitch) yang memang tidak
+  dapat diakses tanpa bergabung.
+- Sandbox ini tidak bisa menjangkau host di luar daftar izin, jadi audit jaringan
+  menandai semua kanal `down` di sini. Di VPS dengan internet biasa, status itu
+  berubah menjadi `public`/`configured`. Yang diverifikasi di sini adalah
+  parsing, bentuk permintaan, dan aturan datanya — bukan konektivitas.
+
+## 19. Audit balik atas putaran kedelapan — temuan dan perbaikannya
+
+Putaran ini membaca ulang commit `3f64a6e` baris per baris, bukan hanya
+menjalankan tes. Enam masalah ditemukan; dua di antaranya mengubah angka di
+dashboard, satu adalah lubang keamanan.
+
+### 19.1 Angka: velocity dan signal strength salah arah
+
+Kedua perhitungan ini tinggal di dalam rute sehingga tidak pernah diuji. Setelah
+dipindahkan ke `src/server/signals.ts` dan diberi 28 asersi, dua cacat terbukti:
+
+| Cacat | Dampak | Perbaikan |
+| --- | --- | --- |
+| `signalStrength = volume*0.35 + velocity*0.35 + sentiment` | velocity **-80%** mengurangi 28 poin, lalu hasil negatif dijepit ke 0. Kanal yang sedang turun dinilai lebih lemah daripada kanal yang sepi — padahal arah bukan kekuatan sinyal | velocity dikeluarkan; komponennya volume (40), kebaruan 12 jam (30), intensitas sentimen (30) |
+| `velocity = 100` saat paruh sebelumnya kosong | kanal yang baru menerima mention pertamanya hari ini melaporkan "100%" — itu penjaga pembagian, bukan pengukuran | `null`; UI menampilkan "—" |
+| `activeUsersCount` menghitung "Public discussion" sebagai satu orang | jumlah pengguna aktif bisa 1 padahal tidak ada penulis yang diketahui | placeholder dikecualikan |
+
+`velocity` kini `number | null` di seluruh jalur (rute, `types.ts`, `ChannelRow`,
+`StripSignal`), sebab `null` dan `0` artinya berbeda: "tidak bisa diukur" versus
+"tidak berubah".
+
+### 19.2 `engagement` dibuang setelah diubah menjadi label
+
+`engagement_score` sudah disimpan sejak putaran sebelumnya, tetapi UI tidak
+pernah menampilkannya, dan `types.ts` hanya mendeklarasikan `engagement: string`.
+Sekarang tabel kanal punya kolom **Engagement** berisi rata-rata hitungan nyata
+plus jumlah baris yang benar-benar punya hitungan (`30 of 2`), dan CSV
+mengekspor `Engagement Count` terpisah dari label. Bila tidak ada satu pun baris
+yang punya hitungan, nilainya `null` dan tabel menampilkan "—", bukan 0.
+
+### 19.3 25 kanal, dua di antaranya berisi data
+
+`ChannelTable` merender **semua** kanal katalog. Dengan 25 kanal, itu berarti
+23 baris "no data" menenggelamkan 2 baris yang ada isinya, masing-masing dengan
+tag `no data` sendiri. Sekarang baris kosong diringkas menjadi satu kalimat yang
+**menyebutkan nama kanalnya** — informasinya tetap ada, tapi tidak berteriak.
+
+### 19.4 Dialog tracker bisa membuat kanal yang dijamin kosong
+
+Dialog mencentang `tiktok` dan `instagram` secara default meski tidak ada
+penyedia pencarian. Kanal idle kini ditandai "idle" dengan alasan di tooltip,
+tidak ikut tercentang, dan tombol "select all" hanya memilih kanal yang benar-
+benar aktif di deployment itu (`/api/data-sources`).
+
+### 19.5 SSRF lewat nama, bukan IP
+
+`validateScrapeUrl` menolak IP literal dan host di luar allowlist, tetapi **nama**
+yang ada di allowlist tetap bisa mengarah ke alamat privat — satu record DNS ke
+`127.0.0.1` atau `169.254.169.254` akan lolos. Sekarang hostname di-resolve
+lebih dulu (`assertPublicHost`) dan ditolak bila ada jawaban privat, loopback,
+link-local, atau CGNAT. 30 asersi mengunci daftar alamat yang harus ditolak.
+
+Batasnya dinyatakan terbuka di kode: ini *check-then-fetch*, jadi resolver
+bermusuhan secara teori bisa menjawab berbeda pada lookup kedua (DNS rebinding).
+Menutup itu sepenuhnya butuh memaku IP ke socket, yang tidak diekspos `fetch()`.
+Mitigasi yang ada: rute di belakang auth, dibatasi laju, dan hanya mengambil enam
+host sosial yang di-allowlist.
+
+### 19.6 Dua hal kecil yang terasa besar saat dipakai
+
+- Analisis yang **gagal** dulu tetap mengosongkan input, jadi teks yang sudah
+  ditempel hilang tepat saat pengguna perlu mencoba lagi. Sekarang input hanya
+  dikosongkan bila analisisnya benar-benar berhasil.
+- Label "engagement" pada mention yang tidak punya hitungan sekarang berbunyi
+  "engagement not published", bukan "engagement —".
+- Paginasi Bluesky berhenti bila cursor berulang, sehingga API yang nakal tidak
+  membuat satu permintaan berputar selamanya.
+
+### 19.7 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 204 lulus (11 berkas)
+npm run build      # vite + esbuild ok
+```
+
+Tambahan: 28 asersi `tests/signals.test.ts` dan 30 asersi
+`tests/network-guards.test.ts`. Diperiksa juga terhadap server yang berjalan:
+`/api/social-signals` mengembalikan 25 kanal dengan `velocity: null` dan
+`avgEngagement: null` saat kosong — bukan `0`, yang akan menyamar sebagai
+pengukuran.
+
+### 19.8 Sisa risiko yang belum ditutup
+
+| Risiko | Status |
+| --- | --- |
+| DNS rebinding pada scrape | dinyatakan di kode; butuh IP pinning di level socket |
+| Halaman publik yang menyajikan login wall | dikembalikan sebagai `422 source-unreadable` + saran menempel teks, bukan dianalisis kosong |
+| Kuota gratis Tavily (1.000/bulan) | dicache 10 menit dan dibatasi 3 framing × 13 kanal, tetapi tetap bisa habis pada tracker besar; kegagalan menjadi `[]` + log, bukan data karangan |
+| Istilah Indonesia yang tidak ada di leksikon | skor netral, bukan tebakan; bagian ini hanya menyentuh koleksi otomatis, jalur analyzer memakai model |
+| Konektivitas nyata | tidak bisa diuji dari sandbox; audit jaringan akan menandai kanal `down` di sini dan `public` di VPS |
+### 19.9 Dua temuan terakhir (lanjutan pemeriksaan)
+
+- **Kunci API di query string.** `videos.list` mengirim `YOUTUBE_API_KEY` sebagai
+  parameter URL. URL adalah bagian permintaan yang paling sering masuk ke log,
+  proxy, dan pesan galat. Kunci kini dikirim sebagai header `X-Goog-Api-Key`, dan
+  satu asersi tes memastikan string `key=` tidak pernah muncul lagi di URL.
+- **Kode mati.** `constructOfficialPlatformSearchUrl` tidak dipanggil di mana pun
+  sejak jalur "grounding mengembalikan URL tebakan" dihapus. Fungsi 40 baris itu
+  dibuang, bukan dibiarkan menunggu dipakai lagi untuk hal yang justru melanggar
+  aturan (URL yang tidak berasal dari hasil pencarian).
+
+Total setelah dua perbaikan ini: `npm test` **205 lulus**, `tsc` bersih,
+`npm run build` ok, `npm audit` 0 kerentanan.
+

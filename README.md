@@ -30,7 +30,7 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 *   **Google Search Grounding (Alternatif Utama API Resmi)**: 
     *   Untuk kanal yang tidak punya API publik, S.M.I.P meminta model menelusuri web (search-grounded) dan **hanya menyimpan mention yang benar-benar memuat kata kunci** serta datang dengan URL sumber. Tanpa `AI_API_KEY`, kanal tersebut tetap kosong dan dilaporkan `needs-key` — tidak ada data karangan.
     *   **Anti-404 URL Generator**: Sistem secara dinamis menyaring dan menyusun ulang URL hasil pencarian. Jika tautan mati/tidak valid terdeteksi, sistem secara otomatis mengonstruksi URL pencarian resmi yang valid untuk platform target (seperti pencarian filter X/Twitter, tag Instagram, hasil pencarian YouTube, dll) sehingga pengguna tidak akan menemui halaman kosong atau error 404.
-*   **Reddit Public API (Bebas Autentikasi)**: S.M.I.P memanfaatkan endpoint publik Reddit (`.json`) secara dinamis tanpa kredensial sama sekali untuk menarik postingan teranyar secara instan dan riil.
+*   **Reddit**: dua jalur. Tanpa kredensial memakai `search.json` publik (dibatasi laju); dengan pasangan aplikasi "script" gratis (`REDDIT_CLIENT_ID`/`SECRET`) memakai OAuth sehingga stabil. Dua urutan (`new`, `top` minggu ini), maksimal 25 pos per urutan.
 
 ### 4. Penyimpanan Data (Database)
 *   **Supabase (Postgres) sebagai satu-satunya penyimpanan.** Akses lewat REST API PostgREST dengan `@supabase/supabase-js` dan `service_role` key di server. Tidak ada database lokal, tidak ada file SQLite, tidak ada Firebase: container bersifat stateless dan bisa dibuang kapan saja tanpa kehilangan data. Skema ada di [`supabase/schema.sql`](supabase/schema.sql), panduan lengkap di [`docs/SUPABASE.md`](docs/SUPABASE.md).
@@ -86,9 +86,28 @@ Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya ter
 
 | Cara | Kanal | Kredensial |
 |---|---|---|
-| **API publik langsung** | Reddit, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community, GitHub, Medium, Vimeo | tidak perlu (GitHub opsional `GITHUB_TOKEN`) |
-| **API ber-kunci** | YouTube, X/Twitter, Twitch | `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET` |
-| **Hanya lewat search grounding** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `AI_API_KEY` |
+| **Kolektor menulis, API/RSS publik** | Reddit, YouTube, Medium, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, GitHub, DEV Community, Telegram | **tidak perlu** |
+| **Kolektor menulis, lebih dalam dengan kunci gratis** | Reddit (OAuth), YouTube (jumlah tayangan), X/Twitter, GitHub (batas laju), Twitch | opsional: `REDDIT_CLIENT_ID`+`SECRET`, `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `GITHUB_TOKEN`, `TWITCH_CLIENT_ID`+`SECRET` |
+| **Kolektor menulis, butuh pencarian + model** | TikTok, Instagram, Facebook, LinkedIn, Threads, Discord, Pinterest, Snapchat, WhatsApp, Vimeo, situs ulasan/forum | penyedia pencarian (lihat di bawah) **dan** `AI_API_KEY` |
+
+Catatan per kanal, supaya tidak ada yang dilebih-lebihkan:
+
+- **Telegram** dibaca dari widget publik `t.me/s/<channel>`, jadi handle kanal harus disebut saat membuat tracker. Tanpa handle, kanal ini tidak mengumpulkan apa pun — dan UI mengatakannya.
+- **YouTube** menemukan video lewat RSS publik tanpa kunci; `YOUTUBE_API_KEY` hanya menambah jumlah tayangan lewat `videos.list` (1 unit kuota per 50 video), bukan `search.list` (100 unit per pencarian).
+- **Mastodon** memakai hashtag timeline yang publik. Pencarian status penuh di `mastodon.social` dibatasi autentikasi, jadi jalur itu hanya upaya sekunder.
+- **Twitch** hanya mengekspos metadata siaran dan kategori; chat tidak dibaca, dan label kanal mengatakannya.
+- **Discord, WhatsApp, Snapchat, Instagram, TikTok, Facebook, LinkedIn, Threads, Pinterest** tidak punya API baca publik. Satu-satunya jalur adalah pencarian web + model, dan setiap mention wajib berasal dari URL hasil pencarian nyata.
+
+**Kanal tanpa API baca publik.** Sebelumnya kelompok ini menanyakan model "cari di web" tanpa mengirim tool apa pun, sehingga tidak pernah menghasilkan baris. Sekarang jalurnya dua tahap dan keduanya nyata: server menjalankan **pencarian web sungguhan** yang dibatasi `site:` per kanal, lalu model **mengekstrak** mention hanya dari hasil tersebut. Setiap mention yang URL-nya tidak ada di hasil pencarian dibuang oleh kode, jadi URL karangan tidak mungkin masuk database.
+
+Penyedia pencarian dipilih lewat env, keduanya gratis:
+
+| Penyedia | Biaya | Butuh kartu? | Catatan |
+|---|---|---|---|
+| **SearXNG** (self-host) | gratis, tanpa kuota | tidak | satu kontainer Docker di VPS yang sama; Anda kendalikan mesin pencarinya |
+| **Tavily** | 1.000 kredit/bulan | tidak | tanpa infrastruktur tambahan; pencarian dasar = 1 kredit |
+
+Brave Search **tidak lagi punya tier gratis** sejak Februari 2026 (wajib kartu, kredit $5/bulan), dan Google Custom Search JSON API **ditutup untuk pelanggan baru** serta dihentikan 1 Januari 2027 — keduanya sengaja tidak dipakai. Tanpa penyedia pencarian, kanal tersebut kosong dan dialog Data sources menyebutkan sebabnya per kanal.
 
 **Audit jaringan otomatis.** `GET /api/channel-health` (alias `GET /api/data-sources`) benar-benar memanggil setiap endpoint lalu melaporkan status per kanal: `public`, `configured`, `grounding`, `needs-key`, `closed`, `down`, atau `unverified`. Hasil di-cache 60 detik; panggil dengan `?force=1` untuk menguji ulang. Dialog **Data sources** di UI menampilkan hasil yang sama, lengkap dengan logo tiap platform dan tombol **test all**.
 
@@ -120,7 +139,7 @@ Konsekuensinya:
 | Sumber mengembalikan hasil | Hanya mention yang benar-benar tersimpan yang dihitung |
 | `/api/predict-trends` tidak tersedia | UI menandai forecast sebagai *sample*, bukan prediksi |
 
-`GET /api/data-sources` menjelaskan sumber mana yang aktif, sehingga tampilan kosong tidak pernah salah diartikan sebagai aplikasi rusak. Untuk melihat data, setidaknya satu sumber harus berfungsi: `AI_API_KEY` (search-grounded lookup untuk kanal tertutup), `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, atau akses jaringan ke Reddit.
+`GET /api/data-sources` menjelaskan sumber mana yang aktif, sehingga tampilan kosong tidak pernah salah diartikan sebagai aplikasi rusak. Sebelas kanal mengumpulkan data tanpa kunci apa pun; yang perlu dikonfigurasi hanyalah Supabase (agar hasil tersimpan) dan, untuk kanal tertutup, `SEARCH_PROVIDER` + `AI_API_KEY`.
 
 ### Autentikasi API (opsional, wajib saat deploy)
 Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pada setiap `POST`/`PUT`/`PATCH`/`DELETE` di bawah `/api`. Rute `GET` tetap publik agar dashboard dan uptime check tidak perlu menyimpan token. Perbandingan token memakai `timingSafeEqual`. Bila variabel kosong (mode pengembangan lokal), auth dimatikan.
@@ -129,7 +148,7 @@ Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pad
 Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Supabase, AI gateway, port, CORS, trust proxy, dan sumber data opsional).
 
 ### Health check
-`GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
+`GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, open: [...], keyed: {...}, perScanRowCap: 400 }`.
 `GET /api/channel-health` → status per kanal (lihat bagian *Jaringan data*); mengembalikan `503` hanya bila ada kanal `down` sementara host-nya sendiri punya internet. Cocok untuk load balancer dan uptime monitor.
 
 ## Deploy ke VPS

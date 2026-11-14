@@ -1,0 +1,28 @@
+# Minimal SearXNG configuration for S.M.I.P.
+#
+# Only one thing matters here: `json` must be listed under search.formats, or
+# the instance refuses /search?format=json and the app collects nothing from the
+# search-only channels. Everything else keeps SearXNG's defaults.
+#
+# To use more engines, copy the upstream settings.yml from
+# https://github.com/searxng/searxng/blob/master/searxng/settings.yml and merge
+# this `search` block into it.
+
+use_default_settings: true
+
+server:
+  # Replaced at the reverse proxy; this instance is never exposed publicly,
+  # it is only reachable from the app container.
+  secret_key: "change-me-but-it-is-not-exposed"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  formats:
+    - html
+    - json
+
+# Keep result pages small and fast; the app asks for 8 results per channel.
+ui:
+  static_use_hash: true

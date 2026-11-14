@@ -41,7 +41,11 @@ export function MentionRow({ item }: { item: MonitorResult }) {
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3">
         <span>{item.author || "public discussion"}</span>
         {item.country && <span>{item.country}</span>}
-        <span>engagement {item.engagement?.toLowerCase() || "—"}</span>
+        {item.engagement ? (
+          <span>engagement {item.engagement.toLowerCase()}</span>
+        ) : (
+          <span title="The source does not publish an engagement count">engagement not published</span>
+        )}
         {item.url && (
           <a
             href={item.url}
@@ -70,7 +74,8 @@ export function AnalyzedRow({
     sentiment: string;
     sentimentScore: number;
     emotion: string;
-    engagement: string;
+    /** Optional now: absent when the platform does not publish a count. */
+    engagement?: string;
     hashtags: string[];
     analyzedAt: string;
     url?: string;
@@ -99,7 +104,11 @@ export function AnalyzedRow({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
-        <span>engagement {item.engagement?.toLowerCase() || "—"}</span>
+        {item.engagement ? (
+          <span>engagement {item.engagement.toLowerCase()}</span>
+        ) : (
+          <span title="The source does not publish an engagement count">engagement not published</span>
+        )}
         {item.hashtags?.slice(0, 4).map((t) => (
           <span key={t} className="text-teal">
             #{t.replace(/^#/, "")}

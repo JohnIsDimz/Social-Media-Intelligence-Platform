@@ -136,22 +136,34 @@ Dihapus karena tak lagi dipakai: `GlobalHeatmap.tsx` (peta SVG hardcoded),
   `unverified` exists because a host with no internet must not be allowed to
   blame the vendor APIs.
 
-## Radar dial (2026-11-14)
+## Radar dial (2026-11-14, rebuilt as a plan-position indicator)
 
-The centre of the analytics view is a clock face, not a spinner: 60 minute
-ticks, cardinal numbers at 60/15/30/45, crosshair rings, and one sweep hand that
-completes a turn per minute — the same cadence as the collector tick. A conic
-wash trails the hand so it reads as radar rather than a loading state.
+The centre of the analytics view is a radar scope, not a decorated spinner:
+four range rings, 72 bearing ticks (long every 30 degrees), N/E/S/W labels, and
+one sweep that turns per minute. It is drawn as SVG so the sweep and the ticks
+share the dial's geometry and cannot drift apart.
+
+**Contacts carry meaning.** A blip exists only for a channel that actually holds
+mentions, so an empty dashboard gives a quiet scope, never decoration:
+
+| Property | Source |
+|---|---|
+| Bearing | deterministic hash of the channel key — a channel keeps its position, and no two of the 25 channels collide |
+| Range | `signalStrength` from the API; stronger sits closer to the hub, floored at 15 units so the centre readout stays legible |
+| Size | mention volume, capped |
+| Flash | the sweep lights a blip as it passes that bearing, then the blip decays over the turn, like a real scope afterglow |
 
 State is told, not implied:
 
 | State | Readout | Motion |
 |---|---|---|
-| `scanning` | "scanning / model reading" | normal sweep |
-| `live` | "N mentions / n channels reporting" | normal sweep |
-| `idle` | "standing by / nothing collected" | slow, dimmed |
-| `offline` | "no source / set AI_API_KEY" | slow, dimmed |
+| `scanning` | "scanning / model reading" | one turn per minute |
+| `live` | "N mentions / n channels reporting" | one turn per minute |
+| `idle` | "standing by / nothing collected" | one turn per three minutes, dimmed |
+| `offline` | "no source / set AI_API_KEY" | one turn per three minutes, dimmed |
 
-`prefers-reduced-motion` stops the sweep entirely. The dial replaced the thin
-amber sweep band that used to slide across the command strip — one motion in the
-product, not two competing ones.
+The caption under the dial says how many contacts are plotted, or "quiet scope:
+nothing collected". `prefers-reduced-motion` stops the animation and leaves the
+contacts visible at full opacity. The dial replaced the thin amber sweep band
+that used to slide across the command strip — one motion in the product, not two
+competing ones.

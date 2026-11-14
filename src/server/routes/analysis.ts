@@ -10,7 +10,7 @@ import { aiSummary, chatJson } from "../../lib/aiProvider.ts";
 import { aiCanSearch, describeAiFailure } from "../ai.ts";
 import { logger } from "../logger.ts";
 import { broadcast } from "../realtime.ts";
-import { getDB, replaceMentionsForTracker, saveAnalyzedPost } from "../data.ts";
+import { getDB, mergeMentionsForTracker, saveAnalyzedPost } from "../data.ts";
 import { markScanned } from "../scan-state.ts";
 import {
   detectPlatform,
@@ -28,9 +28,11 @@ app.post("/api/analyze-url", async (req, res) => {
     return res.status(400).json({ error: "Either URL or text content is required for analysis." });
   }
 
-  let scrapedTitle = "Custom Text Analysis";
+  // Empty until something real fills them. The old defaults were a fake headline
+  // and a stock photo, which then went into the prompt as if they were the post.
+  let scrapedTitle = "";
   let scrapedDesc = rawText || "";
-  let scrapedImg = "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=300&q=80";
+  let scrapedImg = "";
   let platform: 'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other' = manualPlatform || "other";
 
   // Reject unsupported / internal URLs up front so the client gets a clear 400
@@ -44,12 +46,27 @@ app.post("/api/analyze-url", async (req, res) => {
   }
 
   try {
+    let fetchNote = "";
     if (url) {
       platform = detectPlatform(url);
       const scraped = await scrapeSocialUrl(url);
-      scrapedTitle = scraped.title;
-      scrapedDesc = rawText || scraped.description;
+      scrapedTitle = scraped.title || "";
+      // Text the user pasted wins over anything the page claims about itself.
+      scrapedDesc = rawText || scraped.description || "";
       if (scraped.imageUrl) scrapedImg = scraped.imageUrl;
+      if (!scraped.success && !rawText) {
+        // Analysing an empty string would mean rating the platform's own login
+        // page. Say what happened instead.
+        return res.status(422).json({
+          error:
+            "That post could not be read: the page returned no public text (most networks " +
+            "serve a login wall to servers). Paste the post text instead and it will be analysed.",
+          reason: "source-unreadable",
+        });
+      }
+      if (!scraped.success) {
+        fetchNote = "The page itself could not be read; the analysis uses the text you pasted.";
+      }
     }
 
     let modelResult = null;
@@ -72,8 +89,8 @@ app.post("/api/analyze-url", async (req, res) => {
           "emotion": string (use one of: "Joy", "Anger", "Sadness", "Surprise", "Love", "Neutral", "Fear"),
           "engagement": "High" | "Medium" | "Low",
           "hashtags": string[] (array of detected hashtags or relevant keyword tags),
-          "refinedTitle": string (a concise, human-friendly summary headline of the post content in Indonesian or English),
-          "refinedDescription": string (a concise summary description of the post in Indonesian or English)
+          "refinedTitle": string (a concise, human-friendly summary headline of the post content in English),
+          "refinedDescription": string (a concise summary description of the post in English)
         }
         
         Analyze and output Indonesian-focused slang or abbreviations correctly if present (e.g., "ngaco" -> negative, "keren" -> positive).`;
@@ -123,8 +140,8 @@ app.post("/api/analyze-url", async (req, res) => {
       id: `ap-${Date.now()}`,
       url: url || `manual-text-${Date.now()}`,
       platform,
-      title: modelResult.refinedTitle || scrapedTitle,
-      description: modelResult.refinedDescription || scrapedDesc,
+      title: modelResult.refinedTitle || scrapedTitle || (scrapedDesc || "").slice(0, 80),
+      description: modelResult.refinedDescription || scrapedDesc || fetchNote,
       imageUrl: scrapedImg,
       sentiment: modelResult.sentiment,
       sentimentScore: modelResult.sentimentScore,
@@ -162,10 +179,14 @@ app.post("/api/trigger-monitor", async (req, res) => {
     logger.info(`[Social Intelligence Engine] Running unified social signal search for: "${tracker.query}"...`);
     const formattedResults = await fetchUnifiedSocialSignals(tracker);
 
-    // A manual scan is authoritative for this tracker: replace its rows only.
-    await replaceMentionsForTracker(trackerId, formattedResults);
+    // A scan merges into the tracker's history instead of replacing it, so a
+    // channel that answered nothing this cycle does not erase what it had.
+    const written = await mergeMentionsForTracker(trackerId, formattedResults);
     markScanned(trackerId);
-    
+    logger.info(
+      `[Scan] "${tracker.query}": ${formattedResults.length} collected, ${written} merged into history.`
+    );
+
     broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
     res.json(formattedResults);
   } catch (err: any) {

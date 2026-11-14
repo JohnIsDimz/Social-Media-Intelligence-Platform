@@ -3,6 +3,8 @@ export interface Tracker {
   type: 'brand' | 'hashtag' | 'url';
   query: string;
   platforms: ('tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit')[];
+  /** Handles for channels with no keyword search, e.g. Telegram channels. */
+  accounts?: string[];
   createdAt: string;
 }
 
@@ -16,7 +18,10 @@ export interface AnalyzedPost {
   sentiment: 'positive' | 'neutral' | 'negative';
   sentimentScore: number; // -1 to 1
   emotion: string; // e.g., Joy, Anger, Sadness, Surprise, Neutral, Love
-  engagement: string; // e.g., High, Medium, Low
+  /** High/Medium/Low when the platform publishes a count; absent otherwise. */
+  engagement?: string;
+  /** Raw engagement count, present only when the source publishes one. */
+  engagementScore?: number;
   hashtags: string[];
   analyzedAt: string;
 }
@@ -32,7 +37,12 @@ export interface MonitorResult {
   sentiment: 'positive' | 'neutral' | 'negative';
   sentimentScore: number;
   emotion: string;
-  engagement: string;
+  /** High/Medium/Low when the platform publishes a count; absent otherwise. */
+  engagement?: string;
+  /** Raw count from the source; absent when it publishes none. */
+  engagementScore?: number;
+  /** Which query framing found this row, for grounding channels. */
+  queryVariant?: string;
   date: string;
   country?: string;
   latitude?: number;

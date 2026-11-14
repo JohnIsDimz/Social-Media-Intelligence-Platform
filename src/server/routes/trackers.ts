@@ -25,8 +25,24 @@ app.get("/api/trackers", async (_req, res) => {
 const ALLOWED_TRACKER_TYPES = ["brand", "hashtag", "url", "topic", "product"];
 const ALLOWED_PLATFORMS = [...CHANNEL_KEYS, "x"];
 
+/** Handles a tracker may name for channels that have no keyword search. */
+const MAX_ACCOUNTS = 5;
+const ACCOUNT_RE = /^[A-Za-z0-9_]{2,64}$/;
+
+function cleanAccounts(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return [
+    ...new Set(
+      input
+        .filter((a): a is string => typeof a === "string")
+        .map((a) => a.trim().replace(/^@/, "").replace(/^https?:\/\/t\.me\//, "").replace(/\/+$/, ""))
+        .filter((a) => ACCOUNT_RE.test(a))
+    ),
+  ].slice(0, MAX_ACCOUNTS);
+}
+
 app.post("/api/trackers", async (req, res) => {
-  const { type, query, platforms } = req.body || {};
+  const { type, query, platforms, accounts } = req.body || {};
   if (typeof type !== "string" || typeof query !== "string") {
     return res.status(400).json({ error: "Type and query are required." });
   }
@@ -49,6 +65,7 @@ app.post("/api/trackers", async (req, res) => {
     type,
     query: cleanQuery,
     platforms: cleanPlatforms.length > 0 ? cleanPlatforms : CHANNEL_KEYS.filter((k) => channelSpec(k)?.kind === "api"),
+    accounts: cleanAccounts(accounts),
     createdAt: new Date().toISOString()
   };
 
