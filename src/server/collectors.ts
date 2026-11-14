@@ -11,11 +11,10 @@
  *    inside `scrapeSocialUrl`), and every call has a timeout;
  *  - nothing here returns invented rows: a failed collector returns [].
  */
-import { CHANNEL_KEYS } from "../channels.ts";
 import { chatJson } from "../lib/aiProvider.ts";
 import { logger } from "./logger.ts";
+import { CHANNEL_SEARCH_SITES, queryForChannel, searchConfig, searchWeb } from "./search.ts";
 import { aiCanSearch, describeAiFailure } from "./ai.ts";
-import { AiError } from "../lib/aiProvider.ts";
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -763,86 +762,88 @@ export async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   // Find remaining platforms that either don't have official APIs or failed to return any results
   const remainingPlatforms = selectedPlatforms.filter(p => !platformsWithResults.has(p.toLowerCase()));
 
-  // 4. Grounding: If we have remaining platforms (e.g. Tiktok, Instagram, Facebook, WhatsApp, LinkedIn, etc.)
-  // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
-  if (remainingPlatforms.length > 0 && aiCanSearch()) {
-    try {
-      logger.info(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
-      const searchPlatformsStr = remainingPlatforms.join(", ");
-      const prompt = `Search the live web for recent public discussions, posts, reviews, or mentions of "${query}" specifically on social media platforms: ${searchPlatformsStr}.
-      Use Google Search grounding to retrieve real information.
-      Then, process up to 4 real search result mentions and format them into a structured JSON array.
-      
-      Each item in the array MUST contain:
-      - platform: one of ${JSON.stringify(CHANNEL_KEYS)}
-      - url: the actual source URL retrieved from the search grounding links
-      - author: name/handle of the poster or "Public Discussion"
-      - title: brief summary headline of the post/mention
-      - content: summary of what was said in the post or comment
-      - sentiment: "positive" | "neutral" | "negative"
-      - sentimentScore: number from -1 to 1 representing the emotion strength
-      - emotion: "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral"
-      - engagement: "High" | "Medium" | "Low"
-      - date: approximate ISO date (e.g. "2026-07-12T00:00:00.000Z")
-      - country: country of origin of this post or the brand mention (e.g. "United States", "Indonesia", "United Kingdom", "Japan", etc.)
-      - latitude: approximate latitude coordinate of the location
-      - longitude: approximate longitude coordinate of the location
-      
-      JSON Output Format should be a clean array of these objects:
-      [
-        { ... },
-        { ... }
-      ]`;
+  // 4. Channels with no public read API: run a real web search per channel, then
+  //    let the model extract mentions from those results. The earlier version
+  //    asked the model to search while sending no tools, so it could only answer
+  //    from memory; nothing was ever collected. Search happens here instead.
+  const searchTargets = remainingPlatforms.filter((p) => CHANNEL_SEARCH_SITES[p.toLowerCase()]);
+  const searchReady = remainingPlatforms.length > 0 && aiCanSearch() && searchConfig().configured;
 
-      const parsedGrounding = await chatJson<any[]>({
-        system:
-          "You are a media-intelligence collector. You are given web results from a search tool and must " +
-          "extract only mentions that actually appear in them. Never invent a post, an author, a URL or a date.",
-        prompt,
-        expectation: "an array of mention objects",
-        temperature: 0,
-        maxTokens: 2000,
-      });
+  if (remainingPlatforms.length > 0 && !searchReady) {
+    logger.info(
+      `[Search] Skipping ${remainingPlatforms.length} channel(s) (${remainingPlatforms.join(", ")}): ` +
+        (!aiCanSearch()
+          ? "no AI key configured."
+          : "no web search provider configured (set SEARCH_PROVIDER + SEARXNG_URL or SEARCH_API_KEY).")
+    );
+  }
 
-      if (!Array.isArray(parsedGrounding)) {
-        throw new AiError("Grounding did not return an array.", "bad-response");
-      }
-      if (parsedGrounding.length === 0) {
-        logger.info("[Unified API Engine] The model found no grounded mentions for this cycle.");
-        return [];
-      }
-
-      // The model is happy to return loosely-related chatter. Drop anything that
-      // never mentions the tracked keyword, so a channel is not "filled" with
-      // unrelated posts.
-      const keyword = query.replace(/^#/, "").toLowerCase().trim();
-      const relevant = parsedGrounding.filter((res: any) => {
-        if (!keyword) return true;
-        const hay = `${res?.title || ""} ${res?.content || ""} ${res?.author || ""}`.toLowerCase();
-        return hay.includes(keyword);
-      });
-      logger.info(
-        `[Unified API Engine] Grounded mentions kept: ${relevant.length}/${parsedGrounding.length} (keyword match).`
-      );
-
-      const cleanGrounding = relevant.map((res: any) => {
-        let cleanUrl = typeof res?.url === "string" ? res.url : "";
-        if (
-          !cleanUrl.startsWith("http") ||
-          cleanUrl.includes("example.com") ||
-          cleanUrl.includes("share/status/global")
-        ) {
-          cleanUrl = constructOfficialPlatformSearchUrl(res?.platform || "google", query);
+  if (searchReady) {
+    for (const platform of searchTargets) {
+      const key = platform.toLowerCase();
+      try {
+        const results = await searchWeb(queryForChannel(key, query), 8);
+        if (results.length === 0) {
+          logger.info(`[Search] ${key}: no results for this cycle.`);
+          continue;
         }
-        return { ...res, url: cleanUrl };
-      });
 
-      mergedResults.push(...cleanGrounding);
-    } catch (err: any) {
-      logger.warn(
-        `[Unified API Engine] Model lookup failed for ${remainingPlatforms.join(", ")}:`,
-        describeAiFailure(err)
-      );
+        const listing = results
+          .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet.slice(0, 400)}`)
+          .join("\n");
+
+        const extracted = await chatJson<any[]>({
+          system:
+            "You extract social-media mentions from search results. Use ONLY the results given. " +
+            "Never invent a post, author, URL or date. If a result is not a mention of the keyword, skip it. " +
+            "Reply with a JSON array; return [] when nothing qualifies.",
+          prompt:
+            `Keyword: "${query}"\nChannel: ${key}\n\n` +
+            `Search results:\n${listing}\n\n` +
+            "Return up to 4 mentions as a JSON array. Each item: {\n" +
+            '  "url": one of the URLs above, copied exactly,\n' +
+            '  "author": the poster or site name from the result, or "Public discussion",\n' +
+            '  "title": short headline,\n' +
+            '  "content": what was said, in one or two sentences,\n' +
+            '  "sentiment": "positive" | "neutral" | "negative",\n' +
+            '  "sentimentScore": number from -1 to 1,\n' +
+            '  "emotion": "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral",\n' +
+            '  "engagement": "High" | "Medium" | "Low"\n' +
+            "}\nOnly include items whose url appears verbatim in the list above.",
+          expectation: "an array of mention objects",
+          temperature: 0,
+          maxTokens: 1500,
+        });
+
+        if (!Array.isArray(extracted) || extracted.length === 0) {
+          logger.info(`[Search] ${key}: model found no mention in ${results.length} result(s).`);
+          continue;
+        }
+
+        // Hard guard: a mention whose URL was not in the search results is a
+        // hallucination, whatever the model says.
+        const allowed = new Set(results.map((r) => r.url));
+        const grounded = extracted.filter((m: any) => typeof m?.url === "string" && allowed.has(m.url));
+
+        if (grounded.length !== extracted.length) {
+          logger.warn(
+            `[Search] ${key}: dropped ${extracted.length - grounded.length} mention(s) whose URL was not in the results.`
+          );
+        }
+        if (grounded.length === 0) continue;
+
+        platformsWithResults.add(key);
+        mergedResults.push(
+          ...grounded.map((m: any) => ({
+            ...m,
+            platform: key,
+            date: m.date || new Date().toISOString(),
+          }))
+        );
+        logger.info(`[Search] ${key}: kept ${grounded.length}/${extracted.length} grounded mention(s).`);
+      } catch (err: any) {
+        logger.warn(`[Search] ${key} failed:`, describeAiFailure(err));
+      }
     }
   }
 

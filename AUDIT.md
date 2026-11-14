@@ -612,3 +612,77 @@ Geometri radar diverifikasi terpisah dengan skrip yang memakai rumus yang sama
 dengan komponen: seluruh 25 bearing jatuh di dalam cincin luar (radius maksimum
 44.0) dan tidak ada dua kanal yang berbagi bearing.
 
+---
+
+## 15. Audit putaran keenam — pencarian web sungguhan dan label yang jujur
+
+Keputusan pengguna: **harus tetap gratis 100%**, data harus akurat, token Sakelar
+tidak masalah.
+
+### 15.1 Riset penyedia pencarian (fakta, bukan asumsi)
+
+| Penyedia | Tier gratis | Butuh kartu | Kesimpulan |
+|---|---|---|---|
+| **SearXNG** (self-host) | tanpa batas, tanpa kuota | tidak | dipakai sebagai opsi utama |
+| **Tavily** | 1.000 kredit/bulan | tidak | dipakai sebagai opsi tanpa infrastruktur |
+| Brave Search | **tidak ada** sejak Feb 2026 ($5 kredit/bulan) | ya | ditolak: melanggar syarat "gratis" |
+| Google Custom Search JSON API | 100/hari hanya untuk pelanggan lama | ya | ditolak: ditutup untuk pelanggan baru, dihentikan 1 Jan 2027 |
+| SerpAPI | 250 pencarian/bulan | tidak | dicatat sebagai cadangan, belum dipakai |
+
+### 15.2 Perbaikan R30: kolektor tanpa tool pencarian
+
+| Kode | Temuan | Perbaikan |
+|---|---|---|
+| R30 | Kanal `grounding` (11 kanal) meminta model "cari di web" tetapi `chatText()` tidak pernah mengirim `tools`, dan gateway Sakelar hanya punya `/chat/completions`. Kanal itu **tidak mungkin** menghasilkan baris. | Modul baru `src/server/search.ts`: SearXNG (self-host, gratis) atau Tavily (1.000/bulan gratis), dipilih lewat `SEARCH_PROVIDER`. Kolektor kini menjalankan pencarian **nyata** per kanal dengan filter `site:` lalu meminta model mengekstrak mention **hanya** dari hasil itu. |
+| R31 | Model dapat mengarang URL yang terlihat sah | Penjaga keras di kolektor: setiap mention yang URL-nya tidak ada di hasil pencarian **dibuang oleh kode**, bukan dipercaya. Dibuktikan `tests/search-collector.test.ts`. |
+| R32 | Label UI menyamakan "belum dibangun" dengan "butuh kunci", sehingga mengisi `AI_API_KEY` terlihat seperti akan menghidupkan TikTok | Status baru `planned` + label "not built yet", `grounding` → "search + AI", ringkasan dialog menyebut jumlah kanal yang belum dibangun. Pesan `needs-key` untuk kanal grounding kini menyebut **dua** syaratnya secara eksplisit. |
+
+### 15.3 Konfigurasi gratis yang direkomendasikan
+
+```bash
+# Opsi A — tanpa biaya, tanpa kunci, tanpa kuota (disarankan untuk VPS)
+SEARCH_PROVIDER=searxng
+SEARXNG_URL=http://searxng:8080      # service di docker-compose.yml
+
+# Opsi B — tanpa infrastruktur tambahan
+SEARCH_PROVIDER=tavily
+SEARCH_API_KEY=...
+```
+
+`docker-compose.yml` mendapat service `searxng` (tidak diekspos ke host, hanya
+`expose: 8080`) plus `deploy/searxng/settings.yml` yang mengaktifkan
+`search.formats: [html, json]` — tanpa itu instance menolak permintaan JSON dan
+kanal tetap kosong.
+
+Menjalankan secara lokal tanpa Docker:
+
+```bash
+docker run -d -p 8080:8080 --name searxng searxng/searxng
+SEARCH_PROVIDER=searxng SEARXNG_URL=http://127.0.0.1:8080 npm run dev
+```
+
+### 15.4 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 62 lulus: 25 storage + 6 route + 15 auth + 12 search + 4 collector
+npm run build      # vite + esbuild ok
+```
+
+Uji yang membuktikan klaim "akurat":
+
+- `tests/search.test.ts` — tanpa penyedia, pencarian mengembalikan `[]` (bukan
+  daftar karangan); hasil penyedia diteruskan apa adanya; baris non-http dan
+  duplikat dibuang; query per kanal memakai `site:` sehingga "nike" tidak
+  mengembalikan berita *tentang* Nike; kegagalan penyedia = `[]`, bukan lemparan.
+- `tests/search-collector.test.ts` — stub SearXNG + stub model: mention dengan
+  URL yang tidak ada di hasil pencarian **dibuang** (log: "dropped 1 mention(s)
+  whose URL was not in the results"), mention yang sah dipertahankan.
+
+### 15.5 Batas yang tetap ada
+
+Akurasi tetap bergantung pada kualitas indeks mesin pencari di SearXNG dan pada
+kepatuhan model terhadap instruksi ekstraksi. Yang dijamin kode: tidak ada URL
+muncul di dashboard yang tidak berasal dari hasil pencarian nyata, dan tidak ada
+angka yang dihitung dari data karangan.
+

@@ -6,6 +6,7 @@
  */
 import type { Express } from "express";
 import { aiConfig, aiSummary } from "../../lib/aiProvider.ts";
+import { searchSummary } from "../search.ts";
 import { dbStatus } from "../../lib/supabaseDb.ts";
 import { buildChannelHealth } from "../network-audit.ts";
 
@@ -43,6 +44,7 @@ app.get("/api/health", async (_req, res) => {
     version: process.env.npm_package_version || "unknown",
     database,
     ai: aiSummary(),
+    search: searchSummary(),
     collectors: {
       grounding: aiConfig().enabled,
       reddit: true,

@@ -17,6 +17,7 @@ Database setup lives in [`SUPABASE.md`](SUPABASE.md).
 | Port not exposed publicly | The app speaks plain HTTP. nginx/Caddy terminates TLS. | bind `127.0.0.1:3000` |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set | Without them nothing is stored; the API serves empty data and `/api/health` says `not-configured`. | `curl -s localhost:3000/api/health` |
 | `supabase/schema.sql` applied | Connected but missing tables reports `schema-missing`; writes fail. | run it once in the SQL editor |
+| `SEARCH_PROVIDER` set | Without it, the channels with no public read API (TikTok, Instagram, Facebook, ...) collect nothing, however many AI tokens you have. `searxng` costs nothing and needs no key. | `SEARCH_PROVIDER=searxng`, then `docker compose up -d searxng` |
 | `TRUST_PROXY=1` | Behind a proxy, rate limiting must key on the real client IP, not the proxy's. | already the default |
 
 ---

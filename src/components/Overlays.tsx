@@ -257,7 +257,15 @@ export function AddTrackerDialog({
 
 /** Result of `GET /api/channel-health`, keyed by channel key. */
 export interface ChannelHealth {
-  status: "configured" | "public" | "grounding" | "needs-key" | "closed" | "down" | "unverified";
+  status:
+    | "configured"
+    | "public"
+    | "grounding"
+    | "needs-key"
+    | "closed"
+    | "planned"
+    | "down"
+    | "unverified";
   detail: string;
 }
 
@@ -279,6 +287,8 @@ export interface DatabaseInfo {
 
 export interface DataSources {
   grounding: boolean;
+  /** Both legs of the search-only channels: provider for finding, model for extraction. */
+  search?: { enabled: boolean; provider: string; host?: string | null; detail: string };
   ai?: AiInfo;
   /** Where collected rows are stored: Supabase Postgres over its REST API. */
   database?: DatabaseInfo;
@@ -289,6 +299,7 @@ export interface DataSources {
   summary?: {
     reachable: number;
     searchOnly?: number;
+    planned?: number;
     needsKey: number;
     closed: number;
     down: number;
@@ -303,9 +314,12 @@ const STATUS_STYLE: Record<
 > = {
   configured: { label: "connected", className: "border-jade/40 bg-jade/10 text-jade" },
   public: { label: "open API", className: "border-jade/40 bg-jade/10 text-jade" },
-  grounding: { label: "search only", className: "border-hair bg-paper-2 text-ink-2" },
+  // "search only" would suggest a search key buys these channels; none exists
+  // yet, so the label says what is true.
+  grounding: { label: "search + AI", className: "border-hair bg-paper-2 text-ink-2" },
   "needs-key": { label: "needs key", className: "border-amber/40 bg-amber-soft text-amber" },
   closed: { label: "no access", className: "border-hair bg-paper-2 text-ink-3" },
+  planned: { label: "not built yet", className: "border-hair bg-paper-2 text-ink-3" },
   down: { label: "network down", className: "border-brick/40 bg-brick/10 text-brick" },
   unverified: { label: "untested", className: "border-hair bg-paper-2 text-ink-2" },
 };
@@ -353,6 +367,7 @@ export function DataSourcesDialog({
         r.health.status === "down" ||
         r.health.status === "needs-key" ||
         r.health.status === "closed" ||
+        r.health.status === "planned" ||
         r.health.status === "unverified"
       );
     return true;
@@ -381,6 +396,7 @@ export function DataSourcesDialog({
                     `${summary.reachable} reachable`,
                     summary.searchOnly ? `${summary.searchOnly} via search` : null,
                     `${summary.needsKey} need a key`,
+                    summary.planned ? `${summary.planned} not built` : null,
                     summary.down ? `${summary.down} unreachable` : null,
                     summary.unverified ? `${summary.unverified} untested` : null,
                   ]
