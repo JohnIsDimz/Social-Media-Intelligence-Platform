@@ -775,7 +775,7 @@ export default function App() {
       <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col lg:flex-row">
         {/* Rail — desktop only; the drawer carries the same content on small screens. */}
         <aside className="hidden w-[240px] shrink-0 border-r border-hair lg:block xl:w-[264px]">
-          <div className="sticky top-0 max-h-screen overflow-y-auto">
+          <div className="scrollbar-none sticky top-0 max-h-screen overflow-y-auto">
             <SideRail
               view={view}
               onChangeView={setView}

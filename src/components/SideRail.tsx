@@ -100,7 +100,7 @@ export function SideRail({
             Nothing tracked yet. Add a brand or hashtag to start collecting public conversation.
           </p>
         ) : (
-          <ul className="flex max-h-[42vh] flex-col overflow-y-auto pr-1">
+          <ul className="scrollbar-none flex max-h-[42vh] flex-col overflow-y-auto pr-1">
             {trackers.map((t) => {
               const active = t.id === activeTrackerId;
               return (

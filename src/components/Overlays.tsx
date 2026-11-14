@@ -32,7 +32,7 @@ export function RailDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Navigation menu"
-        className="settle absolute inset-y-0 left-0 w-[290px] max-w-[85vw] overflow-y-auto bg-paper shadow-xl"
+        className="scrollbar-none settle absolute inset-y-0 left-0 w-[290px] max-w-[85vw] overflow-y-auto bg-paper shadow-xl"
       >
         <div className="flex items-center justify-between border-b border-hair px-5 py-3">
           <span className="text-[13px] font-medium text-ink-2">Navigation</span>
