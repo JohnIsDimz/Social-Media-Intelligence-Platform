@@ -4,9 +4,12 @@ import type { AIPredictionReport } from "../types";
 import { RefreshCw, Sparkles } from "lucide-react";
 
 interface TrendForecastProps {
-  predictions: AIPredictionReport;
+  /** Null until a model run succeeds: there is no sample table to fall back on. */
+  predictions: AIPredictionReport | null;
   isLive: boolean;
   loading: boolean;
+  /** Why the panel is empty, verbatim from the API where possible. */
+  unavailableReason: string | null;
   onRefresh: () => void;
 }
 
@@ -16,7 +19,49 @@ const TONE = {
   negative: { text: "text-brick", label: "Negative" },
 } as const;
 
-export function TrendForecast({ predictions, isLive, loading, onRefresh }: TrendForecastProps) {
+export function TrendForecast({
+  predictions,
+  isLive,
+  loading,
+  unavailableReason,
+  onRefresh,
+}: TrendForecastProps) {
+  const refresh = (
+    <button
+      onClick={onRefresh}
+      disabled={loading}
+      className="inline-flex items-center gap-1.5 text-[12px] font-medium text-teal hover:underline underline-offset-2 disabled:opacity-50"
+    >
+      <RefreshCw size={12} aria-hidden="true" className={cn(loading && "animate-spin")} />
+      {loading ? "computing…" : predictions ? "recompute" : "compute forecast"}
+    </button>
+  );
+
+  if (!predictions) {
+    return (
+      <section aria-labelledby="forecast-title">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 id="forecast-title" className="font-display text-[19px] font-semibold text-ink">
+            Three-day forecast
+          </h2>
+          {refresh}
+        </div>
+        <div className="border border-hair bg-paper-2 px-4 py-5">
+          <p className="max-w-[72ch] text-[14px] leading-relaxed text-ink-2">
+            {loading
+              ? "Computing a forecast from the mentions collected so far…"
+              : "No forecast yet. A forecast is generated from collected mentions only, so it stays empty until something is collected and an AI key is configured."}
+          </p>
+          {unavailableReason && !loading && (
+            <p className="mt-2 max-w-[72ch] text-[12px] leading-relaxed text-ink-3">
+              Server said: <span className="text-ink-2">{unavailableReason}</span>
+            </p>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section aria-labelledby="forecast-title">
       <div className="mb-3 flex items-baseline justify-between gap-4">

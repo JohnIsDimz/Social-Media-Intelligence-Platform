@@ -85,48 +85,18 @@ app.get("/api/social-signals", async (req, res) => {
     };
   });
 
-  // Calculate global index metrics with ultimate mathematical precision
+  // Totals only. An earlier version also returned a "global buzz index" (a
+  // hard-coded division by 350), a "cross-platform coherence" score and a
+  // dominant platform. Nothing read them, and the first two were made-up
+  // normalisations rather than measurements, so they are gone.
   const totalSignalsDetected = platformSignals.reduce((acc, curr) => acc + curr.buzzVolume, 0);
-  const globalBuzzIndex = Math.min(100, Math.round((totalSignalsDetected / 350) * 100));
-  const channelsWithData = platformSignals.filter((p) => p.buzzVolume > 0);
-  const globalSentimentIndex = Number(
-    (
-      channelsWithData.length > 0
-        ? channelsWithData.reduce((acc, curr) => acc + curr.sentimentScore, 0) / channelsWithData.length
-        : 0
-    ).toFixed(2)
-  );
-  
-  // Cross-Platform Coherence (mathematical cohesion index)
-  const meanSentiment = globalSentimentIndex;
-  const variance =
-    channelsWithData.length > 0
-      ? channelsWithData.reduce((acc, curr) => acc + Math.pow(curr.sentimentScore - meanSentiment, 2), 0) /
-        channelsWithData.length
-      : 0;
-  // With nothing collected there is no agreement to measure: report 0, not a
-  // flattering 100 for an empty screen.
-  const coherenceScore =
-    channelsWithData.length === 0
-      ? 0
-      : Math.round(Math.max(15, Math.min(100, 100 - variance * 120)));
-
-  // Dominant platform (by signal strength)
-  const sortedByStrength = [...platformSignals].sort((a, b) => b.signalStrength - a.signalStrength);
-  const dominantPlatform = sortedByStrength[0]?.buzzVolume > 0 ? sortedByStrength[0].platform : null;
 
   res.json({
     platformSignals,
-    aggregateIndex: {
-      globalBuzzIndex,
-      globalSentimentIndex,
-      crossPlatformCoherence: coherenceScore,
-      dominantPlatform,
-      totalSignalsDetected,
-      platformCount: platformSignals.length,
-      activePlatformCount: platformSignals.filter((p) => p.buzzVolume > 0).length,
-      lastAggregatedAt: new Date().toISOString()
-    }
+    totalSignalsDetected,
+    platformCount: platformSignals.length,
+    activePlatformCount: platformSignals.filter((p) => p.buzzVolume > 0).length,
+    lastAggregatedAt: new Date().toISOString()
   });
 });
 

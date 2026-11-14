@@ -238,7 +238,7 @@ export function localAnalyzeSentiment(title?: string, content?: string) {
   }
   
   const refinedTitle = safeTitle.length > 50 ? safeTitle.substring(0, 47) + "..." : safeTitle || "Analisis Konten Sosmed";
-  const refinedDescription = safeContent.length > 150 ? safeContent.substring(0, 147) + "..." : safeContent || "Tidak ada deskripsi konten tambahan.";
+  const refinedDescription = safeContent.length > 150 ? safeContent.substring(0, 147) + "..." : safeContent || "No additional content description.";
   
   return {
     sentiment,

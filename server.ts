@@ -1,6 +1,6 @@
 import express from "express";
 import path from "path";
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import dotenv from "dotenv";
 
 import { createServer as createViteServer } from "vite";
@@ -123,17 +123,132 @@ app.use(AI_ROUTES, expensiveRateLimiter);
 const API_AUTH_TOKEN = process.env.API_AUTH_TOKEN?.trim();
 const PROTECTED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/**
+ * Name of the cookie that carries the session for the bundled dashboard.
+ *
+ * The token must never reach the browser bundle: anything shipped there is
+ * readable by every visitor. Instead the server serves the SPA at "/" only when
+ * the visitor presents this cookie, and the API accepts either the cookie (the
+ * dashboard) or a bearer token (scripts and uptime checks).
+ */
+const SESSION_COOKIE = "smip_session";
+
+function readCookie(req: any, name: string): string {
+  const raw = String(req.headers.cookie || "");
+  for (const part of raw.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return decodeURIComponent(rest.join("="));
+  }
+  return "";
+}
+
 function requireApiToken(req: any, res: any, next: any) {
   if (!API_AUTH_TOKEN) return next();
   // Reads stay public so monitoring dashboards and uptime checks keep working.
   if (!PROTECTED_METHODS.has(req.method)) return next();
+
+  const session = readCookie(req, SESSION_COOKIE);
+  // The cookie value is a signing key derived from the token, not the token
+  // itself, so a leaked cookie cannot be replayed as an API credential.
+  if (session && timingSafeEqualStr(session, sessionKey(API_AUTH_TOKEN))) return next();
+
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (token && timingSafeEqualStr(token, API_AUTH_TOKEN)) return next();
-  return res.status(401).json({ error: "A valid bearer token is required for this request." });
+  return res.status(401).json({
+    error:
+      "Authentication required. Open the dashboard in a browser, or send Authorization: Bearer <token>.",
+    reason: "unauthorized",
+  });
+}
+
+/**
+ * Derives the session value from the API token.
+ *
+ * This is a hash, not encryption, and that is the point: it is one-way, so the
+ * cookie never reveals the token it was derived from, and rotating the token
+ * invalidates every existing session automatically.
+ */
+function sessionKey(token: string): string {
+  return createHmac("sha256", "smip-session").update(token).digest("hex");
 }
 
 app.use("/api", requireApiToken);
+
+/**
+ * Dashboard login.
+ *
+ * With API_AUTH_TOKEN set, visiting "/" without a session asks for the token and
+ * sets the cookie. Nothing is fetched from the server without a valid session or
+ * bearer token, so this is the only gate the UI needs.
+ */
+const loginRateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many sign-in attempts. Try again in ten minutes." },
+});
+
+app.post("/login", loginRateLimiter);
+
+app.get("/login", (req, res) => {
+  if (!API_AUTH_TOKEN) return res.redirect("/");
+  const failed = req.query.e === "1";
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S.M.I.P - sign in</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0E1B20;color:#E8EDEB;
+       font:15px/1.5 "Instrument Sans",system-ui,sans-serif}
+  form{width:min(360px,calc(100vw - 40px));border:1px solid rgba(255,255,255,.14);padding:24px;background:rgba(255,255,255,.03)}
+  h1{margin:0 0 4px;font-size:18px;letter-spacing:-.01em}
+  p{margin:0 0 18px;color:rgba(232,237,235,.55);font-size:13px}
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(232,237,235,.55);margin-bottom:6px}
+  input{width:100%;box-sizing:border-box;padding:10px 12px;background:#0A1417;border:1px solid rgba(255,255,255,.16);
+        color:inherit;font:inherit;border-radius:3px}
+  button{margin-top:14px;width:100%;padding:10px;background:#0F7A75;border:0;color:#fff;font:inherit;
+         font-weight:600;border-radius:3px;cursor:pointer}
+  .err{margin:0 0 14px;color:#E0A03A;font-size:13px}
+</style></head>
+<body><form method="POST" action="/login">
+  <h1>S.M.I.P</h1>
+  <p>This dashboard is protected. Enter the API token to continue.</p>
+  ${failed ? '<p class="err">That token was not accepted.</p>' : ""}
+  <label for="token">API token</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Sign in</button>
+</form></body></html>`);
+});
+
+app.post("/login", (req, res) => {
+  if (!API_AUTH_TOKEN) return res.redirect("/");
+  const given = String((req.body && req.body.token) || "").trim();
+  if (!given || !timingSafeEqualStr(given, API_AUTH_TOKEN)) return res.redirect("/login?e=1");
+  res.setHeader("Set-Cookie", sessionCookie(sessionKey(API_AUTH_TOKEN), req));
+  res.redirect("/");
+});
+
+/**
+ * SameSite=Strict keeps the session off cross-site requests; HttpOnly keeps it
+ * away from JS.
+ *
+ * `Secure` is decided from the actual request rather than NODE_ENV: a browser
+ * silently drops a Secure cookie over plain HTTP, which would turn a
+ * not-yet-TLS VPS into an endless login loop. Behind nginx the proxy header
+ * makes req.secure true, so TLS deployments still get the flag.
+ */
+function sessionCookie(value: string, req: any): string {
+  const secure = req.secure ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800${secure}`;
+}
+
+app.get("/logout", (_req, res) => {
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+  res.redirect("/login");
+});
 
 // Routes are registered before the static/SPA handlers and before the /api
 // catch-all at the bottom of this file, which must stay last.
@@ -156,6 +271,16 @@ async function startServer() {
   const server = http.createServer(app);
 
   attachWebSocketServer(server);
+
+  // Gate the dashboard itself. Without this the SPA loads, renders, and every
+  // API call fails with 401 — an empty screen with no explanation. The login
+  // routes and /api are registered above, so they are not affected.
+  app.use((req, res, next) => {
+    if (!API_AUTH_TOKEN) return next();
+    const session = readCookie(req, SESSION_COOKIE);
+    if (session && timingSafeEqualStr(session, sessionKey(API_AUTH_TOKEN))) return next();
+    return res.redirect("/login");
+  });
 
   // Background collection: pulls genuinely new mentions from the configured
   // sources. Runs on a short tick but only performs a network refresh every
