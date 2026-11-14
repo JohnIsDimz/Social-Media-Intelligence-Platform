@@ -491,7 +491,8 @@ export default function App() {
   const createTrackerDirect = async (
     type: "brand" | "hashtag",
     query: string,
-    platforms: string[]
+    platforms: string[],
+    accounts?: string[]
   ) => {
     setError(null);
     try {
@@ -499,6 +500,7 @@ export default function App() {
         type,
         query: type === "hashtag" && !query.startsWith("#") ? `#${query}` : query,
         platforms,
+        accounts,
       });
 
       setTrackers((prev) => [...prev, newTracker]);
@@ -871,8 +873,8 @@ export default function App() {
       <AddTrackerDialog
         open={showAddTrackerModal}
         onClose={() => setShowAddTrackerModal(false)}
-        onCreate={async ({ type, query, platforms }) => {
-          await createTrackerDirect(type, query, platforms);
+        onCreate={async ({ type, query, platforms, accounts }) => {
+          await createTrackerDirect(type, query, platforms, accounts);
         }}
       />
 

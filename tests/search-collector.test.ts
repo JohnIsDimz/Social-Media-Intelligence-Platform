@@ -21,6 +21,7 @@ const server = http.createServer((req, res) => {
   req.on("data", (c) => (body += c));
   req.on("end", () => {
     if (req.url?.startsWith("/search")) {
+      (globalThis as any).__searchCalls = [...(((globalThis as any).__searchCalls || []) as string[]), req.url!];
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({
         results: [
@@ -50,6 +51,7 @@ const server = http.createServer((req, res) => {
 async function main() {
 await new Promise<void>((r) => server.listen(9188, "127.0.0.1", () => r()));
 
+(globalThis as any).__searchCalls = [];
 const { fetchUnifiedSocialSignals } = await import("../src/server/collectors.ts");
 const rows = await fetchUnifiedSocialSignals({ query: "nike", platforms: ["tiktok"] });
 
@@ -61,6 +63,14 @@ checks.push(["an invented URL is dropped", !rows.some((r: any) => r.url.includes
 checks.push(["every url came from the search results", allReal]);
 checks.push(["the real mention is kept", rows.length === 1]);
 checks.push(["the mention carries its channel", rows.every((r: any) => r.platform === "tiktok")]);
+// A scan must run its search channels concurrently, try more than one framing of
+// the keyword, and ask for recent results only.
+const searchCalls = (globalThis as any).__searchCalls as string[];
+checks.push(["search asks for week-old results", searchCalls.every((u) => u.includes("time_range=week"))]);
+checks.push([`search tries more than one framing (${searchCalls.length} calls)`, searchCalls.length >= 3]);
+// No invented timestamp: when the model omits a date the row carries none.
+checks.push(["an undated mention has no made-up timestamp", rows.every((r: any) => r.date === undefined)]);
+await new Promise((r) => setTimeout(r, 100));
 
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"} ${name}`);
 const failedCount = checks.filter(([, ok]) => !ok).length;

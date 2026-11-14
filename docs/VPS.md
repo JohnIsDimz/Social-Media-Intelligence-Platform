@@ -18,6 +18,9 @@ Database setup lives in [`SUPABASE.md`](SUPABASE.md).
 | Port not exposed publicly | The app speaks plain HTTP. nginx/Caddy terminates TLS. | bind `127.0.0.1:3000` |
 | `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set | Without them nothing is stored; the API serves empty data and `/api/health` says `not-configured`. | `curl -s localhost:3000/api/health` |
 | `supabase/schema.sql` applied | Connected but missing tables reports `schema-missing`; writes fail. | run it once in the SQL editor |
+| `SEARCH_LANGUAGE` matches your market | Search results are filtered to the last week; `en` covers English conversation, `id` also switches Google News to the Indonesian edition. | `SEARCH_LANGUAGE=id` |
+| Optional collector keys | Eleven channels collect with no key at all. These only deepen them: `REDDIT_CLIENT_ID`+`SECRET` (reliable Reddit), `YOUTUBE_API_KEY` (view counts), `TWITTER_BEARER_TOKEN` (X), `TWITCH_CLIENT_ID`+`SECRET`. All free, all in `.env`. | see `.env.example` |
+| `supabase/schema.sql` re-applied after upgrading | The file is idempotent and its tail adds the columns newer versions write (`engagement_score`, `query_variant`, `trackers.accounts`). Skipping it leaves writes silently narrowed. | run it again in the SQL editor |
 | `SEARCH_PROVIDER` set | Without it, the channels with no public read API (TikTok, Instagram, Facebook, ...) collect nothing, however many AI tokens you have. `searxng` costs nothing and needs no key. | `SEARCH_PROVIDER=searxng`, then `docker compose up -d searxng` |
 | `TRUST_PROXY=1` | Behind a proxy, rate limiting must key on the real client IP, not the proxy's. | already the default |
 

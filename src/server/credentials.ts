@@ -2,8 +2,8 @@
  * Credentials are configuration, not content.
  *
  * Every key this app uses (AI_API_KEY, SEARCH_API_KEY, SUPABASE_SERVICE_ROLE_KEY,
- * YOUTUBE_API_KEY, TWITTER_BEARER_TOKEN, GITHUB_TOKEN, API_AUTH_TOKEN) is read
- * from the process environment. There is deliberately no endpoint, no form field
+ * YOUTUBE_API_KEY, TWITTER_BEARER_TOKEN, GITHUB_TOKEN, the Reddit and Twitch app
+ * pairs, API_AUTH_TOKEN) is read from the process environment. There is deliberately no endpoint, no form field
  * and no storage key that accepts one at runtime:
  *
  *   - an API key typed into a browser field would end up in the bundle, the
@@ -20,9 +20,14 @@ export const SECRET_ENV_VARS = [
   "AI_API_KEY",
   "SEARCH_API_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_ANON_KEY",
   "YOUTUBE_API_KEY",
   "TWITTER_BEARER_TOKEN",
   "GITHUB_TOKEN",
+  "REDDIT_CLIENT_ID",
+  "REDDIT_CLIENT_SECRET",
+  "TWITCH_CLIENT_ID",
+  "TWITCH_CLIENT_SECRET",
   "API_AUTH_TOKEN",
 ] as const;
 

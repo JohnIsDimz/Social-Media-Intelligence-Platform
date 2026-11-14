@@ -839,3 +839,149 @@ kolektornya) atau diturunkan ke `none`.
 
 Belum ada perubahan kode dari rencana ini; dokumen tersebut adalah urutan kerja
 yang diusulkan, bukan klaim bahwa sudah dikerjakan.
+
+## 18. Audit putaran kedelapan — penangkapan sinyal dari platform asli
+
+Putaran ini mengeksekusi rencana di `docs/SIGNAL-RECOMMENDATIONS.md`. Prinsipnya
+satu: **lebih banyak sinyal, bukan lebih banyak klaim**. Setiap perubahan di bawah
+punya tes yang membuktikannya berjalan terhadap bentuk respons API yang nyata.
+
+### 18.1 Dua bug yang membuat kanal kosong tanpa terlihat rusak
+
+| Sebelum | Sesudah |
+| --- | --- |
+| X: `max_results=4` — endpoint menerima 10–100, jadi permintaan ditolak dan kanal selalu kosong walau token diisi | `max_results=25` + `expansions=author_id` sehingga penulis tampil `@handle`, bukan `id:12345`; HTTP gagal dicatat, bukan jadi senyap |
+| Mastodon: `v2/search?type=statuses` — dibatasi autentikasi di `mastodon.social`, hasilnya `statuses: []` | hashtag timeline publik `/api/v1/timelines/tag/:tag` di beberapa instance (`MASTODON_INSTANCES`), pencarian status hanya upaya sekunder |
+
+### 18.2 Kedalaman: batas per panggilan dinaikkan ke batas endpoint
+
+| Kanal | Sebelum | Sesudah |
+| --- | --- | --- |
+| Reddit | 4 pos, koordinat AS palsu `37.0902,-95.7129` | 25 pos × dua urutan (`new`, `top` minggu), tanpa koordinat, OAuth bila pasangan aplikasi diisi |
+| YouTube | butuh `YOUTUBE_API_KEY`, `maxResults=3` | RSS publik tanpa kunci (15 video); kunci hanya untuk jumlah tayangan via `videos.list` (1 unit/50 video) |
+| Bluesky | `limit=5`, satu halaman | `limit=50` + satu halaman `cursor` |
+| Hacker News | 5 story | 40 story **dan** 40 komentar, dibatasi 30 hari terakhir |
+| Lemmy | 5, `sort=New` | 40 × (`New`, `TopWeek`) |
+| Stack Overflow | 5, `sort=creation` | 50 × (`creation`, `votes`) |
+| GitHub | `per_page=5`, `sort=created` | `per_page=50` × (`created`, `comments`), `is:issue` |
+| DEV Community | membaca `?top=30` (ranking popularitas) lalu memfilter | `/articles/latest?tag=` + feed terbaru, difilter kata kunci |
+| Google News | 5 item, `hl=en-US` | 20 item, locale mengikuti `SEARCH_LANGUAGE` |
+
+### 18.3 Lintas kanal
+
+- **Scan manual menggabungkan, tidak mengganti.** `replaceTrackerMentions` dihapus
+  dan diganti `mergeTrackerMentions`: id baris deterministik dari
+  `trackerId + platform + url`, sehingga satu siklus lemah tidak lagi menghapus
+  siklus yang baik dan scan berulang tidak menduplikasi.
+- **Kanal pencarian berjalan paralel** (3 sekaligus, `runPool`), masing-masing
+  mencoba **tiga framing** kata kunci (frasa persis, kata niat seperti
+  `review/problem/complaint`, lalu bentuk `#tag OR @handle`), meminta hasil
+  **satu minggu terakhir** (`time_range=week` / `days=7`), dengan **cache 10
+  menit** per `(provider, query)`.
+- **Batas per scan 400 baris** (`MAX_ROWS_PER_SCAN`) supaya jaringan yang lebih
+  luas tidak membuat satu scan tak terbatas.
+- **Guard grounding tetap**: mention yang URL-nya tidak ada di hasil pencarian
+  dibuang, dan sekarang diuji ulang pada jalur paralel.
+
+### 18.4 Kanal yang tadinya "ada di katalog tapi tidak ada kolektornya"
+
+`medium` dan `vimeo` dideklarasikan `kind: "api"` tetapi tidak punya fetcher.
+Sekarang:
+
+- **Medium** — RSS tag publik (`medium.com/feed/tag/<tag>`), judul/penulis/tanggal asli.
+- **Vimeo** — metadata oEmbed per video yang ditemukan pencarian.
+- **Telegram** — naik dari `grounding` menjadi kolektor nyata: `t.me/s/<handle>`
+  dibaca langsung, dengan jumlah tayangan (`1.2K` → `1200`) dan tanggal.
+- **Twitch** — naik dari `none` menjadi kolektor Helix (client-credentials
+  gratis): kanal live yang cocok dengan kata kunci. Label kanal menyebut bahwa
+  chat tidak dibaca, karena API terbuka tidak mengeksposnya.
+- **Reddit** — kredensial `REDDIT_CLIENT_ID+SECRET` kini opsional; audit jaringan
+  melaporkan `public` bila endpoint tetap menjawab tanpa kunci, bukan `needs-key`.
+
+### 18.5 Data yang tidak lagi dikarang
+
+Empat jalur fabrikasi dihapus pada putaran ini:
+
+1. **Hashtag palsu** — setiap mention tanpa tag diberi `#brandmonitoring`,
+   `#analisissentimen`, `#sosmed`. Sekarang `[]`.
+2. **Judul kerangka** — `"Analisis Konten Sosmed"` dan
+   `"Social Media Content"` diganti string kosong; UI memakai label kanal.
+3. **Gambar stok** — `images.unsplash.com` dipakai sebagai gambar hasil "scrape".
+   Sekarang kosong.
+4. **Tanggal "sekarang"** — mention hasil pencarian yang tidak menyebut tanggal
+   diberi `new Date()`, yang mencemari velocity. Sekarang dibiarkan kosong.
+
+Plus dua sumber angka palsu:
+
+- **Koordinat** `37.0902,-95.7129` untuk semua pos Reddit/YouTube/X (pusat AS).
+  Dihapus; kolomnya tetap ada tetapi null.
+- **`engagementValue: 50`** untuk setiap item Google News. Dihapus.
+
+### 18.6 Analisis sentimen lokal yang bisa dipertanggungjawabkan
+
+`src/server/lexicon.ts` menggantikan pencocokan substring:
+
+| Masalah lama | Perbaikan |
+| --- | --- |
+| `"bagus"` cocok di dalam kata lain | tokenisasi `\p{L}` + pencocokan kata utuh |
+| `"tidak bagus"` dihitung positif | negasi (`not`, `tidak`, `gak`, `kurang`, …) dalam jendela dua token, dengan pelemahan 0.6× alih-alih pembalikan penuh |
+| +0.15 tetap per kata → skor mentok 1.0 | bobot per kata (1–3) dan normalisasi `total / sqrt(judged) / 2` |
+| "crashing" tidak dikenali | stemming ringan (`-ing`, `-ed`, `-es`, `-s`, `-nya`) |
+| emosi ditebak dari satu kata kunci | grup emosi (anger/sadness/fear/surprise/joy/love) atas token yang ada |
+
+Keterbatasan yang dinyatakan terbuka: ini leksikon, bukan model. 19 kasus di
+`tests/lexicon.test.ts` mengunci perilakunya, termasuk `"good but not great"`
+yang tetap positif tipis dan `"not bad"` yang tidak berbalik menjadi pujian kuat.
+
+### 18.7 Skema
+
+Aditif, idempoten, aman dijalankan pada database yang sudah ada:
+
+```sql
+alter table public.monitor_results add column if not exists engagement_score integer;
+alter table public.monitor_results add column if not exists query_variant    text;
+alter table public.trackers       add column if not exists accounts text[] not null default '{}';
+create index if not exists idx_mentions_tracker_url on public.monitor_results (tracker_id, url);
+```
+
+`engagement_score` menyimpan hitungan nyata dari sumber (sebelumnya dibuang
+setelah diubah menjadi label `High|Medium|Low`). `avgEngagement` di
+`/api/social-signals` bernilai `null` bila tidak ada satu pun baris yang punya
+hitungan — bukan 0, karena 0 berarti "diukur dan nol".
+
+### 18.8 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 146 lulus (9 berkas)
+npm run build      # vite + esbuild ok
+npm run audit      # 0 vulnerabilities
+```
+
+Rincian: 27 storage + 6 route + 15 auth + 21 search + 7 collector-path +
+11 credentials + 19 lexicon + 40 collector-shapes.
+
+Dua berkas baru adalah inti pembuktiannya:
+
+- `tests/collectors.test.ts` — 40 asersi terhadap stub berbentuk respons asli
+  tiap API: `max_results` X yang valid, expansion penulis, hashtag timeline
+  Mastodon, RSS YouTube tanpa kunci, Telegram `1.2K` → 1200, Medium RSS, Twitch
+  Helix, HN story+komentar, SO dua urutan, GitHub `is:issue`.
+- `tests/search.test.ts` — ditambah 9 asersi: query variant tetap ter-scope,
+  cache menahan panggilan kedua, dan `time_range` benar-benar dikirim.
+
+### 18.9 Batas yang tetap ada
+
+- Kanal tertutup (TikTok, Instagram, Facebook, LinkedIn, Threads, Discord,
+  Pinterest, Snapchat, WhatsApp, Vimeo, forum) tetap **hanya** bisa lewat
+  pencarian + model. Tidak ada API baca publik untuk mereka, dan tidak ada
+  scraping halaman login — itu akan melanggar aturan SSRF dan ketentuan layanan.
+- "100% platform asli" dipenuhi dalam arti ini: **setiap baris berasal dari
+  platform atau mesin pencari nyata, dan setiap label menyatakan jalurnya**.
+  Yang tidak bisa dijanjikan — dan tidak akan diklaim — adalah membaca isi
+  ruang privat (Discord server, grup WhatsApp, chat Twitch) yang memang tidak
+  dapat diakses tanpa bergabung.
+- Sandbox ini tidak bisa menjangkau host di luar daftar izin, jadi audit jaringan
+  menandai semua kanal `down` di sini. Di VPS dengan internet biasa, status itu
+  berubah menjadi `public`/`configured`. Yang diverifikasi di sini adalah
+  parsing, bentuk permintaan, dan aturan datanya — bukan konektivitas.

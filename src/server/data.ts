@@ -11,7 +11,7 @@ import {
   loadDatabase,
   pruneHistories,
   removeTracker,
-  replaceTrackerMentions,
+  mergeTrackerMentions,
   upsertAnalyzedPost,
   upsertMentions,
   upsertTracker,
@@ -69,12 +69,17 @@ export async function saveMentions(mentions: any[]): Promise<number> {
   }
 }
 
-/** A manual scan replaces everything collected for that tracker. */
-export async function replaceMentionsForTracker(trackerId: string, mentions: any[]): Promise<number> {
+/**
+ * Merges a scan into a tracker's history.
+ *
+ * It used to delete everything first, so one bad cycle erased a good one. Now a
+ * channel that answers nothing keeps the rows it already had.
+ */
+export async function mergeMentionsForTracker(trackerId: string, mentions: any[]): Promise<number> {
   try {
-    return await replaceTrackerMentions(trackerId, mentions);
+    return await mergeTrackerMentions(trackerId, mentions);
   } catch (err) {
-    logger.error("[DB] Failed to replace tracker mentions:", err);
+    logger.error("[DB] Failed to merge tracker mentions:", err);
     return 0;
   }
 }

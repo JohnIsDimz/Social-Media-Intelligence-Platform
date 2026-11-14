@@ -203,6 +203,8 @@ export type Tracker = {
   type: string;
   query: string;
   platforms: string[];
+  /** Handles for channels that have no keyword search (Telegram). */
+  accounts?: string[];
   createdAt: string;
 };
 
@@ -237,6 +239,10 @@ export type Mention = {
   country: string;
   latitude: number | null;
   longitude: number | null;
+  /** Raw engagement count from the source; absent when it publishes none. */
+  engagementScore?: number;
+  /** Which query framing found this row. */
+  queryVariant?: string;
 };
 
 const trackerRow = (t: any) => ({
@@ -244,6 +250,9 @@ const trackerRow = (t: any) => ({
   type: t.type || "brand",
   query: t.query || "",
   platforms: t.platforms || [],
+  // Named handles for channels without keyword search (Telegram). Stored on the
+  // tracker, not in a key-value blob, so a scan can find them again.
+  accounts: Array.isArray(t.accounts) ? t.accounts : [],
   created_at: t.createdAt || new Date().toISOString()
 });
 
@@ -277,7 +286,12 @@ const mentionRow = (mr: any) => ({
   tracker_id: mr.trackerId || "",
   country: mr.country || "Global",
   latitude: mr.latitude === undefined || mr.latitude === null ? null : Number(mr.latitude),
-  longitude: mr.longitude === undefined || mr.longitude === null ? null : Number(mr.longitude)
+  longitude: mr.longitude === undefined || mr.longitude === null ? null : Number(mr.longitude),
+  engagement_score:
+    mr.engagementScore === undefined || mr.engagementScore === null || Number.isNaN(Number(mr.engagementScore))
+      ? null
+      : Math.round(Number(mr.engagementScore)),
+  query_variant: mr.queryVariant || null
 });
 
 export const fromTrackerRow = (r: any): Tracker => ({
@@ -285,6 +299,7 @@ export const fromTrackerRow = (r: any): Tracker => ({
   type: r.type || "brand",
   query: r.query || "",
   platforms: Array.isArray(r.platforms) ? r.platforms : [],
+  accounts: Array.isArray(r.accounts) ? r.accounts : [],
   createdAt: r.created_at || ""
 });
 
@@ -318,7 +333,12 @@ export const fromMentionRow = (r: any): Mention => ({
   trackerId: r.tracker_id || "",
   country: r.country || "Global",
   latitude: r.latitude === null || r.latitude === undefined ? null : Number(r.latitude),
-  longitude: r.longitude === null || r.longitude === undefined ? null : Number(r.longitude)
+  longitude: r.longitude === null || r.longitude === undefined ? null : Number(r.longitude),
+  engagementScore:
+    r.engagement_score === null || r.engagement_score === undefined
+      ? undefined
+      : Number(r.engagement_score),
+  queryVariant: r.query_variant || undefined
 });
 
 /* ---------------------------------------------------------------------------
@@ -427,15 +447,42 @@ export async function upsertMentions(mentions: Mention[]): Promise<number> {
   return written;
 }
 
-/** Replaces everything collected for one tracker: the scan is authoritative. */
-export async function replaceTrackerMentions(trackerId: string, mentions: Mention[]): Promise<number> {
-  const removed = await query<any>(
-    (sb) => sb.from("monitor_results").delete().eq("tracker_id", trackerId),
-    null,
-    "clear tracker mentions"
-  );
-  if (!removed.ok) return 0;
-  return upsertMentions((mentions || []).map((m) => ({ ...m, trackerId })));
+/**
+ * Merges a scan into what the tracker already has.
+ *
+ * The old behaviour deleted every row for the tracker first, so one weak cycle
+ * (a rate-limited search, a provider hiccup) erased a good one and the history
+ * never accumulated. Rows are now upserted on a deterministic id derived from
+ * `platform + url`, which means:
+ *
+ *  - re-running the same scan updates the same rows instead of duplicating them;
+ *  - a channel that answers nothing this cycle keeps what it had;
+ *  - the returned count is how many rows were written, not how many were found.
+ */
+export async function mergeTrackerMentions(trackerId: string, mentions: Mention[]): Promise<number> {
+  const rows = (mentions || []).map((m) => {
+    const key = `${m.platform}|${(m.url || "").split("#")[0].replace(/\/+$/, "")}`;
+    return { ...m, trackerId, id: stableMentionId(trackerId, key) };
+  });
+  return upsertMentions(rows);
+}
+
+/**
+ * Deterministic row id.
+ *
+ * Cheap 53-bit FNV-1a over the key, rendered as hex. A collision would merge two
+ * rows, so the key carries the platform and the full URL, not just the title.
+ */
+export function stableMentionId(trackerId: string, key: string): string {
+  const input = `${trackerId}::${key}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 + c, 0x85ebca6b) >>> 0;
+  }
+  return `mr-${h1.toString(16).padStart(8, "0")}${h2.toString(16).padStart(8, "0")}`;
 }
 
 /** Trim histories so the database cannot grow without bound. */

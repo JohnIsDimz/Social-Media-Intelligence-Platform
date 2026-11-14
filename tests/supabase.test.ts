@@ -206,14 +206,21 @@ async function main() {
     check("tracker delete removes mentions too", tables.monitor_results.length === 0 && tables.trackers.length === 0,
       `mentions=${tables.monitor_results.length} trackers=${tables.trackers.length}`);
 
-    // A manual scan replaces the tracker's rows rather than appending.
-    await db.replaceTrackerMentions("t-2", [
-      { ...mention, id: "m-2" },
-      { ...mention, id: "m-3" }
-    ]);
-    check("replace stores the new rows", tables.monitor_results.length === 2);
-    await db.replaceTrackerMentions("t-2", [{ ...mention, id: "m-4" }]);
-    check("replace removes the previous rows", tables.monitor_results.length === 1 && tables.monitor_results[0].id === "m-4");
+    // A manual scan merges into history on a deterministic id, so re-running the
+    // same scan updates the same rows instead of duplicating or erasing them.
+    const scanA = [
+      { ...mention, id: "ignored-1", url: "https://example.com/a" },
+      { ...mention, id: "ignored-2", url: "https://example.com/b" },
+    ];
+    await db.mergeTrackerMentions("t-2", scanA);
+    check("merge stores the scan rows", tables.monitor_results.length === 2, `${tables.monitor_results.length}`);
+    const firstId = tables.monitor_results[0].id;
+    check("row ids are deterministic", firstId === db.stableMentionId("t-2", "reddit|https://example.com/a"), firstId);
+    await db.mergeTrackerMentions("t-2", scanA);
+    check("re-running the same scan does not duplicate", tables.monitor_results.length === 2, `${tables.monitor_results.length}`);
+    await db.mergeTrackerMentions("t-2", [{ ...mention, url: "https://example.com/c" }]);
+    check("a later scan keeps earlier rows", tables.monitor_results.length === 3, `${tables.monitor_results.length}`);
+    tables.monitor_results.length = 0;
 
     // Pruning asks for the ids past the limit and deletes only those.
     for (let i = 0; i < 5; i++) {

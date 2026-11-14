@@ -16,6 +16,8 @@ create table if not exists public.trackers (
   type        text not null default 'brand',
   query       text not null,
   platforms   text[] not null default '{}',
+  -- Handles for channels that have no keyword search (Telegram channel names).
+  accounts    text[] not null default '{}',
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -53,12 +55,20 @@ create table if not exists public.monitor_results (
   date             timestamptz not null default now(),
   tracker_id       text not null default '',
   country          text not null default 'Global',
+  -- Coordinates are only stored when the source publishes them. Most read APIs
+  -- do not, so these stay null rather than being filled with a country centroid.
   latitude         double precision,
-  longitude        double precision
+  longitude        double precision,
+  -- Raw engagement count from the source, kept so a ranking can use a number.
+  -- `engagement` above stays the High/Medium/Low label the UI renders.
+  engagement_score integer,
+  -- Which query framing found this row (exact phrase, intent words, hashtag...).
+  query_variant    text
 );
 
 -- --------------------------------------------------------------- indexes
 create index if not exists idx_mentions_tracker on public.monitor_results (tracker_id);
+create index if not exists idx_mentions_tracker_url on public.monitor_results (tracker_id, url);
 create index if not exists idx_mentions_date    on public.monitor_results (date desc);
 create index if not exists idx_analyzed_date    on public.analyzed_posts (analyzed_at desc);
 
@@ -95,3 +105,12 @@ revoke all on public.monitor_results from anon, authenticated;
 --    where schemaname = 'public' and tablename in
 --          ('trackers', 'analyzed_posts', 'monitor_results');
 --   select count(*) from pg_policies where schemaname = 'public';
+
+-- ------------------------------------------------- growing an existing install
+-- `create table if not exists` does nothing to a table that already exists, so a
+-- database created before these columns were added needs them spelled out. All
+-- of these are additive and safe to run more than once.
+alter table public.monitor_results add column if not exists engagement_score integer;
+alter table public.monitor_results add column if not exists query_variant    text;
+create index if not exists idx_mentions_tracker_url on public.monitor_results (tracker_id, url);
+alter table public.trackers add column if not exists accounts text[] not null default '{}';

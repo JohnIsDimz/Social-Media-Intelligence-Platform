@@ -3,6 +3,8 @@ export interface Tracker {
   type: 'brand' | 'hashtag' | 'url';
   query: string;
   platforms: ('tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit')[];
+  /** Handles for channels with no keyword search, e.g. Telegram channels. */
+  accounts?: string[];
   createdAt: string;
 }
 

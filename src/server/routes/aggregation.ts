@@ -67,6 +67,16 @@ app.get("/api/social-signals", async (req, res) => {
           ? 100
           : 0;
 
+    // Engagement is only counted when the source actually published a number.
+    // Averaging over rows that have none would invent a value for the channel.
+    const withEngagement = platformItems
+      .map((i: any) => i.engagementScore)
+      .filter((v: unknown): v is number => typeof v === "number" && Number.isFinite(v));
+    const avgEngagement =
+      withEngagement.length > 0
+        ? Math.round(withEngagement.reduce((a: number, b: number) => a + b, 0) / withEngagement.length)
+        : null;
+
     const normalizedVolume = Math.min(100, (buzzVolume / 60) * 100);
     const sentimentBonus = (Math.abs(sentimentScore) + 1.0) * 25;
     const rawStrength = normalizedVolume * 0.35 + velocity * 0.35 + sentimentBonus;
@@ -82,6 +92,9 @@ app.get("/api/social-signals", async (req, res) => {
       signalStrength,
       activeUsersCount,
       sampleSize: platformItems.length,
+      // null means "not measured", which the table renders as a dash.
+      avgEngagement,
+      engagementSamples: withEngagement.length,
     };
   });
 

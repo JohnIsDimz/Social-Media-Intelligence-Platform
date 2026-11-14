@@ -17,7 +17,7 @@ async function main() {
   delete process.env.SEARCH_PROVIDER;
   delete process.env.SEARCH_API_KEY;
   delete process.env.SEARXNG_URL;
-  const { searchConfig, searchWeb, queryForChannel, searchSummary } = await import("../src/server/search.ts");
+  const { searchConfig, searchWeb, queryForChannel, queryVariantsFor, searchSummary } = await import("../src/server/search.ts");
 
   const unconfigured = searchConfig();
   check("no provider leaves search unconfigured", unconfigured.configured === false && unconfigured.provider === "none");
@@ -91,6 +91,44 @@ async function main() {
   check("tiktok query is site-scoped", queryForChannel("tiktok", "nike") === 'site:tiktok.com "nike"', queryForChannel("tiktok", "nike"));
   check("multi-site channels OR their filters", queryForChannel("forums", "nike").includes("site:reddit.com OR site:quora.com"));
   check("an unknown channel still produces a quoted keyword", queryForChannel("reddit", "nike") === '"nike"');
+
+  // 5. Query variants: one keyword, several framings, all still site-scoped.
+  const variants = queryVariantsFor("tiktok", "Kopi Kenangan");
+  check("variants start with the exact phrase query", variants[0] === 'site:tiktok.com "Kopi Kenangan"', variants[0]);
+  check("variants add intent words", variants.some((v) => v.includes("review OR problem")), variants[1]);
+  check("variants add the hashtag/handle form", variants.some((v) => v.includes("#KopiKenangan")), variants[2]);
+  check("every variant stays site-scoped", variants.every((v) => v.startsWith("site:tiktok.com")));
+  check("a channel with no site filter keeps one query", queryVariantsFor("reddit", "nike").length === 1);
+
+  // 6. The cache absorbs a repeated query inside its window.
+  process.env.SEARCH_PROVIDER = "tavily";
+  process.env.SEARCH_API_KEY = "test-key";
+  let providerCalls = 0;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    if (String(input).startsWith("https://api.tavily.com")) {
+      providerCalls++;
+      return realFetch(`http://127.0.0.1:${port}/tavily`, { method: "POST" });
+    }
+    return realFetch(input, init);
+  }) as any;
+  await searchWeb("cache-me", 8);
+  await searchWeb("cache-me", 8);
+  check("a repeated query inside the window is served from cache", providerCalls === 1, `${providerCalls} provider calls`);
+  await searchWeb("cache-me", 8, { useCache: false });
+  check("useCache:false bypasses the cache", providerCalls === 2, `${providerCalls} provider calls`);
+
+  // 7. Freshness reaches both providers.
+  process.env.SEARCH_PROVIDER = "searxng";
+  process.env.SEARXNG_URL = `http://127.0.0.1:${port}/searxng`;
+  delete process.env.SEARCH_API_KEY;
+  let seenUrl = "";
+  globalThis.fetch = (async (input: any) => {
+    seenUrl = String(input);
+    return realFetch(`http://127.0.0.1:${port}/searxng`);
+  }) as any;
+  await searchWeb("fresh", 5, { freshness: "week", useCache: false });
+  check("searxng receives a time_range", seenUrl.includes("time_range=week"), seenUrl.slice(0, 120));
+  check("searxng asks for the social category too", seenUrl.includes("social"), seenUrl.slice(0, 140));
 
   globalThis.fetch = realFetch;
   stub.close();

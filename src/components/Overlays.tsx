@@ -60,11 +60,19 @@ export function AddTrackerDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (payload: { type: "brand" | "hashtag"; query: string; platforms: ChannelKey[] }) => void;
+  onCreate: (payload: {
+    type: "brand" | "hashtag";
+    query: string;
+    platforms: ChannelKey[];
+    accounts?: string[];
+  }) => void;
   busy?: boolean;
 }) {
   const [type, setType] = useState<"brand" | "hashtag">("brand");
   const [query, setQuery] = useState("");
+  // Telegram has no open keyword search: a handle has to be named. Optional, and
+  // only shown when Telegram is selected so it does not look like a requirement.
+  const [accounts, setAccounts] = useState("");
   const queryRef = React.useRef<HTMLInputElement>(null);
 
   // Move focus into the dialog so keyboard users are not left behind the page.
@@ -109,7 +117,11 @@ export function AddTrackerDialog({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim() || platforms.length === 0) return;
-    onCreate({ type, query: query.trim(), platforms });
+    const handles = accounts
+      .split(/[,\s]+/)
+      .map((a) => a.replace(/^@/, "").replace(/^https?:\/\/t\.me\//, "").trim())
+      .filter(Boolean);
+    onCreate({ type, query: query.trim(), platforms, accounts: handles });
   };
 
   return (
@@ -209,10 +221,10 @@ export function AddTrackerDialog({
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
                 <button
                   type="button"
-                  onClick={() => setPlatforms(CHANNELS.map((c) => c.key))}
+                  onClick={() => setPlatforms(CHANNELS.filter((c) => c.kind !== "none").map((c) => c.key))}
                   className="font-medium text-teal hover:underline underline-offset-2"
                 >
-                  select all
+                  select all collectable
                 </button>
                 <button
                   type="button"
@@ -223,7 +235,7 @@ export function AddTrackerDialog({
                   }
                   className="font-medium text-teal hover:underline underline-offset-2"
                 >
-                  searchable APIs only
+                  direct APIs only
                 </button>
                 <span className="text-ink-3">
                   {platforms.length}/{CHANNELS.length} selected
@@ -233,6 +245,25 @@ export function AddTrackerDialog({
                 <p className="mt-2 text-[11px] text-brick">Select at least one channel.</p>
               )}
             </fieldset>
+
+            {platforms.includes("telegram") && (
+              <div>
+                <label htmlFor="tracker-accounts" className="label mb-1.5 block">
+                  Telegram channels (optional)
+                </label>
+                <input
+                  id="tracker-accounts"
+                  value={accounts}
+                  onChange={(e) => setAccounts(e.target.value)}
+                  placeholder="e.g. @infobrandid, @promohemat"
+                  className="w-full rounded-[var(--radius-control)] border border-hair bg-surface px-3 py-2.5 text-[14px] text-ink placeholder:text-ink-3/70 focus:border-teal focus:outline-none"
+                />
+                <p className="mt-1 text-[11px] text-ink-3">
+                  Telegram has no open keyword search, so up to five public channels are read
+                  from t.me. Without a handle this channel collects nothing.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

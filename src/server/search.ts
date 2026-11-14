@@ -101,24 +101,41 @@ export function searchSummary() {
   };
 }
 
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const cache = new Map<string, { at: number; results: SearchResult[] }>();
+
 /**
  * Runs one web search.
  *
  * @param query  Free-text query. Site filters are added by the caller.
  * @param limit  Maximum results to return (providers cap this themselves).
  */
-export async function searchWeb(query: string, limit = 8): Promise<SearchResult[]> {
+export async function searchWeb(
+  query: string,
+  limit = 8,
+  options: { freshness?: "day" | "week" | "month" | "year"; useCache?: boolean } = {}
+): Promise<SearchResult[]> {
   const config = searchConfig();
   if (!config.configured) return [];
+
+  // A short cache: the background loop re-scans the stalest tracker every couple
+  // of minutes, and re-buying the same query from a free quota is waste.
+  const cacheKey = `${config.provider}|${query}|${limit}|${options.freshness || ""}`;
+  if (options.useCache !== false) {
+    const hit = cache.get(cacheKey);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.results;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const results =
       config.provider === "tavily"
-        ? await searchTavily(query, limit, controller.signal)
-        : await searchSearxng(query, limit, controller.signal);
-    return dedupeByUrl(results).slice(0, limit);
+        ? await searchTavily(query, limit, controller.signal, options.freshness)
+        : await searchSearxng(query, limit, controller.signal, options.freshness);
+    const deduped = dedupeByUrl(results).slice(0, limit);
+    if (options.useCache !== false) cache.set(cacheKey, { at: Date.now(), results: deduped });
+    return deduped;
   } catch (err: any) {
     // A failed search is an empty search with a reason, never a fabricated list.
     const reason = err?.name === "AbortError" ? "timed out" : err?.cause?.code || err?.message || "search failed";
@@ -129,7 +146,12 @@ export async function searchWeb(query: string, limit = 8): Promise<SearchResult[
   }
 }
 
-async function searchTavily(query: string, limit: number, signal: AbortSignal): Promise<SearchResult[]> {
+async function searchTavily(
+  query: string,
+  limit: number,
+  signal: AbortSignal,
+  freshness?: "day" | "week" | "month" | "year"
+): Promise<SearchResult[]> {
   const res = await fetch("https://api.tavily.com/search", {
     method: "POST",
     signal,
@@ -143,6 +165,8 @@ async function searchTavily(query: string, limit: number, signal: AbortSignal): 
       include_answer: false,
       include_raw_content: false,
       max_results: Math.min(20, limit),
+      // Freshness is most of what "live signal" means. Tavily takes a day count.
+      ...(freshness ? { days: freshness === "day" ? 1 : freshness === "week" ? 7 : freshness === "month" ? 30 : 365 } : {}),
     }),
   });
 
@@ -160,16 +184,24 @@ async function searchTavily(query: string, limit: number, signal: AbortSignal): 
     }));
 }
 
-async function searchSearxng(query: string, limit: number, signal: AbortSignal): Promise<SearchResult[]> {
+async function searchSearxng(
+  query: string,
+  limit: number,
+  signal: AbortSignal,
+  freshness?: "day" | "week" | "month" | "year"
+): Promise<SearchResult[]> {
   const base = (process.env.SEARXNG_URL || "").trim().replace(/\/+$/, "");
   const url = new URL(`${base}/search`);
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
   // News first: brand mentions are usually recent, and SearXNG's general
   // engines already include social results.
-  url.searchParams.set("categories", "general,news");
+  // `social` is where Mastodon/Reddit results come from; without it the social
+  // channels depend on a general engine's index and find very little.
+  url.searchParams.set("categories", "general,news,social");
   url.searchParams.set("limit", String(Math.min(20, limit)));
   url.searchParams.set("language", process.env.SEARCH_LANGUAGE || "en");
+  if (freshness) url.searchParams.set("time_range", freshness);
 
   const res = await fetch(url, {
     method: "GET",
@@ -226,6 +258,34 @@ export const CHANNEL_SEARCH_SITES: Record<string, string[]> = {
 };
 
 /** Builds the provider query for one channel, e.g. `site:tiktok.com "nike"`. */
+/**
+ * One keyword, several framings.
+ *
+ * A single exact-phrase query is why coverage felt thin: people rarely write the
+ * brand and nothing else. Intent words surface the complaints a plain brand
+ * search misses, and the hashtag/handle forms are how the platforms are actually
+ * used. Every variant stays site-scoped, so recall widens without pulling in news
+ * *about* the platform.
+ */
+const INTENT_WORDS = ["review", "problem", "complaint"];
+
+export function queryVariantsFor(channelKey: string, keyword: string): string[] {
+  const base = queryForChannel(channelKey, keyword);
+  const sites = CHANNEL_SEARCH_SITES[channelKey] || [];
+  if (sites.length === 0) return [base];
+  const siteClause = sites.map((s) => `site:${s}`).join(" OR ");
+  const clean = keyword.replace(/^#/, "").replace(/"/g, "").trim();
+  if (!clean) return [base];
+  const compact = clean.replace(/\s+/g, "");
+
+  const variants = [
+    base,
+    `${siteClause} "${clean}" (${INTENT_WORDS.join(" OR ")})`,
+    `${siteClause} #${compact} OR @${compact}`,
+  ];
+  return [...new Set(variants)];
+}
+
 export function queryForChannel(channelKey: string, keyword: string): string {
   const sites = CHANNEL_SEARCH_SITES[channelKey] || [];
   const quoted = `"${keyword.replace(/"/g, "")}"`;

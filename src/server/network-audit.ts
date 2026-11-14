@@ -96,6 +96,9 @@ export async function buildChannelHealth(force = false) {
 
   await Promise.all(
     CHANNEL_SPECS.map(async (spec) => {
+      // A credential listed for a channel is optional when the endpoint still
+      // answers without it (YouTube RSS, anonymous Reddit). The probe decides:
+      // a reachable endpoint means the channel collects, key or no key.
       const hasCredential = spec.credential
         ? spec.credential.split("+").every((c) => Boolean(process.env[c.trim()]))
         : true;
@@ -138,13 +141,21 @@ export async function buildChannelHealth(force = false) {
         return;
       }
 
+      // A channel whose credential is missing is only "needs-key" when the
+      // endpoint itself refuses anonymous access. YouTube's RSS feed and Reddit's
+      // anonymous search answer without a key, so they must not be filed as
+      // blocked; the probe below decides, and the key is mentioned as an upgrade.
       if (spec.credential && !hasCredential) {
         const probe = await probeEndpoint(spec);
+        const worksAnonymously =
+          probe.reachable && (probe.healthy || (probe.status > 0 && probe.status < 400));
         channels[spec.key] = {
-          status: probe.reachable ? "needs-key" : "down",
-          detail: probe.reachable
-            ? `Endpoint answers (HTTP ${probe.status}). Set ${spec.credential} to collect ${spec.collects}.`
-            : `Endpoint unreachable from this server (${probe.error}). Set ${spec.credential} on a host with network access.`,
+          status: worksAnonymously ? "public" : probe.reachable ? "needs-key" : "down",
+          detail: worksAnonymously
+            ? `Public access works (HTTP ${probe.status}): ${spec.collects}. ${spec.credential} is optional and adds depth.`
+            : probe.reachable
+              ? `Endpoint answers but refuses anonymous reads (HTTP ${probe.status}). Set ${spec.credential} to collect ${spec.collects}.`
+              : `Endpoint unreachable from this server (${probe.error}).`,
         };
         return;
       }
