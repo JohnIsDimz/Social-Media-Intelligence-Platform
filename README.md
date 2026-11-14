@@ -1,10 +1,10 @@
-# 📈 S.M.I.P (Social Media Intelligence Platform) - Dokumentasi Teknologi
+# S.M.I.P (Social Media Intelligence Platform) — Dokumentasi Teknologi
 
 Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform)**. S.M.I.P adalah platform pemantauan, analisis emosi, dan pelacakan tren media sosial terintegrasi (*full-stack*) yang dirancang untuk menangkap sinyal percakapan publik secara global dan real-time di 25 jaringan: 10 platform sosial utama plus forum, situs ulasan, portal berita, dan komunitas pengembang.
 
 ---
 
-## 🛠️ Ringkasan Arsitektur & Teknologi S.M.I.P
+## Ringkasan Arsitektur & Teknologi S.M.I.P
 
 Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang menjamin penyajian data secara instan, interaktif, dan andal.
 
@@ -37,7 +37,7 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 
 ---
 
-## 🔔 Sistem Notifikasi Latar Belakang (Background Notification)
+## Sistem Notifikasi Latar Belakang (Background Notification)
 
 S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service Worker**. 
 *   **Cara Kerja**: Saat backend mendeteksi sinyal baru, event dikirim lewat WebSocket (atau auto-polling 8 detik bila WebSocket gagal). Selama tab browser masih terbuka — termasuk di latar belakang — notifikasi desktop ditampilkan via Notifications API. **Catatan:** notifikasi *saat browser benar-benar ditutup* memerlukan Web Push (VAPID + endpoint server pengirim push) yang belum diimplementasikan di versi ini.
@@ -49,7 +49,7 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 
 ---
 
-## 🔐 Keamanan & Transparansi Data
+## Keamanan & Transparansi Data
 
 ### Yang sudah diterapkan
 *   **SSRF protection**: `/api/analyze-url` hanya boleh mengambil (HTTPS, tanpa redirect) tautan dari domain media sosial yang di-allowlist. Alamat IP internal, `localhost`, kredensial di URL, dan port kustom ditolak dengan `400`.
@@ -125,7 +125,7 @@ Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (
 `GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
 `GET /api/channel-health` → status per kanal (lihat bagian *Jaringan data*); mengembalikan `503` hanya bila ada kanal `down` sementara host-nya sendiri punya internet. Cocok untuk load balancer dan uptime monitor.
 
-## 🚀 Deploy ke VPS
+## Deploy ke VPS
 
 Panduan lengkap: **[`docs/VPS.md`](docs/VPS.md)** — Docker atau systemd, reverse proxy TLS, checklist keamanan, dan apa yang harus dipantau setelah hari pertama.
 
@@ -142,7 +142,7 @@ Yang sudah disiapkan untuk produksi:
 * `deploy/nginx.conf` — TLS, HSTS, upgrade `/ws`, cache `/assets` setahun, `X-Forwarded-For` agar rate limit memakai IP asli.
 * CSP via helmet (self + Google Fonts), `X-Frame-Options`, `X-Content-Type-Options`, dan JSON 404 untuk rute `/api` yang tidak dikenal.
 
-## 💻 Cara Menjalankan Secara Lokal (Local Development)
+## Cara Menjalankan Secara Lokal (Local Development)
 
 Jika Anda ingin mencoba menjalankan atau memodifikasi aplikasi ini di komputer lokal Anda:
 

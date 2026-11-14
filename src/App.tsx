@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionReport } from "./types";
 import { api } from "./apiService";
+import { CHANNELS } from "./lib/ui";
 import { CommandStrip } from "./components/CommandStrip";
 import { SideRail, type View } from "./components/SideRail";
 import {
@@ -196,26 +197,9 @@ export default function App() {
   );
 
   // User IP and Asia/Jakarta Clock States
-  const [userIp, setUserIp] = useState<string>("Mendeteksi...");
   const [jakartaTime, setJakartaTime] = useState<string>("");
 
   useEffect(() => {
-    // 1. Fetch user IP
-    const fetchUserIp = async () => {
-      try {
-        const response = await fetch("https://api.ipify.org?format=json");
-        if (response.ok) {
-          const data = await response.json();
-          setUserIp(data.ip || "127.0.0.1");
-        } else {
-          setUserIp("127.0.0.1");
-        }
-      } catch (err) {
-        setUserIp("127.0.0.1");
-      }
-    };
-    fetchUserIp();
-
     // 2. Clock Interval (Asia/Jakarta)
     const updateTime = () => {
       const formatter = new Intl.DateTimeFormat("en-GB", {
@@ -898,7 +882,7 @@ export default function App() {
       <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col lg:flex-row">
         {/* Rail — desktop only; the drawer carries the same content on small screens. */}
         <aside className="hidden w-[240px] shrink-0 border-r border-hair lg:block xl:w-[264px]">
-          <div className="sticky top-0">
+          <div className="sticky top-0 max-h-screen overflow-y-auto">
             <SideRail
               view={view}
               onChangeView={setView}
@@ -921,7 +905,7 @@ export default function App() {
         <main className="min-w-0 flex-1 px-5 pb-16 pt-6 sm:px-8 sm:pt-7">
           {isLoading && !stats ? (
             <div className="flex flex-col gap-3 py-16" aria-busy="true" aria-live="polite">
-              <p className="text-[13px] text-ink-3">memuat data pemantauan…</p>
+              <p className="text-[13px] text-ink-3">Loading collected data…</p>
               <div className="h-px w-full bg-hair" />
               <div className="settle h-8 w-2/3 bg-paper-2" />
               <div className="settle h-4 w-1/2 bg-paper-2" />
@@ -937,7 +921,7 @@ export default function App() {
               onExport={exportDashboardReport}
               activeQuery={activeTracker?.query ?? ""}
               activePlatforms={activeChannelCount}
-              platformCount={channelRows.length || 8}
+              platformCount={channelRows.length || CHANNELS.length}
               clock={jakartaTime}
               onOpenSources={() => setShowSources(true)}
             />
@@ -966,9 +950,7 @@ export default function App() {
       <footer className="border-t border-hair">
         <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-1 px-5 py-5 text-[12px] text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <span>S.M.I.P — public conversation monitoring</span>
-          <span className="tnum">
-            {jakartaTime || "—"} · {userIp}
-          </span>
+          <span className="tnum">{jakartaTime || "—"}</span>
         </div>
       </footer>
 

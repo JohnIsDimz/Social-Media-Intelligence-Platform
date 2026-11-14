@@ -120,7 +120,7 @@ export function AddTrackerDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-title"
-        className="settle relative w-full max-w-[480px] rounded-[5px] border border-hair bg-paper shadow-xl"
+        className="settle relative flex max-h-[90vh] w-full max-w-[480px] flex-col rounded-[5px] border border-hair bg-paper shadow-xl"
       >
         <div className="flex items-baseline justify-between border-b border-hair px-5 py-4">
           <h2 id="add-title" className="font-display text-[17px] font-semibold text-ink">
@@ -128,113 +128,115 @@ export function AddTrackerDialog({
           </h2>
         </div>
 
-        <div className="flex flex-col gap-5 px-5 py-5">
-          <fieldset>
-            <legend className="label mb-2">Type</legend>
-            <div className="flex gap-2">
-              {(
-                [
-                  { key: "brand", label: "Brand or competitor" },
-                  { key: "hashtag", label: "Hashtag or topic" },
-                ] as const
-              ).map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setType(t.key)}
-                  aria-pressed={type === t.key}
-                  className={cn(
-                    "rounded-[5px] border px-3 py-1.5 text-[12px] font-medium transition-colors",
-                    type === t.key
-                      ? "border-teal bg-teal-soft text-teal"
-                      : "border-hair bg-white text-ink-2 hover:border-ink-3"
-                  )}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
-
-          <div>
-            <label htmlFor="tracker-query" className="label mb-1.5 block">
-              Keyword
-            </label>
-            <div aria-live="polite" className="sr-only">
-              {query.trim().length === 0 ? "Keyword is required." : `${query.trim().length} of 200 characters used.`}
-            </div>
-            <input
-              id="tracker-query"
-              ref={queryRef}
-              required
-              aria-describedby="tracker-query-help"
-              aria-invalid={query.trim().length === 0}
-              maxLength={200}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={type === "brand" ? "e.g. Kopi Kenangan" : "e.g. #GenerativeAI"}
-              className="w-full rounded-[5px] border border-hair bg-white px-3 py-2.5 text-[14px] text-ink placeholder:text-ink-3/70 focus:border-teal focus:outline-none"
-            />
-            <p id="tracker-query-help" className="mt-1 text-[11px] text-ink-3">
-              1–200 characters, required.
-            </p>
-          </div>
-
-          <fieldset>
-            <legend className="label mb-2">Channels to scan</legend>
-            <div className="flex flex-wrap gap-1.5">
-              {CHANNELS.map((c) => {
-                const on = platforms.includes(c.key);
-                return (
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+          <div className="flex flex-col gap-5">
+            <fieldset>
+              <legend className="label mb-2">Type</legend>
+              <div className="flex gap-2">
+                {(
+                  [
+                    { key: "brand", label: "Brand or competitor" },
+                    { key: "hashtag", label: "Hashtag or topic" },
+                  ] as const
+                ).map((t) => (
                   <button
-                    key={c.key}
+                    key={t.key}
                     type="button"
-                    onClick={() => toggle(c.key)}
-                    aria-pressed={on}
-                    title={c.collects}
+                    onClick={() => setType(t.key)}
+                    aria-pressed={type === t.key}
                     className={cn(
-                      "inline-flex items-center gap-1.5 rounded-[5px] border py-1 pl-1 pr-2 text-[12px] transition-colors",
-                      on
+                      "rounded-[5px] border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                      type === t.key
                         ? "border-teal bg-teal-soft text-teal"
                         : "border-hair bg-white text-ink-2 hover:border-ink-3"
                     )}
                   >
-                    <PlatformMark platform={c.key} size={14} />
-                    {c.label}
+                    {t.label}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+            </fieldset>
+
+            <div>
+              <label htmlFor="tracker-query" className="label mb-1.5 block">
+                Keyword
+              </label>
+              <div aria-live="polite" className="sr-only">
+                {query.trim().length === 0 ? "Keyword is required." : `${query.trim().length} of 200 characters used.`}
+              </div>
+              <input
+                id="tracker-query"
+                ref={queryRef}
+                required
+                aria-describedby="tracker-query-help"
+                aria-invalid={query.trim().length === 0}
+                maxLength={200}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={type === "brand" ? "e.g. Kopi Kenangan" : "e.g. #GenerativeAI"}
+                className="w-full rounded-[5px] border border-hair bg-white px-3 py-2.5 text-[14px] text-ink placeholder:text-ink-3/70 focus:border-teal focus:outline-none"
+              />
+              <p id="tracker-query-help" className="mt-1 text-[11px] text-ink-3">
+                1–200 characters, required.
+              </p>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
-              <button
-                type="button"
-                onClick={() => setPlatforms(CHANNELS.map((c) => c.key))}
-                className="font-medium text-teal hover:underline underline-offset-2"
-              >
-                select all
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPlatforms(
-                    CHANNELS.filter((c) => c.kind === "api").map((c) => c.key)
-                  )
-                }
-                className="font-medium text-teal hover:underline underline-offset-2"
-              >
-                searchable APIs only
-              </button>
-              <span className="text-ink-3">
-                {platforms.length}/{CHANNELS.length} selected
-              </span>
-            </div>
-            {platforms.length === 0 && (
-              <p className="mt-2 text-[11px] text-brick">Select at least one channel.</p>
-            )}
-          </fieldset>
+
+            <fieldset>
+              <legend className="label mb-2">Channels to scan</legend>
+              <div className="flex flex-wrap gap-1.5">
+                {CHANNELS.map((c) => {
+                  const on = platforms.includes(c.key);
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => toggle(c.key)}
+                      aria-pressed={on}
+                      title={c.collects}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-[5px] border py-1 pl-1 pr-2 text-[12px] transition-colors",
+                        on
+                          ? "border-teal bg-teal-soft text-teal"
+                          : "border-hair bg-white text-ink-2 hover:border-ink-3"
+                      )}
+                    >
+                      <PlatformMark platform={c.key} size={14} />
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setPlatforms(CHANNELS.map((c) => c.key))}
+                  className="font-medium text-teal hover:underline underline-offset-2"
+                >
+                  select all
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPlatforms(
+                      CHANNELS.filter((c) => c.kind === "api").map((c) => c.key)
+                    )
+                  }
+                  className="font-medium text-teal hover:underline underline-offset-2"
+                >
+                  searchable APIs only
+                </button>
+                <span className="text-ink-3">
+                  {platforms.length}/{CHANNELS.length} selected
+                </span>
+              </div>
+              {platforms.length === 0 && (
+                <p className="mt-2 text-[11px] text-brick">Select at least one channel.</p>
+              )}
+            </fieldset>
+          </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-hair px-5 py-4">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-hair px-5 py-4">
           <Button type="button" variant="quiet" onClick={onClose}>
             Cancel
           </Button>

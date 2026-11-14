@@ -11,12 +11,12 @@
 
 | Aspek | Skor | Catatan singkat |
 |---|---|---|
-| Build & Type-check | 🟡 6/10 | `tsc --noEmit` & `vite build` **lolos**, tapi hanya karena type-safety praktis dimatikan |
-| Keamanan | 🔴 2/10 | 0 autentikasi, 0 rate limit, SSRF pada scraper, Firestore `allow write: if true`, API key publik |
-| Kualitas kode | 🔴 3/10 | 2 file monolitik (`App.tsx` 2.633 baris, `server.ts` 2.308 baris), duplikasi, dead code |
-| Integritas data / "real-time" | 🔴 2/10 | Mayoritas data adalah **hasil random generator**, disajikan sebagai "live intel" |
-| DevOps / Repo hygiene | 🟠 4/10 | 1 commit untuk 13.882 baris, tanpa CI, tanpa test, 2 lockfile, tanpa LICENSE |
-| Dokumentasi | 🟠 5/10 | README bagus secara naratif tapi faktanya banyak yang salah (React 18, db.json, dsb.) |
+| Build & Type-check | PARTIAL — 6/10 | `tsc --noEmit` & `vite build` **lolos**, tapi hanya karena type-safety praktis dimatikan |
+| Keamanan | FAIL 2/10 | 0 autentikasi, 0 rate limit, SSRF pada scraper, Firestore `allow write: if true`, API key publik |
+| Kualitas kode | FAIL 3/10 | 2 file monolitik (`App.tsx` 2.633 baris, `server.ts` 2.308 baris), duplikasi, dead code |
+| Integritas data / "real-time" | FAIL 2/10 | Mayoritas data adalah **hasil random generator**, disajikan sebagai "live intel" |
+| DevOps / Repo hygiene | PARTIAL — 4/10 | 1 commit untuk 13.882 baris, tanpa CI, tanpa test, 2 lockfile, tanpa LICENSE |
+| Dokumentasi | PARTIAL — 5/10 | README bagus secara naratif tapi faktanya banyak yang salah (React 18, db.json, dsb.) |
 
 **Verdict:** Ini adalah **prototype demo yang sangat menjual secara visual**, tetapi belum layak disebut produk analitik. Ada jurang besar antara klaim README ("menangkap sinyal riil global & real-time") dengan implementasi (mayoritas sinyal = `Math.random()`). Sebelum dipakai/dipromosikan, minimal **5 temuan kritis di §2.1 harus dibereskan**.
 
@@ -95,7 +95,7 @@ Total: 13 (1 critical, 9 high, 3 moderate)
 
 ---
 
-## 3. Integritas Data — masalah "kejujuran produk" 🔴
+## 3. Integritas Data — masalah "kejujuran produk" FAIL
 
 Ini temuan paling penting secara etika produk. Banyak angka yang dipresentasikan sebagai "live intelligence" sebenarnya **dibuat-buat di server**:
 
@@ -268,61 +268,67 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 
 | Verifikasi | Hasil |
 |---|---|
-| `npm run typecheck` (strict) | ✅ 0 error (sebelumnya 1.165) |
-| `npm run build` | ✅ frontend + `dist/server.cjs` 93.5 kB |
-| `npm audit --omit=dev --audit-level=high` | ✅ **0 vulnerabilities** (sebelumnya 13) |
-| Server produksi (`node dist/server.cjs`) | ✅ HTTP 200 di `/`, `/api/health` |
-| Security headers | ✅ `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS |
-| SSRF `169.254.169.254` | ✅ ditolak `400` |
-| SSRF `localhost`, `file://`, `tiktok.com@evil.com` | ✅ ditolak `400` |
-| Domain asing `evil.example.com` | ✅ ditolak `400` |
-| Rate limit endpoint AI | ✅ `429` tepat pada request ke-21/menit |
-| Validasi tracker (query kosong / 500 char / tipe ngawur) | ✅ ditolak `400` |
-| Platform whitelist (`myspace`, `<script>`) | ✅ difilter diam-diam |
-| Tanpa sumber data yang berfungsi | ✅ volume `0`, bukan angka karangan |
+| `npm run typecheck` (strict) | DONE 0 error (sebelumnya 1.165) |
+| `npm run build` | DONE frontend + `dist/server.cjs` 93.5 kB |
+| `npm audit --omit=dev --audit-level=high` | DONE **0 vulnerabilities** (sebelumnya 13) |
+| Server produksi (`node dist/server.cjs`) | DONE HTTP 200 di `/`, `/api/health` |
+| Security headers | DONE `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS |
+| SSRF `169.254.169.254` | DONE ditolak `400` |
+| SSRF `localhost`, `file://`, `tiktok.com@evil.com` | DONE ditolak `400` |
+| Domain asing `evil.example.com` | DONE ditolak `400` |
+| Rate limit endpoint AI | DONE `429` tepat pada request ke-21/menit |
+| Validasi tracker (query kosong / 500 char / tipe ngawur) | DONE ditolak `400` |
+| Platform whitelist (`myspace`, `<script>`) | DONE difilter diam-diam |
+| Tanpa sumber data yang berfungsi | DONE volume `0`, bukan angka karangan |
 
 ## Temuan → Status
 
 | ID | Temuan | Status |
 |---|---|---|
-| C1 | Tanpa autentikasi di `/api/*` | ✅ **Fixed** — rate limit + validasi + `API_AUTH_TOKEN` (bearer, constant-time) pada semua rute `POST/PUT/PATCH/DELETE`; `GET` tetap publik agar dashboard & uptime check jalan |
-| C2 | Firestore `allow write: if true` | ✅ **Fixed** — deny-all, akses hanya via Admin SDK |
-| C3 | SSRF di `/api/analyze-url` | ✅ **Fixed** — allowlist host, HTTPS-only, `redirect: "manual"`, tolak IP literal |
-| C4 | Firebase Web API key di repo | 🟠 **Mitigated** — key kini tidak berguna tanpa rules longgar; tetap disarankan batasi HTTP referrer |
-| C5 | Tanpa rate limiting | ✅ **Fixed** — 300/menit global, 20/menit untuk endpoint AI |
-| C6 | Error internal bocor ke klien | ✅ **Fixed** — detail hanya di log server |
-| H2 | `express.json()` tanpa limit | ✅ **Fixed** — 64 KB |
-| H3 | Validasi input minim | ✅ **Fixed** — query 1–200 char, whitelist tipe/platform, `range` dijepit |
-| H5 | Tanpa helmet/CORS | ✅ **Fixed** — Helmet + CORS opt-in via env |
-| H7 | Service Worker menyajikan HTML basi | ✅ **Fixed** — network-first untuk dokumen, cache `v3` |
-| H8 | Permission `microphone` tak terpakai | ✅ **Fixed** — dihapus dari `metadata.json` |
-| B1 | Reconnect WebSocket tidak pernah jalan | ✅ **Fixed** — hanya `onclose` yang menghitung, maks 5 percobaan |
-| B5 | `console.error` dialihkan ke `warn` | ✅ **Fixed** — logger terstruktur dengan level + timestamp |
-| B6 | Sanitizer "error"→"err-info" | ✅ **Dihapus** |
-| B7 | `uncaughtException` diabaikan | ✅ **Fixed** — log lalu `exit(1)` |
-| B8 | `PORT` hardcoded | ✅ **Fixed** — `process.env.PORT` |
-| — | Data simulasi tampil seperti data nyata | ✅ **Fixed** — seluruh jalur simulasi dihapus dari `server.ts`; kanal kosong melaporkan nol |
-| — | Alarm "lonjakan negatif" acak tiap 8 detik | ✅ **Dihapus** |
-| — | Dependency tak terpakai (`firebase`, `d3`, `three`, 3 file UI demo) | ✅ **Dihapus** — ini yang menghilangkan 13 vulnerability |
-| — | `@types/react` hilang | ✅ **Ditambahkan** |
-| — | Dua lockfile | ✅ **Fixed** — `bun.lock` dihapus, `package-lock.json` sinkron |
-| — | Tanpa CI, health check, Docker, graceful shutdown | 🟡 **Sebagian** — health check, Docker, graceful shutdown ✅; pipeline CI ada di `docs/ci.yml` (butuh izin `workflows` untuk dipindah ke `.github/workflows/`) |
-| — | README faktanya salah | ✅ **Diperbaiki** + bagian keamanan/transparansi baru |
-| — | `favicon.ico` & manifest hilang | ✅ **Ditambahkan** (`favicon.png` + `manifest.json`) |
-| — | AI terkunci ke SDK Gemini (vendor lock-in, satu kunci untuk satu vendor) | ✅ **Fixed** — semua jalur AI lewat gateway OpenAI-compatible (`src/lib/aiProvider.ts`), default Sakelar `glm-5.3-flash`; SDK `@google/genai` dihapus dari dependensi |
-| — | Output model dipercaya mentah-mentah / bisa menyisipkan data tak relevan | ✅ **Fixed** — jawaban wajib lolos JSON (`chatJson`), mention hasil grounding difilter harus memuat kata kunci, kegagalan provider diklasifikasikan (`auth`/`rate-limit`/`unavailable`/`bad-response`) dan tidak pernah masuk database |
-| — | Forecast mengarang angka saat API gagal | ✅ **Fixed** — `422` bila belum ada data, `503` + `reason` bila AI mati; blok "fallback engine" berisi angka statis dihapus |
-| B2 | `writeDB()` full rewrite | ⬜ Belum (perbaikan performa, bukan blocker live) |
-| — | Tombol duplikat di layar | ✅ **Fixed** — `Refresh` di hero Overview dihapus (fungsi sama dengan *recompute* di header forecast); `Scan again` hanya muncul bila sudah ada hasil sehingga tidak bertabrakan dengan CTA di empty state; tautan *cancel* di header dialog tracker dihapus (sudah ada tombol Cancel). Diuji SSR: tidak ada dua tombol berlabel sama dalam satu layar |
-| — | CSP dimatikan, rute `/api` tak dikenal jatuh ke HTML SPA | ✅ **Fixed** — CSP helmet aktif (self + Google Fonts + ws), catch-all `/api` → JSON 404 **didaftarkan setelah semua route** (sempat salah urutan dan menelan `/api/health` — sudah diperbaiki & diuji) |
-| — | Aset produksi tanpa cache header; shell bisa tersaji basi | ✅ **Fixed** — `/assets/*` immutable 1 tahun, `index.html`/`sw.js`/`manifest.json` `no-cache` |
-| — | Dockerfile butuh toolchain C untuk `better-sqlite3` | ✅ **Fixed** — 3-stage tanpa build tools, non-root, healthcheck, volume `src/data`; ditambah `docker-compose.yml`, `deploy/smip.service`, `deploy/nginx.conf`, `docs/VPS.md` |
-| — | Dependency animasi tak terpakai (`framer-motion`, `motion`) | ✅ **Dihapus** — animasi sekarang CSS murni |
-| B3 | `syncToFirestore` tulis ulang semua dokumen | ⬜ Belum (biaya, bukan blocker live) |
-| — | `App.tsx` 2.633 baris / tanpa code splitting | ⬜ Belum (refactor) |
-| — | `aria-label` pada 22 tombol | ⬜ Belum (aksesibilitas) |
+| C1 | Tanpa autentikasi di `/api/*` | DONE **Fixed** — rate limit + validasi + `API_AUTH_TOKEN` (bearer, constant-time) pada semua rute `POST/PUT/PATCH/DELETE`; `GET` tetap publik agar dashboard & uptime check jalan |
+| C2 | Firestore `allow write: if true` | DONE **Fixed** — deny-all, akses hanya via Admin SDK |
+| C3 | SSRF di `/api/analyze-url` | DONE **Fixed** — allowlist host, HTTPS-only, `redirect: "manual"`, tolak IP literal |
+| C4 | Firebase Web API key di repo | PARTIAL **Mitigated** — key kini tidak berguna tanpa rules longgar; tetap disarankan batasi HTTP referrer |
+| C5 | Tanpa rate limiting | DONE **Fixed** — 300/menit global, 20/menit untuk endpoint AI |
+| C6 | Error internal bocor ke klien | DONE **Fixed** — detail hanya di log server |
+| H2 | `express.json()` tanpa limit | DONE **Fixed** — 64 KB |
+| H3 | Validasi input minim | DONE **Fixed** — query 1–200 char, whitelist tipe/platform, `range` dijepit |
+| H5 | Tanpa helmet/CORS | DONE **Fixed** — Helmet + CORS opt-in via env |
+| H7 | Service Worker menyajikan HTML basi | DONE **Fixed** — network-first untuk dokumen, cache `v3` |
+| H8 | Permission `microphone` tak terpakai | DONE **Fixed** — dihapus dari `metadata.json` |
+| B1 | Reconnect WebSocket tidak pernah jalan | DONE **Fixed** — hanya `onclose` yang menghitung, maks 5 percobaan |
+| B5 | `console.error` dialihkan ke `warn` | DONE **Fixed** — logger terstruktur dengan level + timestamp |
+| B6 | Sanitizer "error"→"err-info" | DONE **Dihapus** |
+| B7 | `uncaughtException` diabaikan | DONE **Fixed** — log lalu `exit(1)` |
+| B8 | `PORT` hardcoded | DONE **Fixed** — `process.env.PORT` |
+| — | Data simulasi tampil seperti data nyata | DONE **Fixed** — seluruh jalur simulasi dihapus dari `server.ts`; kanal kosong melaporkan nol |
+| — | Alarm "lonjakan negatif" acak tiap 8 detik | DONE **Dihapus** |
+| — | Dependency tak terpakai (`firebase`, `d3`, `three`, 3 file UI demo) | DONE **Dihapus** — ini yang menghilangkan 13 vulnerability |
+| — | `@types/react` hilang | DONE **Ditambahkan** |
+| — | Dua lockfile | DONE **Fixed** — `bun.lock` dihapus, `package-lock.json` sinkron |
+| — | Tanpa CI, health check, Docker, graceful shutdown | PARTIAL — health check, Docker, graceful shutdown DONE; pipeline CI ada di `docs/ci.yml` (butuh izin `workflows` untuk dipindah ke `.github/workflows/`) |
+| — | README faktanya salah | DONE **Diperbaiki** + bagian keamanan/transparansi baru |
+| — | `favicon.ico` & manifest hilang | DONE **Ditambahkan** (`favicon.png` + `manifest.json`) |
+| — | AI terkunci ke SDK Gemini (vendor lock-in, satu kunci untuk satu vendor) | DONE **Fixed** — semua jalur AI lewat gateway OpenAI-compatible (`src/lib/aiProvider.ts`), default Sakelar `glm-5.3-flash`; SDK `@google/genai` dihapus dari dependensi |
+| — | Output model dipercaya mentah-mentah / bisa menyisipkan data tak relevan | DONE **Fixed** — jawaban wajib lolos JSON (`chatJson`), mention hasil grounding difilter harus memuat kata kunci, kegagalan provider diklasifikasikan (`auth`/`rate-limit`/`unavailable`/`bad-response`) dan tidak pernah masuk database |
+| — | Forecast mengarang angka saat API gagal | DONE **Fixed** — `422` bila belum ada data, `503` + `reason` bila AI mati; blok "fallback engine" berisi angka statis dihapus |
+| B2 | `writeDB()` full rewrite | DONE — penulisan terarah per baris (`saveTracker`, `deleteTracker`, `saveAnalyzedPost`, `saveMentions`, `replaceMentionsForTracker`, `pruneMentions`) dengan `INSERT … ON CONFLICT DO UPDATE` atau `DELETE … WHERE`, dalam transaksi; index `idx_mentions_tracker/idx_mentions_date/idx_analyzed_date` dipakai (diverifikasi lewat `EXPLAIN QUERY PLAN`); sinkron Firestore di-debounce 1,5 detik |
+| — | Emoji di kode & dokumen | DONE — 0 emoji di seluruh repo (ts/tsx/css/html/json/md/js); status audit memakai kata DONE / PARTIAL / TODO |
+| — | Layout: dialog 25 kanal memotong tombol Save di layar pendek | DONE — `max-h-[90vh]` + isi `overflow-y-auto`, footer tombol dipin |
+| — | Layout: rail kiri tak bisa di-scroll di laptop pendek | DONE — `sticky top-0 max-h-screen overflow-y-auto` |
+| — | Layout: jam tampil tiga kali (strip, hero, footer) | DONE — salinan di hero dihapus |
+| — | Layout: hitungan kanal di hero bisa salah (fallback 8) | DONE — memakai panjang katalog nyata (25) |
+| — | Privasi: IP publik pengunjung diambil dari `api.ipify.org` lalu dicetak di footer | DONE — dihapus (juga request pihak ketiga yang kini diblokir CSP) |
+| — | Tombol duplikat di layar | DONE **Fixed** — `Refresh` di hero Overview dihapus (fungsi sama dengan *recompute* di header forecast); `Scan again` hanya muncul bila sudah ada hasil sehingga tidak bertabrakan dengan CTA di empty state; tautan *cancel* di header dialog tracker dihapus (sudah ada tombol Cancel). Diuji SSR: tidak ada dua tombol berlabel sama dalam satu layar |
+| — | CSP dimatikan, rute `/api` tak dikenal jatuh ke HTML SPA | DONE **Fixed** — CSP helmet aktif (self + Google Fonts + ws), catch-all `/api` → JSON 404 **didaftarkan setelah semua route** (sempat salah urutan dan menelan `/api/health` — sudah diperbaiki & diuji) |
+| — | Aset produksi tanpa cache header; shell bisa tersaji basi | DONE **Fixed** — `/assets/*` immutable 1 tahun, `index.html`/`sw.js`/`manifest.json` `no-cache` |
+| — | Dockerfile butuh toolchain C untuk `better-sqlite3` | DONE **Fixed** — 3-stage tanpa build tools, non-root, healthcheck, volume `src/data`; ditambah `docker-compose.yml`, `deploy/smip.service`, `deploy/nginx.conf`, `docs/VPS.md` |
+| — | Dependency animasi tak terpakai (`framer-motion`, `motion`) | DONE **Dihapus** — animasi sekarang CSS murni |
+| B3 | `syncToFirestore` tulis ulang semua dokumen | TODO Belum (biaya, bukan blocker live) |
+| — | `App.tsx` 2.633 baris / tanpa code splitting | DONE — `App.tsx` 982 baris, chart di chunk terpisah (`charts` 377 kB vs app 341 kB) |
+| — | `aria-label` pada 22 tombol | DONE — semua tombol ikon punya label, tablist/panel punya `aria-selected`/`aria-controls` + navigasi panah, dialog memindahkan fokus, toast `aria-live` |
 
-## ⚠️ Sebelum publik
+##  Sebelum publik
 
 1. **Firestore rules harus di-deploy.** File `firestore.rules` di repo baru berlaku setelah dijalankan: `firebase deploy --only firestore:rules`.
 2. **Kunci API key** di Google Cloud Console (HTTP referrer restriction) karena key-nya publik di repo.

@@ -276,6 +276,14 @@ dbConn.exec(`
   );
 `);
 
+// Indexes the targeted writes rely on: deletes and reads are always scoped by
+// tracker or by recency, so both get an index instead of a table scan.
+dbConn.exec(`
+  CREATE INDEX IF NOT EXISTS idx_mentions_tracker ON monitor_results(trackerId);
+  CREATE INDEX IF NOT EXISTS idx_mentions_date ON monitor_results(date);
+  CREATE INDEX IF NOT EXISTS idx_analyzed_date ON analyzed_posts(analyzedAt);
+`);
+
 // Run dynamic column additions if tables already exist but lack coordinates/country columns
 try {
   dbConn.exec("ALTER TABLE monitor_results ADD COLUMN country TEXT;");
@@ -728,6 +736,27 @@ async function syncToFirestore(data: any) {
   }
 }
 
+/**
+ * Firestore sync is debounced: a burst of writes (a scan saving 20 mentions)
+ * results in one sync, not twenty. The sync itself deletes only documents that
+ * disappeared and upserts the rest, so a small change stays a small change.
+ */
+let firestoreSyncTimer: NodeJS.Timeout | null = null;
+
+function scheduleFirestoreSync(delayMs = 1500) {
+  if (disableFirestoreSync) return;
+  if (firestoreSyncTimer) clearTimeout(firestoreSyncTimer);
+  firestoreSyncTimer = setTimeout(() => {
+    firestoreSyncTimer = null;
+    const snapshot = getDB();
+    syncToFirestore(snapshot).catch((err) => {
+      logger.warn("[Firebase Sync] Background sync failed:", (err as any)?.message || err);
+    });
+  }, delayMs);
+  // Never hold the event loop open just for a sync.
+  firestoreSyncTimer.unref?.();
+}
+
 function getDB() {
   try {
     const trackers = dbConn.prepare("SELECT * FROM trackers").all().map((t: any) => ({
@@ -757,83 +786,210 @@ function getDB() {
   }
 }
 
-function writeDB(data: any) {
+/* ---------------------------------------------------------------------------
+ * Targeted writes
+ *
+ * The old writeDB() deleted every row of every table and re-inserted the whole
+ * in-memory snapshot on every mutation. On a VPS with a real dataset that means
+ * a full table rewrite for a single added mention, and it briefly empties the
+ * tables inside the transaction.
+ *
+ * Each mutation now touches only the rows it actually changed: upsert the one
+ * record, delete the one row, or replace the results of one tracker. Writes are
+ * wrapped in a transaction so a failure cannot leave a half-applied change.
+ * ------------------------------------------------------------------------- */
+
+function runInTransaction<T>(fn: () => T): T {
+  return dbConn.transaction(fn)();
+}
+
+const SQL_UPSERT_TRACKER = `
+  INSERT INTO trackers (id, type, query, platforms, createdAt)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    type = excluded.type,
+    query = excluded.query,
+    platforms = excluded.platforms,
+    createdAt = excluded.createdAt
+`;
+
+const SQL_UPSERT_ANALYZED = `
+  INSERT INTO analyzed_posts (id, url, platform, title, description, imageUrl, sentiment, sentimentScore, emotion, engagement, hashtags, analyzedAt)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    url = excluded.url,
+    platform = excluded.platform,
+    title = excluded.title,
+    description = excluded.description,
+    imageUrl = excluded.imageUrl,
+    sentiment = excluded.sentiment,
+    sentimentScore = excluded.sentimentScore,
+    emotion = excluded.emotion,
+    engagement = excluded.engagement,
+    hashtags = excluded.hashtags,
+    analyzedAt = excluded.analyzedAt
+`;
+
+const SQL_UPSERT_MENTION = `
+  INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    platform = excluded.platform,
+    url = excluded.url,
+    author = excluded.author,
+    title = excluded.title,
+    content = excluded.content,
+    sentiment = excluded.sentiment,
+    sentimentScore = excluded.sentimentScore,
+    emotion = excluded.emotion,
+    engagement = excluded.engagement,
+    date = excluded.date,
+    trackerId = excluded.trackerId,
+    country = excluded.country,
+    latitude = excluded.latitude,
+    longitude = excluded.longitude,
+    isSimulated = excluded.isSimulated
+`;
+
+function bindMention(stmt: any, mr: any) {
+  stmt.run(
+    mr.id,
+    mr.platform || "unknown",
+    mr.url || "",
+    mr.author || "",
+    mr.title || "",
+    mr.content || "",
+    mr.sentiment || "neutral",
+    Number(mr.sentimentScore || 0),
+    mr.emotion || "Neutral",
+    mr.engagement || "Low",
+    mr.date || new Date().toISOString(),
+    mr.trackerId || "",
+    mr.country || "Global",
+    mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
+    mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
+    mr.isSimulated === true ? 1 : 0
+  );
+}
+
+/** Inserts or updates a single tracker row. */
+function saveTracker(tracker: any): boolean {
+  if (!tracker?.id) return false;
   try {
-    const syncTransaction = dbConn.transaction(() => {
-      // 1. Sync trackers
-      dbConn.prepare("DELETE FROM trackers").run();
-      const insertTracker = dbConn.prepare(
-        "INSERT INTO trackers (id, type, query, platforms, createdAt) VALUES (?, ?, ?, ?, ?)"
+    dbConn
+      .prepare(SQL_UPSERT_TRACKER)
+      .run(
+        tracker.id,
+        tracker.type || "brand",
+        tracker.query || "",
+        JSON.stringify(tracker.platforms || []),
+        tracker.createdAt || new Date().toISOString()
       );
-      if (data.trackers) {
-        for (const t of data.trackers) {
-          insertTracker.run(t.id, t.type, t.query, JSON.stringify(t.platforms || []), t.createdAt);
-        }
-      }
+    scheduleFirestoreSync();
+    return true;
+  } catch (err) {
+    logger.error("[DB] Failed to save tracker:", err);
+    return false;
+  }
+}
 
-      // 2. Sync analyzed_posts
-      dbConn.prepare("DELETE FROM analyzed_posts").run();
-      const insertAnalyzedPost = dbConn.prepare(
-        "INSERT INTO analyzed_posts (id, url, platform, title, description, imageUrl, sentiment, sentimentScore, emotion, engagement, hashtags, analyzedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      );
-      if (data.analyzedPosts) {
-        for (const ap of data.analyzedPosts) {
-          insertAnalyzedPost.run(
-            ap.id,
-            ap.url,
-            ap.platform,
-            ap.title,
-            ap.description,
-            ap.imageUrl,
-            ap.sentiment,
-            ap.sentimentScore,
-            ap.emotion,
-            ap.engagement,
-            JSON.stringify(ap.hashtags || []),
-            ap.analyzedAt
-          );
-        }
-      }
+/** Removes a tracker and, in the same transaction, the mentions it produced. */
+function deleteTracker(id: string): boolean {
+  try {
+    runInTransaction(() => {
+      dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(id);
+      dbConn.prepare("DELETE FROM trackers WHERE id = ?").run(id);
+    });
+    scheduleFirestoreSync();
+    return true;
+  } catch (err) {
+    logger.error("[DB] Failed to delete tracker:", err);
+    return false;
+  }
+}
 
-      // 3. Sync monitor_results
-      dbConn.prepare("DELETE FROM monitor_results").run();
-      const insertMonitorResult = dbConn.prepare(
-        "INSERT INTO monitor_results (id, platform, url, author, title, content, sentiment, sentimentScore, emotion, engagement, date, trackerId, country, latitude, longitude, isSimulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+/** Inserts or updates one analysed post. */
+function saveAnalyzedPost(post: any): boolean {
+  if (!post?.id) return false;
+  try {
+    dbConn
+      .prepare(SQL_UPSERT_ANALYZED)
+      .run(
+        post.id,
+        post.url || "",
+        post.platform || "other",
+        post.title || "",
+        post.description || "",
+        post.imageUrl || "",
+        post.sentiment || "neutral",
+        Number(post.sentimentScore || 0),
+        post.emotion || "Neutral",
+        post.engagement || "Low",
+        JSON.stringify(post.hashtags || []),
+        post.analyzedAt || new Date().toISOString()
       );
-      if (data.monitorResults) {
-        for (const mr of data.monitorResults) {
-          insertMonitorResult.run(
-            mr.id,
-            mr.platform,
-            mr.url,
-            mr.author,
-            mr.title,
-            mr.content,
-            mr.sentiment,
-            mr.sentimentScore,
-            mr.emotion,
-            mr.engagement,
-            mr.date,
-            mr.trackerId,
-            mr.country || "Global",
-            mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-            mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null,
-            mr.isSimulated === true ? 1 : 0
-          );
-        }
+    scheduleFirestoreSync();
+    return true;
+  } catch (err) {
+    logger.error("[DB] Failed to save analysed post:", err);
+    return false;
+  }
+}
+
+/** Inserts or updates many mentions in one transaction. */
+function saveMentions(mentions: any[]): number {
+  const rows = (mentions || []).filter((m: any) => m?.id);
+  if (rows.length === 0) return 0;
+  try {
+    runInTransaction(() => {
+      const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
+      for (const mr of rows) bindMention(stmt, mr);
+    });
+    scheduleFirestoreSync();
+    return rows.length;
+  } catch (err) {
+    logger.error("[DB] Failed to save mentions:", err);
+    return 0;
+  }
+}
+
+/**
+ * Replaces everything collected for one tracker. Used by a manual scan, where
+ * the fresh result set is authoritative for that tracker only.
+ */
+function replaceMentionsForTracker(trackerId: string, mentions: any[]): number {
+  try {
+    runInTransaction(() => {
+      dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(trackerId);
+      const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
+      for (const mr of mentions || []) {
+        if (mr?.id) bindMention(stmt, { ...mr, trackerId });
       }
     });
+    scheduleFirestoreSync();
+    return (mentions || []).length;
+  } catch (err) {
+    logger.error("[DB] Failed to replace tracker mentions:", err);
+    return 0;
+  }
+}
 
-    syncTransaction();
-    
-    // Trigger background sync to Firestore
-    syncToFirestore(data).catch((err) => {
-      const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-      logger.warn("[Firebase Sync] Information during Firestore background sync trigger:", errMsg);
-    });
-  } catch (err: any) {
-    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    logger.warn("Information writing to SQLite:", errMsg);
+/** Keeps the newest `max` mentions and deletes the rest, in one statement. */
+function pruneMentions(max = 1000): number {
+  try {
+    const before = dbConn.prepare("SELECT COUNT(*) AS c FROM monitor_results").get() as any;
+    const total = Number(before?.c || 0);
+    if (total <= max) return 0;
+    dbConn
+      .prepare(
+        "DELETE FROM monitor_results WHERE rowid NOT IN (SELECT rowid FROM monitor_results ORDER BY rowid DESC LIMIT ?)"
+      )
+      .run(max);
+    scheduleFirestoreSync();
+    return total - max;
+  } catch (err) {
+    logger.error("[DB] Failed to prune mentions:", err);
+    return 0;
   }
 }
 
@@ -1916,8 +2072,7 @@ app.post("/api/trackers", (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  db.trackers.push(newTracker);
-  writeDB(db);
+  saveTracker(newTracker);
   broadcast("SYNC", { event: "tracker_added", tracker: newTracker });
   res.json(newTracker);
 });
@@ -1927,10 +2082,7 @@ app.delete("/api/trackers/:id", (req, res) => {
   const { id } = req.params;
   const db = getDB();
   
-  db.trackers = db.trackers.filter((t: any) => t.id !== id);
-  db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== id);
-  
-  writeDB(db);
+  deleteTracker(id);
   broadcast("SYNC", { event: "tracker_deleted", trackerId: id });
   res.json({ success: true, message: "Tracker deleted successfully" });
 });
@@ -2067,8 +2219,7 @@ app.post("/api/analyze-url", async (req, res) => {
       analyzedAt: new Date().toISOString()
     };
 
-    db.analyzedPosts.unshift(newAnalysis);
-    writeDB(db);
+    saveAnalyzedPost(newAnalysis);
     broadcast("SYNC", { event: "post_analyzed", post: newAnalysis });
 
     res.json(newAnalysis);
@@ -2096,12 +2247,8 @@ app.post("/api/trigger-monitor", async (req, res) => {
     logger.info(`[Social Intelligence Engine] Running unified social signal search for: "${tracker.query}"...`);
     const formattedResults = await fetchUnifiedSocialSignals(tracker);
 
-    // Save newly found results to local DB
-    // Clear old results for this tracker to simulate a fresh monitor refresh
-    db.monitorResults = db.monitorResults || [];
-    db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== trackerId);
-    db.monitorResults.unshift(...formattedResults);
-    writeDB(db);
+    // A manual scan is authoritative for this tracker: replace its rows only.
+    replaceMentionsForTracker(trackerId, formattedResults);
     
     broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
     res.json(formattedResults);
@@ -2654,15 +2801,8 @@ async function startServer() {
       );
 
       if (newMentions.length > 0) {
-        db.monitorResults = db.monitorResults || [];
-        db.monitorResults.unshift(...newMentions);
-
-        // Limit database size to prevent excessive memory/storage usage (increased to 1000)
-        if (db.monitorResults.length > 1000) {
-          db.monitorResults = db.monitorResults.slice(0, 1000);
-        }
-
-        writeDB(db);
+        saveMentions(newMentions);
+        pruneMentions(1000);
 
         // Broadcast to all active clients for real-time UI injection
         for (const mention of newMentions) {

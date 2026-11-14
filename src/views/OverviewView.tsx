@@ -107,7 +107,6 @@ export function OverviewView({
               <Activity size={14} aria-hidden="true" />
               Data sources
             </Button>
-            <span className="text-[12px] text-ink-3">{clock || "—"}</span>
           </div>
         </div>
 
