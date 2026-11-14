@@ -2,10 +2,16 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
+import pkg from './package.json';
 
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // Baked in at build time and shown in the footer, so a screenshot from a
+    // phone states which build produced it.
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

@@ -1,9 +1,11 @@
-const CACHE_NAME = 'smip-static-v3';
-const PRE_CACHE_RESOURCES = [
-  '/',
-  '/index.html',
-  '/favicon.png'
-];
+const CACHE_NAME = 'smip-static-v4';
+
+// Only images are precached. The documents used to be in here as well, which
+// meant the worker kept a frozen copy of the app shell: the phone would load the
+// HTML it stored weeks ago alongside freshly fetched scripts, and the mixed pair
+// rendered a layout nobody had shipped. Documents are network-only now, so there
+// is nothing to precache except the icon a notification needs while offline.
+const PRE_CACHE_RESOURCES = ['/favicon.png'];
 
 self.addEventListener('install', (event) => {
   console.log('[Service Worker] Installed');
@@ -17,8 +19,9 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log('[Service Worker] Activated');
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
+    (async () => {
+      const cacheNames = await caches.keys();
+      await Promise.all(
         cacheNames.map((cacheName) => {
           if (cacheName !== CACHE_NAME) {
             console.log('[Service Worker] Deleting old cache:', cacheName);
@@ -26,7 +29,30 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => self.clients.claim())
+
+      await self.clients.claim();
+
+      // Reload every open tab once, right after taking control.
+      //
+      // This is the part that actually fixes a device stuck on an old build, and
+      // it has to run here rather than in the page: `sw.js` is fetched from the
+      // network by the browser's update check, while the page itself may still be
+      // the stale HTML the previous worker kept on disk — a page that cannot
+      // repair itself because the code containing the repair is the code it is
+      // not running. Activating navigates those windows into the current build.
+      //
+      // It runs at most once per worker version (`activate` fires once), and the
+      // reload it causes is served by this worker, which never returns a cached
+      // document, so it cannot loop.
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of windows) {
+        try {
+          await client.navigate(client.url);
+        } catch (err) {
+          console.warn('[Service Worker] Could not reload client:', err);
+        }
+      }
+    })()
   );
 });
 
@@ -39,29 +65,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Determine if it is a static asset (js, css, images, fonts, html, document, or our domain's resources)
-  const isStaticAsset = 
-    event.request.destination === 'document' ||
-    event.request.destination === 'script' ||
-    event.request.destination === 'style' ||
+  // Never take part in serving the app shell itself.
+  //
+  // Vite serves the dashboard as unbundled modules (/src/main.tsx, /src/App.tsx,
+  // /src/index.css) in development, and as hashed bundles in production. A
+  // cache-first match on anything that ends in .js/.css/.tsx pins whichever build
+  // was online first: a phone kept rendering a palette and a radar that no longer
+  // exist in the repository, because the service worker kept answering from disk.
+  // The shell is cheap to fetch and always correct from the network, so it is
+  // simply skipped here.
+  const isSourceModule = /\/src\/|\/@vite\/|\/@react-refresh|\/node_modules\//.test(url.pathname);
+  if (isSourceModule) return;
+
+  // Bumped build assets are content-addressed and safe to cache forever; the
+  // service worker only needs to cache the icons a notification shows offline.
+  const isStaticAsset =
     event.request.destination === 'image' ||
     event.request.destination === 'font' ||
-    url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf|json)$/);
+    /\.(png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf)$/.test(url.pathname);
 
   // Network-first for documents so a new deployment is picked up immediately
   // instead of being pinned to an old cached index.html.
   if (event.request.destination === 'document') {
-    event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        })
-        .catch(() => caches.match(event.request).then((c) => c || caches.match('/')))
-    );
+    // Network only. A cached document is a cached build, and this app deploys
+    // often enough that "open the app and see last week's version" is worse than
+    // an honest offline error.
+    event.respondWith(fetch(event.request));
     return;
   }
 
