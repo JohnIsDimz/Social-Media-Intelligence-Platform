@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { CHANNELS, Button, cn, type ChannelKey } from "../lib/ui";
-import { X, Check, AlertCircle, PlugZap } from "lucide-react";
+import { X, Check, AlertCircle, RefreshCw } from "lucide-react";
+import { PlatformMark } from "./PlatformMark";
 
 /* ---------------------------------- Drawer --------------------------------- */
 
@@ -64,13 +65,21 @@ export function AddTrackerDialog({
 }) {
   const [type, setType] = useState<"brand" | "hashtag">("brand");
   const [query, setQuery] = useState("");
-  const [platforms, setPlatforms] = useState<ChannelKey[]>(["tiktok", "instagram"]);
+  // Default to channels that can actually collect something without a key.
+  const [platforms, setPlatforms] = useState<ChannelKey[]>([
+    "reddit",
+    "bluesky",
+    "hackernews",
+    "news",
+    "tiktok",
+    "instagram",
+  ]);
 
   useEffect(() => {
     if (!open) {
       setQuery("");
       setType("brand");
-      setPlatforms(["tiktok", "instagram"]);
+      setPlatforms(["reddit", "bluesky", "hackernews", "news", "tiktok", "instagram"]);
     }
   }, [open]);
 
@@ -168,17 +177,42 @@ export function AddTrackerDialog({
                     type="button"
                     onClick={() => toggle(c.key)}
                     aria-pressed={on}
+                    title={c.collects}
                     className={cn(
-                      "rounded-[5px] border px-2.5 py-1 text-[12px] transition-colors",
+                      "inline-flex items-center gap-1.5 rounded-[5px] border py-1 pl-1 pr-2 text-[12px] transition-colors",
                       on
                         ? "border-teal bg-teal-soft text-teal"
                         : "border-hair bg-white text-ink-2 hover:border-ink-3"
                     )}
                   >
+                    <PlatformMark platform={c.key} size={14} />
                     {c.label}
                   </button>
                 );
               })}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setPlatforms(CHANNELS.map((c) => c.key))}
+                className="font-medium text-teal hover:underline underline-offset-2"
+              >
+                select all
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPlatforms(
+                    CHANNELS.filter((c) => c.kind === "api").map((c) => c.key)
+                  )
+                }
+                className="font-medium text-teal hover:underline underline-offset-2"
+              >
+                searchable APIs only
+              </button>
+              <span className="text-ink-3">
+                {platforms.length}/{CHANNELS.length} selected
+              </span>
             </div>
             {platforms.length === 0 && (
               <p className="mt-2 text-[11px] text-brick">Select at least one channel.</p>
@@ -205,39 +239,62 @@ export function AddTrackerDialog({
 
 /* ------------------------------- Data sources ------------------------------ */
 
-export interface DataSources {
-  geminiGrounding: boolean;
-  reddit: boolean;
-  youtube: boolean;
-  twitter: boolean;
-  tiktok: boolean;
-  instagram: boolean;
-  facebook: boolean;
-  whatsapp: boolean;
-  linkedin: boolean;
-  notes?: Record<string, string>;
+/** Result of `GET /api/channel-health`, keyed by channel key. */
+export interface ChannelHealth {
+  status: "configured" | "public" | "grounding" | "needs-key" | "closed" | "down" | "unverified";
+  detail: string;
 }
 
-const SOURCE_LABELS: { key: keyof DataSources; label: string; note: string }[] = [
-  { key: "geminiGrounding", label: "Google Search grounding", note: "Covers closed channels via web search. Needs GEMINI_API_KEY." },
-  { key: "reddit", label: "Reddit", note: "Public read-only JSON endpoints. No credentials needed." },
-  { key: "youtube", label: "YouTube", note: "Needs YOUTUBE_API_KEY." },
-  { key: "twitter", label: "X / Twitter", note: "Needs TWITTER_BEARER_TOKEN." },
-];
+export interface DataSources {
+  grounding: boolean;
+  /** Whether this host can reach the internet at all. */
+  egress?: boolean;
+  channels: Record<string, ChannelHealth>;
+  checkedAt?: string;
+  summary?: {
+    reachable: number;
+    searchOnly?: number;
+    needsKey: number;
+    closed: number;
+    down: number;
+    unverified?: number;
+    total: number;
+  };
+}
+
+const STATUS_STYLE: Record<
+  ChannelHealth["status"],
+  { label: string; className: string }
+> = {
+  configured: { label: "connected", className: "border-jade/40 bg-jade/10 text-jade" },
+  public: { label: "open API", className: "border-jade/40 bg-jade/10 text-jade" },
+  grounding: { label: "search only", className: "border-hair bg-paper-2 text-ink-2" },
+  "needs-key": { label: "needs key", className: "border-amber/40 bg-amber-soft text-amber" },
+  closed: { label: "no access", className: "border-hair bg-paper-2 text-ink-3" },
+  down: { label: "network down", className: "border-brick/40 bg-brick/10 text-brick" },
+  unverified: { label: "untested", className: "border-hair bg-paper-2 text-ink-2" },
+};
 
 /**
- * Explains where data comes from — and which channels cannot be collected yet,
- * so an empty view is never mistaken for a broken one.
+ * Where data comes from — one row per network, with its real logo, how it is
+ * collected, and whether that path is alive right now. This is the honest
+ * answer to "why is this channel empty?".
  */
 export function DataSourcesDialog({
   open,
   onClose,
   sources,
+  onRecheck,
+  checking,
 }: {
   open: boolean;
   onClose: () => void;
   sources: DataSources | null;
+  onRecheck?: () => void;
+  checking?: boolean;
 }) {
+  const [filter, setFilter] = useState<"all" | "live" | "issues">("all");
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -249,6 +306,25 @@ export function DataSourcesDialog({
 
   if (!open) return null;
 
+  const rows = CHANNELS.map((c) => ({
+    ...c,
+    health: sources?.channels?.[c.key] ?? { status: "closed" as const, detail: "Not checked yet." },
+  }));
+
+  const visible = rows.filter((r) => {
+    if (filter === "live") return r.health.status === "configured" || r.health.status === "public" || r.health.status === "grounding";
+    if (filter === "issues")
+      return (
+        r.health.status === "down" ||
+        r.health.status === "needs-key" ||
+        r.health.status === "closed" ||
+        r.health.status === "unverified"
+      );
+    return true;
+  });
+
+  const summary = sources?.summary;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-petrol-deep/45" onClick={onClose} aria-hidden="true" />
@@ -256,52 +332,111 @@ export function DataSourcesDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="sources-title"
-        className="settle relative flex w-full max-w-[520px] flex-col rounded-[5px] border border-hair bg-paper shadow-xl"
+        className="settle relative flex max-h-[88vh] w-full max-w-[640px] flex-col rounded-[5px] border border-hair bg-paper shadow-xl"
       >
-        <div className="flex items-baseline justify-between border-b border-hair px-5 py-4">
-          <h2 id="sources-title" className="font-display text-[17px] font-semibold text-ink">
-            Data sources
-          </h2>
-          <button onClick={onClose} className="text-[12px] text-ink-3 hover:text-ink">
-            close
-          </button>
+        <div className="flex items-baseline justify-between gap-3 border-b border-hair px-5 py-4">
+          <div>
+            <h2 id="sources-title" className="font-display text-[17px] font-semibold text-ink">
+              Data sources
+            </h2>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              {summary
+                ? [
+                    `${summary.total} networks`,
+                    `${summary.reachable} reachable`,
+                    summary.searchOnly ? `${summary.searchOnly} via search` : null,
+                    `${summary.needsKey} need a key`,
+                    summary.down ? `${summary.down} unreachable` : null,
+                    summary.unverified ? `${summary.unverified} untested` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "checking networks…"}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <button
+              onClick={onRecheck}
+              disabled={checking}
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-teal hover:underline underline-offset-2 disabled:opacity-50"
+            >
+              <RefreshCw size={12} aria-hidden="true" className={cn(checking && "animate-spin")} />
+              {checking ? "testing…" : "test all"}
+            </button>
+            <button onClick={onClose} className="text-[12px] text-ink-3 hover:text-ink">
+              close
+            </button>
+          </div>
         </div>
 
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
-          <p className="mb-4 max-w-[56ch] text-[13px] leading-relaxed text-ink-2">
-            S.M.I.P only shows collected data. A channel stays empty until a source for it is
-            configured and returns something.
-          </p>
+        <div className="flex items-center gap-4 border-b border-hair px-5 py-2" role="tablist" aria-label="Filter by status">
+          {(
+            [
+              { key: "all", label: "All" },
+              { key: "live", label: "Collecting" },
+              { key: "issues", label: "Not collecting" },
+            ] as const
+          ).map((f) => (
+            <button
+              key={f.key}
+              role="tab"
+              aria-selected={filter === f.key}
+              onClick={() => setFilter(f.key)}
+              className={cn(
+                "border-b-2 pb-1 text-[12px] font-medium transition-colors",
+                filter === f.key
+                  ? "border-teal text-ink"
+                  : "border-transparent text-ink-3 hover:text-ink-2"
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-2">
           <ul className="flex flex-col">
-            {SOURCE_LABELS.map(({ key, label, note }) => {
-              const on = Boolean(sources?.[key]);
+            {visible.map((c) => {
+              const style = STATUS_STYLE[c.health.status];
               return (
-                <li key={key} className="flex items-start gap-3 border-t border-hair py-3 first:border-t-0">
-                  {on ? (
-                    <Check size={14} className="mt-[3px] shrink-0 text-jade" aria-hidden="true" />
-                  ) : (
-                    <PlugZap size={14} className="mt-[3px] shrink-0 text-ink-3" aria-hidden="true" />
-                  )}
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-medium text-ink">
-                      {label}{" "}
-                      <span className={cn("text-[12px] font-normal", on ? "text-jade" : "text-ink-3")}>
-                        {on ? "connected" : "not configured"}
+                <li key={c.key} className="flex items-start gap-3 border-b border-hair/70 py-2.5 last:border-0">
+                  <PlatformMark platform={c.key} size={22} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-[13px] font-medium text-ink">{c.label}</span>
+                      <span
+                        className={cn(
+                          "rounded-[3px] border px-1.5 py-[1px] text-[10px] font-medium",
+                          style.className
+                        )}
+                      >
+                        {style.label}
                       </span>
-                    </p>
-                    <p className="mt-0.5 text-[12px] leading-relaxed text-ink-3">{note}</p>
+                    </div>
+                    <p className="mt-0.5 text-[12px] leading-relaxed text-ink-3">{c.health.detail}</p>
                   </div>
                 </li>
               );
             })}
           </ul>
+          {visible.length === 0 && (
+            <p className="py-6 text-center text-[12px] text-ink-3">Nothing in this category.</p>
+          )}
+        </div>
 
-          <div className="mt-4 flex items-start gap-2 border-t border-hair pt-3">
-            <AlertCircle size={14} className="mt-[3px] shrink-0 text-amber" aria-hidden="true" />
-            <p className="text-[12px] leading-relaxed text-ink-3">
-              {sources?.notes?.open ??
-                "TikTok, Instagram, Facebook, WhatsApp and LinkedIn have no public read API, so they are only covered through search grounding."}
+        <div className="flex items-start gap-2 border-t border-hair px-5 py-3">
+          <AlertCircle size={14} className="mt-[3px] shrink-0 text-amber" aria-hidden="true" />
+          <div className="text-[12px] leading-relaxed text-ink-3">
+            {sources?.egress === false && (
+              <p className="mb-1 font-medium text-brick">
+                This server has no outbound internet, so no network can be tested. That is a hosting
+                problem, not a dead API.
+              </p>
+            )}
+            <p>
+              No data is ever invented. A channel shows zero until a source above actually returns
+              something. “search only” means the platform has no public read API and is reachable
+              only through Google Search grounding (<code>GEMINI_API_KEY</code>).
             </p>
           </div>
         </div>

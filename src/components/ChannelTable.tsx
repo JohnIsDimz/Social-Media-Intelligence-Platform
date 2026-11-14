@@ -1,5 +1,6 @@
 import React from "react";
-import { cn, channelLabel, velocityMark, signed, fmt, NoDataTag } from "../lib/ui";
+import { cn, channelLabel, channelKind, velocityMark, signed, fmt, NoDataTag } from "../lib/ui";
+import { PlatformMark } from "./PlatformMark";
 
 export interface ChannelRow {
   platform: string;
@@ -50,8 +51,17 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
                 style={{ animationDelay: `${60 + i * 40}ms` }}
               >
                 <th scope="row" className="py-2.5 pr-4 text-left font-medium text-ink">
-                  <span className="flex items-center gap-1.5">
-                    {channelLabel(r.platform)}
+                  <span className="flex items-center gap-2">
+                    <PlatformMark platform={r.platform} size={18} />
+                    <span className="truncate">{channelLabel(r.platform)}</span>
+                    {channelKind(r.platform) === "grounding" && (
+                      <span
+                        className="text-[10px] font-normal text-ink-3"
+                        title="No public read API for this platform. Mentions can only arrive through search grounding."
+                      >
+                        search
+                      </span>
+                    )}
                   </span>
                 </th>
 

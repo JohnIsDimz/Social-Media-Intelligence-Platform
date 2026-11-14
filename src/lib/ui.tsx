@@ -3,6 +3,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 import locale from "./locale";
+import { CHANNEL_SPECS, channelLabelOf, channelSpec } from "../channels";
 
 export { locale };
 
@@ -20,22 +21,26 @@ export function cn(...inputs: ClassValue[]) {
 
 export type Sentiment = "positive" | "neutral" | "negative";
 
-/** Channels we monitor. Labels are what people see; keys are what the API uses. */
-export const CHANNELS = [
-  { key: "tiktok", label: "TikTok" },
-  { key: "instagram", label: "Instagram" },
-  { key: "facebook", label: "Facebook" },
-  { key: "whatsapp", label: "WhatsApp" },
-  { key: "twitter", label: "X / Twitter" },
-  { key: "youtube", label: "YouTube" },
-  { key: "linkedin", label: "LinkedIn" },
-  { key: "reddit", label: "Reddit" },
-] as const;
+/**
+ * Channels come from the shared catalogue (`src/channels.ts`) so the client and
+ * the server can never disagree about which platforms exist or how each one is
+ * collected.
+ */
+export const CHANNELS = CHANNEL_SPECS.map((c) => ({
+  key: c.key,
+  label: c.label,
+  kind: c.kind,
+  collects: c.collects,
+}));
 
-export type ChannelKey = (typeof CHANNELS)[number]["key"];
+export type ChannelKey = string;
 
 export function channelLabel(key: string): string {
-  return CHANNELS.find((c) => c.key === key.toLowerCase())?.label ?? key;
+  return channelLabelOf(key);
+}
+
+export function channelKind(key: string): "api" | "grounding" | "none" | "unknown" {
+  return channelSpec(key)?.kind ?? "unknown";
 }
 
 /** Sentiment never relies on colour alone: it also carries a sign. */

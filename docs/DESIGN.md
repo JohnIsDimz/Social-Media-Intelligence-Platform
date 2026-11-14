@@ -119,3 +119,19 @@ dashboard apa pun?":
 
 Dihapus karena tak lagi dipakai: `GlobalHeatmap.tsx` (peta SVG hardcoded),
 `RadarScanner.tsx` (radar), `AnimatedNumber.tsx`. Bundle turun 827 KB → 677 KB.
+
+## Network layer (2026-11-14)
+
+* **25 channels**, defined once in `src/channels.ts` and imported by both the
+  server and the UI, so the two can never disagree about what exists.
+* Each channel declares *how* it is collected: a public API, a keyed API, or
+  search grounding only. The UI states this per row instead of implying that
+  every platform is equally reachable.
+* `PlatformMark` renders the official brand glyph (Simple Icons, CC0) inside a
+  16–22px tile. Monochrome on purpose: identity is shape, state is colour.
+  The pulsing status dot was removed — it encoded nothing and read as a
+  loading state that never finished.
+* `/api/channel-health` probes every endpoint and reports `public`,
+  `configured`, `grounding`, `needs-key`, `closed`, `down` or `unverified`.
+  `unverified` exists because a host with no internet must not be allowed to
+  blame the vendor APIs.

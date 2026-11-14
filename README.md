@@ -1,6 +1,6 @@
 # 📈 S.M.I.P (Social Media Intelligence Platform) - Dokumentasi Teknologi
 
-Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform)**. S.M.I.P adalah platform pemantauan, analisis emosi, dan pelacakan tren media sosial terintegrasi (*full-stack*) yang dirancang untuk menangkap sinyal percakapan publik secara global dan real-time di 8 platform utama.
+Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform)**. S.M.I.P adalah platform pemantauan, analisis emosi, dan pelacakan tren media sosial terintegrasi (*full-stack*) yang dirancang untuk menangkap sinyal percakapan publik secara global dan real-time di 25 jaringan: 10 platform sosial utama plus forum, situs ulasan, portal berita, dan komunitas pengembang.
 
 ---
 
@@ -60,6 +60,28 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 *   **Firestore tertutup**: `firestore.rules` menolak semua akses dari klien (`allow read, write: if false`). Semua akses lewat Admin SDK di server.
 *   **Tanpa dependency rentan**: `npm audit --omit=dev` → **0 vulnerabilities**.
 
+### Jaringan data (25 kanal)
+
+Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya terbuka:
+
+| Cara | Kanal | Kredensial |
+|---|---|---|
+| **API publik langsung** | Reddit, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community, GitHub, Medium, Vimeo | tidak perlu (GitHub opsional `GITHUB_TOKEN`) |
+| **API ber-kunci** | YouTube, X/Twitter, Twitch | `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET` |
+| **Hanya lewat search grounding** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `GEMINI_API_KEY` |
+
+**Audit jaringan otomatis.** `GET /api/channel-health` (alias `GET /api/data-sources`) benar-benar memanggil setiap endpoint lalu melaporkan status per kanal: `public`, `configured`, `grounding`, `needs-key`, `closed`, `down`, atau `unverified`. Hasil di-cache 60 detik; panggil dengan `?force=1` untuk menguji ulang. Dialog **Data sources** di UI menampilkan hasil yang sama, lengkap dengan logo tiap platform dan tombol **test all**.
+
+Deteksi egress: sebelum menyalahkan API, server memeriksa apakah host-nya sendiri punya internet (dua host independen). Kalau tidak ada internet, semua kanal ditandai `unverified` — bukan `down`, karena itu masalah hosting, bukan API yang mati.
+
+**Catatan hasil audit di sandbox pengembangan ini:** egress HTTP keluar dari sandbox hanya diizinkan ke domain tertentu, sehingga `reddit.com`, `hn.algolia.com`, `news.google.com`, `public.api.bsky.app`, `stackexchange.com`, `dev.to`, dan lainnya mengembalikan `ECONNRESET`; `api.github.com` mengembalikan `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (intercept TLS). Artinya **di sandbox ini dashboard tetap kosong**, sedangkan di host biasa (VPS, Cloud Run, Railway, laptop) kolektor publik akan langsung berjalan tanpa kunci API apa pun.
+
+**Titik mati yang ditemukan dan sudah diperbaiki:**
+* Database gagal boot bila native binding `better-sqlite3` tidak tersedia untuk versi Node yang dipakai (persis yang terjadi di produksi/container baru). Diganti adapter `node:sqlite` (`src/lib/sqlite.ts`) yang mengimplementasikan `prepare/run/all/get/exec/pragma/transaction/close`, jadi server tidak lagi bergantung pada build native.
+* `constructOfficialPlatformSearchUrl` terhapus bersama generator simulasi tetapi masih dipakai jalur grounding → `ReferenceError` saat grounding dipanggil. Dipulihkan dan diperluas ke seluruh kanal.
+* `@keyframes pulse-soft` tersisa separuh setelah titik berkedip dihapus → Tailwind gagal mem-parse `src/index.css` ("Missing opening {"). Dibersihkan.
+* `ALLOWED_PLATFORMS` hanya berisi 8 kanal, sehingga kanal baru ditolak diam-diam saat tracker dibuat. Kini bersumber dari katalog bersama `src/channels.ts`.
+
 ### Transparansi data (penting!)
 
 **Tidak ada data simulasi sama sekali.** Setiap angka yang muncul berasal dari hasil pengumpulan jaringan nyata dan tersimpan di database. Bila sebuah kanal tidak mengembalikan apa pun, kanal itu dilaporkan **kosong** — bukan diisi angka karangan. Tidak ada fork percabangan sinyal, tidak ada generator cadangan, tidak ada "mode demo".
@@ -82,7 +104,8 @@ Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pad
 Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Gemini, port, CORS, trust proxy, Firestore, dan sumber data opsional).
 
 ### Health check
-`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`. Cocok untuk load balancer dan uptime monitor.
+`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
+`GET /api/channel-health` → status per kanal (lihat bagian *Jaringan data*); mengembalikan `503` hanya bila ada kanal `down` sementara host-nya sendiri punya internet. Cocok untuk load balancer dan uptime monitor.
 
 ## 💻 Cara Menjalankan Secara Lokal (Local Development)
 

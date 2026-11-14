@@ -11,6 +11,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import { CHANNEL_SPECS, CHANNEL_KEYS, channelSpec } from "./src/channels.ts";
 
 dotenv.config();
 
@@ -205,8 +206,9 @@ function isGeminiKeyValid(): boolean {
   return true;
 }
 
-// Database Helper Functions using SQLite
-import Database from "better-sqlite3";
+// Database: node:sqlite behind a small better-sqlite3-compatible adapter, so a
+// missing native binary can never stop the server from booting.
+import Database from "./src/lib/sqlite.ts";
 
 const IS_VERCEL = !!process.env.VERCEL;
 const SQLITE_DB_PATH = IS_VERCEL
@@ -1192,7 +1194,310 @@ async function fetchRealTweets(query: string): Promise<any[]> {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * Open collectors
+ *
+ * Each of these talks to a documented, public endpoint — no scraping of
+ * logged-in pages, no credentials invented. They are the reason the dashboard
+ * can show real data without a Gemini key.
+ * ------------------------------------------------------------------------- */
+
+const COLLECTOR_TIMEOUT_MS = 8000;
+
+async function fetchJson(url: string, init?: any): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "SMIP-Engine/1.1 (+https://github.com/JohnIsDimz/Social-Media-Intelligence-Platform)",
+        ...(init?.headers || {}),
+      },
+    });
+    if (!res.ok) {
+      logger.warn(`[Collector] ${new URL(url).host} responded ${res.status}`);
+      return null;
+    }
+    return await res.json();
+  } catch (err: any) {
+    logger.warn(`[Collector] ${new URL(url).host} failed: ${err?.message || err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Maps a collector's raw item onto the mention shape the rest of the app expects. */
+function toMention(args: {
+  platform: string;
+  url: string;
+  author: string;
+  title: string;
+  content: string;
+  engagementValue?: number;
+  date?: string;
+  country?: string;
+}): any {
+  const local = localAnalyzeSentiment(args.title, args.content);
+  const engagementValue = args.engagementValue ?? 0;
+  return {
+    platform: args.platform,
+    url: args.url,
+    author: args.author || "Public discussion",
+    title: args.title || `${args.platform} mention`,
+    content: (args.content || "").slice(0, 280),
+    sentiment: local.sentiment,
+    sentimentScore: local.sentimentScore,
+    emotion: local.emotion,
+    engagement: engagementValue > 100 ? "High" : engagementValue > 20 ? "Medium" : "Low",
+    date: args.date || new Date().toISOString(),
+    country: args.country || "Global",
+    latitude: 0,
+    longitude: 0,
+  };
+}
+
+/** Bluesky — public AT Protocol search, no credentials. */
+async function fetchBlueskyPosts(query: string): Promise<any[]> {
+  const json = await fetchJson(
+    `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=5&sort=latest`
+  );
+  if (!json?.posts) return [];
+  return json.posts.map((post: any) =>
+    toMention({
+      platform: "bluesky",
+      url: `https://bsky.app/profile/${post.author?.handle}/post/${String(post.uri).split("/").pop()}`,
+      author: `@${post.author?.handle}`,
+      title: post.record?.text?.slice(0, 90) || "Bluesky post",
+      content: post.record?.text || "",
+      engagementValue: (post.likeCount || 0) + (post.repostCount || 0) + (post.replyCount || 0),
+      date: post.record?.createdAt ? new Date(post.record.createdAt).toISOString() : undefined,
+    })
+  );
+}
+
+/** Mastodon — public search endpoint on a large instance. */
+async function fetchMastodonPosts(query: string): Promise<any[]> {
+  const json = await fetchJson(
+    `https://mastodon.social/api/v2/search?q=${encodeURIComponent(query)}&type=statuses&limit=5&resolve=false`
+  );
+  const statuses = json?.statuses || [];
+  return statuses.map((st: any) =>
+    toMention({
+      platform: "mastodon",
+      url: st.url || st.uri,
+      author: `@${st.account?.acct}`,
+      title: (st.content || "").replace(/<[^>]*>/g, "").slice(0, 90) || "Mastodon post",
+      content: (st.content || "").replace(/<[^>]*>/g, ""),
+      engagementValue: (st.reblogs_count || 0) + (st.favourites_count || 0) + (st.replies_count || 0),
+      date: st.created_at ? new Date(st.created_at).toISOString() : undefined,
+    })
+  );
+}
+
+/** Hacker News — Algolia's public search API. */
+async function fetchHackerNews(query: string): Promise<any[]> {
+  const json = await fetchJson(
+    `https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=5`
+  );
+  if (!json?.hits) return [];
+  return json.hits.map((hit: any) =>
+    toMention({
+      platform: "hackernews",
+      url: hit.url || `https://news.ycombinator.com/item?id=${hit.objectID}`,
+      author: hit.author || "HN user",
+      title: hit.title || hit.story_title || "Hacker News story",
+      content: hit.comment_text || hit.story_text || hit.title || "",
+      engagementValue: hit.points || 0,
+      date: hit.created_at ? new Date(hit.created_at).toISOString() : undefined,
+    })
+  );
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
+/** Google News — public RSS, parsed without a dependency. */
+async function fetchGoogleNews(query: string): Promise<any[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), COLLECTOR_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`,
+      { signal: controller.signal, headers: { "User-Agent": "SMIP-Engine/1.1" } }
+    );
+    if (!res.ok) {
+      logger.warn(`[Collector] news.google.com responded ${res.status}`);
+      return [];
+    }
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 5);
+    return items.map((match) => {
+      const block = match[1];
+      const pick = (tag: string) =>
+        (block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`)) || [])[1] || "";
+      const title = decodeXml(pick("title"));
+      const link = decodeXml(pick("link"));
+      const pub = pick("pubDate");
+      const source = decodeXml(pick("source")) || "a news outlet";
+      return toMention({
+        platform: "news",
+        url: link,
+        author: source,
+        title,
+        content: `${title} — published by ${source}.`,
+        engagementValue: 50,
+        date: pub ? new Date(pub).toISOString() : undefined,
+      });
+    });
+  } catch (err: any) {
+    logger.warn(`[Collector] Google News failed: ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Lemmy — public search on a large instance. */
+async function fetchLemmyPosts(query: string): Promise<any[]> {
+  const json = await fetchJson(
+    `https://lemmy.world/api/v3/search?q=${encodeURIComponent(query)}&type_=Posts&sort=New&limit=5`
+  );
+  const posts = json?.posts || [];
+  return posts.map((entry: any) => {
+    const p = entry.post || {};
+    return toMention({
+      platform: "lemmy",
+      url: p.ap_id || `https://lemmy.world/post/${p.id}`,
+      author: entry.creator?.name ? `@${entry.creator.name}` : "Lemmy user",
+      title: p.name || "Lemmy post",
+      content: p.body || p.name || "",
+      engagementValue: (p.counts?.score || 0) + (p.counts?.comments || 0),
+      date: p.published ? new Date(p.published).toISOString() : undefined,
+    });
+  });
+}
+
+/** GitHub — public search API (unauthenticated is rate limited but works). */
+async function fetchGitHubIssues(query: string): Promise<any[]> {
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  const json = await fetchJson(
+    `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=created&order=desc&per_page=5`,
+    { headers }
+  );
+  if (!json?.items) return [];
+  return json.items.map((item: any) =>
+    toMention({
+      platform: "github",
+      url: item.html_url,
+      author: item.user?.login ? `@${item.user.login}` : "GitHub user",
+      title: item.title || "GitHub issue",
+      content: item.body || item.title || "",
+      engagementValue: (item.comments || 0) + (item.reactions?.total_count || 0),
+      date: item.created_at ? new Date(item.created_at).toISOString() : undefined,
+    })
+  );
+}
+
+/** Stack Overflow — public Stack Exchange API. */
+async function fetchStackOverflow(query: string): Promise<any[]> {
+  const json = await fetchJson(
+    `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=creation&q=${encodeURIComponent(
+      query
+    )}&site=stackoverflow&pagesize=5&filter=default`
+  );
+  if (!json?.items) return [];
+  return json.items.map((item: any) =>
+    toMention({
+      platform: "stackoverflow",
+      url: item.link,
+      author: item.owner?.display_name || "Stack Overflow user",
+      title: item.title || "Stack Overflow question",
+      content: `${item.title || ""} — ${(item.tags || []).join(", ")}`,
+      engagementValue: (item.score || 0) + (item.answer_count || 0) + (item.view_count || 0) / 100,
+      date: item.creation_date ? new Date(item.creation_date * 1000).toISOString() : undefined,
+    })
+  );
+}
+
+/** DEV Community — public articles API, filtered by the keyword. */
+async function fetchDevTo(query: string): Promise<any[]> {
+  const json = await fetchJson("https://dev.to/api/articles?per_page=60&top=30");
+  const articles: any[] = Array.isArray(json) ? json : [];
+  const needle = query.replace(/^#/, "").toLowerCase();
+  return articles
+    .filter((a) => {
+      const hay = `${a.title} ${a.description || ""} ${(a.tags || a.tag_list || []).join(" ")}`.toLowerCase();
+      return hay.includes(needle);
+    })
+    .slice(0, 4)
+    .map((a) =>
+      toMention({
+        platform: "devto",
+        url: a.url,
+        author: a.user?.name || "DEV author",
+        title: a.title || "DEV article",
+        content: a.description || a.title || "",
+        engagementValue: (a.public_reactions_count || 0) + (a.comments_count || 0),
+        date: a.published_at ? new Date(a.published_at).toISOString() : undefined,
+      })
+    );
+}
+
 // REAL LIVE UNIFIED ENGINE: Combines official APIs, public search feeds, and Google Search Grounding
+/** Public search URL for a platform, used when grounding returns no direct link. */
+function constructOfficialPlatformSearchUrl(platform: string, query: string): string {
+  const encQuery = encodeURIComponent(query);
+  const tag = encodeURIComponent(query.replace(/[\s#]+/g, ""));
+  switch (platform.toLowerCase()) {
+    case "twitter":
+    case "x":
+      return `https://x.com/search?q=${encQuery}`;
+    case "tiktok":
+      return `https://www.tiktok.com/search?q=${encQuery}`;
+    case "instagram":
+      return `https://www.instagram.com/explore/tags/${tag}/`;
+    case "facebook":
+      return `https://www.facebook.com/search/top?q=${encQuery}`;
+    case "youtube":
+      return `https://www.youtube.com/results?search_query=${encQuery}`;
+    case "linkedin":
+      return `https://www.linkedin.com/search/results/all/?keywords=${encQuery}`;
+    case "reddit":
+      return `https://www.reddit.com/search/?q=${encQuery}`;
+    case "threads":
+      return `https://www.threads.net/search?q=${encQuery}`;
+    case "telegram":
+      return `https://t.me/s/${tag}`;
+    case "bluesky":
+      return `https://bsky.app/search?q=${encQuery}`;
+    case "mastodon":
+      return `https://mastodon.social/search?q=${encQuery}`;
+    case "hackernews":
+      return `https://hn.algolia.com/?q=${encQuery}`;
+    case "github":
+      return `https://github.com/search?q=${encQuery}&type=issues`;
+    case "pinterest":
+      return `https://www.pinterest.com/search/pins/?q=${encQuery}`;
+    case "news":
+      return `https://news.google.com/search?q=${encQuery}`;
+    default:
+      return `https://www.google.com/search?q=${encQuery}`;
+  }
+}
+
 async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   const query = tracker.query;
   const selectedPlatforms: string[] = tracker.platforms || [];
@@ -1215,6 +1520,26 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   if ((selectedPlatforms.includes("twitter") || selectedPlatforms.includes("x")) && process.env.TWITTER_BEARER_TOKEN) {
     const platformName = selectedPlatforms.includes("twitter") ? "twitter" : "x";
     apiTasks.push({ platform: platformName, promise: fetchRealTweets(query) });
+  }
+
+  // 3b. Open collectors: documented public endpoints, no credentials required.
+  const OPEN_COLLECTORS: Record<string, { run: () => Promise<any[]> }> = {
+    bluesky: { run: () => fetchBlueskyPosts(query) },
+    mastodon: { run: () => fetchMastodonPosts(query) },
+    hackernews: { run: () => fetchHackerNews(query) },
+    news: { run: () => fetchGoogleNews(query) },
+    lemmy: { run: () => fetchLemmyPosts(query) },
+    stackoverflow: { run: () => fetchStackOverflow(query) },
+    devto: { run: () => fetchDevTo(query) },
+    github: { run: () => fetchGitHubIssues(query) },
+  };
+
+  for (const platform of selectedPlatforms) {
+    const key = platform.toLowerCase();
+    if (OPEN_COLLECTORS[key]) {
+      logger.info(`[Unified API Engine] Querying open ${key} endpoint for "${query}"...`);
+      apiTasks.push({ platform: key, promise: OPEN_COLLECTORS[key].run() });
+    }
   }
 
   const mergedResults: any[] = [];
@@ -1262,7 +1587,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
       Then, process up to 4 real search result mentions and format them into a structured JSON array.
       
       Each item in the array MUST contain:
-      - platform: one of "tiktok", "instagram", "facebook", "whatsapp", "linkedin", "twitter", "youtube", "reddit"
+      - platform: one of ${JSON.stringify(CHANNEL_KEYS)}
       - url: the actual source URL retrieved from the search grounding links
       - author: name/handle of the poster or "Public Discussion"
       - title: brief summary headline of the post/mention
@@ -1352,32 +1677,163 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
   }));
 }
 
-// Construct authentic search or explore URLs for official social media platforms to avoid 404 errors
-function constructOfficialPlatformSearchUrl(platform: string, query: string): string {
-  const encQuery = encodeURIComponent(query);
-  const cleanTag = encodeURIComponent(query.replace(/[\s#]+/g, ""));
-  
-  switch (platform.toLowerCase()) {
-    case "twitter":
-    case "x":
-      return `https://x.com/search?q=${encQuery}`;
-    case "tiktok":
-      return `https://www.tiktok.com/search?q=${encQuery}`;
-    case "instagram":
-      return `https://www.instagram.com/explore/tags/${cleanTag}/`;
-    case "facebook":
-      return `https://www.facebook.com/search/top?q=${encQuery}`;
-    case "youtube":
-      return `https://www.youtube.com/results?search_query=${encQuery}`;
-    case "linkedin":
-      return `https://www.linkedin.com/search/results/all/?keywords=${encQuery}`;
-    case "reddit":
-      return `https://www.reddit.com/search/?q=${encQuery}`;
-    case "whatsapp":
-      return `https://web.whatsapp.com/`;
-    default:
-      return `https://www.google.com/search?q=${encQuery}`;
+/* ---------------------------------------------------------------------------
+ * Network audit
+ *
+ * "Which APIs are dead?" is answered by actually calling each endpoint, not by
+ * trusting a comment. Results are cached for a minute so opening the dialog
+ * repeatedly does not hammer anyone.
+ * ------------------------------------------------------------------------- */
+
+interface ChannelHealth {
+  status: "configured" | "public" | "grounding" | "needs-key" | "closed" | "down" | "unverified";
+  detail: string;
+}
+
+/**
+ * Can this host reach the internet at all?
+ *
+ * Without this check a firewalled server looks identical to a world where every
+ * social API is dead. Probing two unrelated, highly available hosts tells us
+ * whether a failure is the network's fault or the endpoint's.
+ */
+async function detectEgress(): Promise<boolean> {
+  const targets = ["https://registry.npmjs.org/-/ping", "https://api.github.com/zen"];
+  for (const target of targets) {
+    try {
+      const res = await fetch(target, { method: "GET", signal: AbortSignal.timeout(5000) });
+      if (res.status > 0) return true;
+    } catch {
+      /* try the next target */
+    }
   }
+  return false;
+}
+
+let healthCache: { at: number; payload: any } | null = null;
+const HEALTH_TTL_MS = 60_000;
+
+async function probeEndpoint(spec: { endpoint?: string; okStatus?: number[] }) {
+  if (!spec.endpoint) return { reachable: false, status: 0, error: "no endpoint" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(spec.endpoint, {
+      method: "GET",
+      redirect: "manual",
+      signal: controller.signal,
+      headers: { "User-Agent": "SMIP-Health/1.1", Accept: "application/json, application/xml;q=0.9,*/*;q=0.8" },
+    });
+    const okStatuses = spec.okStatus ?? [200, 201, 400, 401, 403];
+    return {
+      reachable: true,
+      // A 401/403 still proves the network is alive: the host answered.
+      status: response.status,
+      healthy: okStatuses.includes(response.status) || (response.status > 0 && response.status < 500 && response.status !== 404),
+    };
+  } catch (err: any) {
+    return { reachable: false, status: 0, error: err?.cause?.code || err?.message || "network error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function buildChannelHealth(force = false) {
+  if (!force && healthCache && Date.now() - healthCache.at < HEALTH_TTL_MS) {
+    return healthCache.payload;
+  }
+
+  const grounding = isGeminiKeyValid();
+  const egress = await detectEgress();
+  const channels: Record<string, ChannelHealth> = {};
+
+  await Promise.all(
+    CHANNEL_SPECS.map(async (spec) => {
+      const hasCredential = spec.credential
+        ? spec.credential.split("+").every((c) => Boolean(process.env[c.trim()]))
+        : true;
+
+      if (spec.kind === "grounding") {
+        channels[spec.key] = {
+          status: grounding ? "grounding" : "needs-key",
+          detail: grounding
+            ? `No public read API. Collected through search grounding: ${spec.collects}.`
+            : `No public read API. Set GEMINI_API_KEY to collect ${spec.collects} via search grounding.`,
+        };
+        return;
+      }
+
+      if (spec.kind === "none") {
+        channels[spec.key] = { status: "closed", detail: spec.collects };
+        return;
+      }
+
+      if (!egress) {
+        // The server itself is offline. Judging the vendor API would be a lie.
+        channels[spec.key] = {
+          status: "unverified",
+          detail: spec.credential
+            ? `Cannot be tested: this server has no outbound internet. ${spec.credential} will be needed once it does.`
+            : `Cannot be tested: this server has no outbound internet. Endpoint is ${new URL(spec.endpoint!).host}.`,
+        };
+        return;
+      }
+
+      if (spec.credential && !hasCredential) {
+        const probe = await probeEndpoint(spec);
+        channels[spec.key] = {
+          status: probe.reachable ? "needs-key" : "down",
+          detail: probe.reachable
+            ? `Endpoint answers (HTTP ${probe.status}). Set ${spec.credential} to collect ${spec.collects}.`
+            : `Endpoint unreachable from this server (${probe.error}). Set ${spec.credential} on a host with network access.`,
+        };
+        return;
+      }
+
+      const probe = await probeEndpoint(spec);
+      if (!probe.reachable) {
+        channels[spec.key] = {
+          status: "down",
+          detail: `Unreachable from this server: ${probe.error}.`,
+        };
+      } else if (probe.status >= 500 || probe.status === 404) {
+        channels[spec.key] = {
+          status: "down",
+          detail: `Endpoint responded HTTP ${probe.status}; this collector needs attention.`,
+        };
+      } else {
+        channels[spec.key] = {
+          status: spec.credential ? "configured" : "public",
+          detail: `HTTP ${probe.status} from ${new URL(spec.endpoint!).host}. Collects ${spec.collects}.`,
+        };
+      }
+    })
+  );
+
+  const values = Object.values(channels);
+  const payload = {
+    grounding,
+    egress,
+    checkedAt: new Date().toISOString(),
+    channels,
+    summary: {
+      total: values.length,
+      reachable: values.filter((v) => v.status === "public" || v.status === "configured").length,
+      searchOnly: values.filter((v) => v.status === "grounding").length,
+      needsKey: values.filter((v) => v.status === "needs-key").length,
+      closed: values.filter((v) => v.status === "closed").length,
+      down: values.filter((v) => v.status === "down").length,
+      unverified: values.filter((v) => v.status === "unverified").length,
+    },
+  };
+
+  healthCache = { at: Date.now(), payload };
+  logger.info(
+    egress
+      ? `[Health] ${payload.summary.total} networks checked: ${payload.summary.reachable} reachable, ${payload.summary.needsKey} need a key, ${payload.summary.closed} closed, ${payload.summary.down} down.`
+      : `[Health] No outbound internet from this host; ${payload.summary.total} networks marked unverified instead of "down".`
+  );
+  return payload;
 }
 
 // ==========================================
@@ -1386,27 +1842,19 @@ function constructOfficialPlatformSearchUrl(platform: string, query: string): st
 
 // 0a. Which collection sources are actually configured, so the UI can explain
 // an empty dashboard instead of guessing.
-app.get("/api/data-sources", (req, res) => {
-  res.json({
-    geminiGrounding: isGeminiKeyValid(),
-    reddit: true, // public read-only JSON endpoints, no credentials required
-    youtube: Boolean(process.env.YOUTUBE_API_KEY),
-    twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
-    tiktok: false, // no public read API; only reachable via search grounding
-    instagram: false,
-    facebook: false,
-    whatsapp: false,
-    linkedin: false,
-    notes: {
-      open: "TikTok, Instagram, Facebook, WhatsApp and LinkedIn have no public read API, so they are only covered through Google Search grounding.",
-      requiresGemini: "Set GEMINI_API_KEY to enable search-grounding coverage for closed channels.",
-      requiresYoutube: "Set YOUTUBE_API_KEY to collect YouTube comments and videos.",
-      requiresTwitter: "Set TWITTER_BEARER_TOKEN to collect posts from X.",
-    },
-  });
+app.get("/api/data-sources", async (req, res) => {
+  res.json(await buildChannelHealth(req.query.force === "1"));
 });
 
-// 0. Health & readiness probe (used by load balancers and uptime monitors)
+// Same data under an explicit name, for uptime monitors and the CI job.
+app.get("/api/channel-health", async (req, res) => {
+  const health = await buildChannelHealth(req.query.force === "1");
+  const anyDown = health.summary.down > 0 && health.egress;
+  // 200 while every reachable network is fine; 503 only when a real outage is
+  // detected from a host that does have internet.
+  res.status(anyDown ? 503 : 200).json(health);
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -1431,7 +1879,7 @@ app.get("/api/trackers", (req, res) => {
 
 // 2. Add Tracker
 const ALLOWED_TRACKER_TYPES = ["brand", "hashtag", "url", "topic", "product"];
-const ALLOWED_PLATFORMS = ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "x", "youtube", "linkedin", "reddit"];
+const ALLOWED_PLATFORMS = [...CHANNEL_KEYS, "x"];
 
 app.post("/api/trackers", (req, res) => {
   const { type, query, platforms } = req.body || {};
@@ -1457,9 +1905,7 @@ app.post("/api/trackers", (req, res) => {
     id: `t-${Date.now()}`,
     type,
     query: cleanQuery,
-    platforms: cleanPlatforms.length > 0
-      ? cleanPlatforms
-      : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"],
+    platforms: cleanPlatforms.length > 0 ? cleanPlatforms : CHANNEL_KEYS.filter((k) => channelSpec(k)?.kind === "api"),
     createdAt: new Date().toISOString()
   };
 
@@ -1692,20 +2138,24 @@ app.get("/api/social-signals", (req, res) => {
   const allMonitored = db.monitorResults || [];
   
   // Filter items specifically for active tracker if available
-  const filteredAnalyzed = trackerId 
-    ? allAnalyzed.filter(item => item.trackerId === trackerId)
+  const filteredAnalyzed = trackerId
+    ? allAnalyzed.filter((item: any) => item.trackerId === trackerId)
     : allAnalyzed;
   const filteredMonitored = trackerId
-    ? allMonitored.filter(item => item.trackerId === trackerId)
+    ? allMonitored.filter((item: any) => item.trackerId === trackerId)
     : allMonitored;
 
   const combined = [...filteredAnalyzed, ...filteredMonitored];
-  const platformsList = ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
+  // Every channel in the catalogue is reported, including ones with nothing in
+  // them: an empty row is information, a missing row is a lie of omission.
+  const platformsList = CHANNEL_KEYS;
   
   // Metrics come from stored mentions only. A channel with no collected items
   // reports zero rather than a plausible-looking number.
   const platformSignals = platformsList.map((platform) => {
-    const platformItems = combined.filter((item) => item.platform === platform);
+    const platformItems = combined.filter(
+      (item) => item.platform === platform || (platform === "twitter" && item.platform === "x")
+    );
 
     let buzzVolume = platformItems.length;
     let sentimentScore = 0;
@@ -1772,7 +2222,12 @@ app.get("/api/social-signals", (req, res) => {
       ? channelsWithData.reduce((acc, curr) => acc + Math.pow(curr.sentimentScore - meanSentiment, 2), 0) /
         channelsWithData.length
       : 0;
-  const coherenceScore = Math.round(Math.max(15, Math.min(100, 100 - (variance * 120))));
+  // With nothing collected there is no agreement to measure: report 0, not a
+  // flattering 100 for an empty screen.
+  const coherenceScore =
+    channelsWithData.length === 0
+      ? 0
+      : Math.round(Math.max(15, Math.min(100, 100 - variance * 120)));
 
   // Dominant platform (by signal strength)
   const sortedByStrength = [...platformSignals].sort((a, b) => b.signalStrength - a.signalStrength);
@@ -2168,79 +2623,6 @@ Aturan Output JSON:
 });
 
 // Helper for real-time background Google Search Grounding to fetch authentic, non-simulated signals
-async function runBackgroundGrounding(tracker: any, platform: string) {
-  if (!isGeminiKeyValid()) return null;
-  try {
-    const prompt = `Search the live web for a very recent public discussion, review, or mention of "${tracker.query}" on the platform: ${platform}.
-    Use Google Search grounding to retrieve real information.
-    Format the response as a single valid JSON object matching this schema exactly:
-    {
-      "platform": "${platform}",
-      "url": "the actual source URL retrieved from the search grounding links",
-      "author": "name/handle of the poster or Public Discussion",
-      "title": "brief summary headline of the post/mention in Indonesian or English",
-      "content": "summary of what was said in the post or comment in Indonesian or English",
-      "sentiment": "positive" | "neutral" | "negative",
-      "sentimentScore": number from -1 to 1 representing the emotion strength,
-      "emotion": "Joy" | "Anger" | "Sadness" | "Surprise" | "Love" | "Neutral",
-      "engagement": "High" | "Medium" | "Low",
-      "country": "country name of the poster or topic"
-    }`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            platform: { type: Type.STRING },
-            url: { type: Type.STRING },
-            author: { type: Type.STRING },
-            title: { type: Type.STRING },
-            content: { type: Type.STRING },
-            sentiment: { type: Type.STRING },
-            sentimentScore: { type: Type.NUMBER },
-            emotion: { type: Type.STRING },
-            engagement: { type: Type.STRING },
-            country: { type: Type.STRING }
-          },
-          required: ["platform", "url", "author", "title", "content", "sentiment", "sentimentScore", "emotion", "engagement", "country"]
-        }
-      }
-    });
-
-    const res = JSON.parse(responseText(response).trim());
-    let cleanUrl = res.url || "";
-    if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
-      cleanUrl = constructOfficialPlatformSearchUrl(platform, tracker.query);
-    }
-
-    return {
-      ...res,
-      url: cleanUrl,
-      date: new Date().toISOString(),
-      latitude: platform === "tiktok" ? -6.2088 : 37.7749,
-      longitude: platform === "tiktok" ? 106.8456 : -95.7129
-    };
-  } catch (err: any) {
-    const errStr = String(err);
-    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-      logger.warn("[Background Grounding Warning] Gemini API Rate Limit / Quota Exceeded during background ingest. Activating 2-minute cooldown fallback.");
-      geminiRateLimitActive = true;
-      rateLimitResetTime = Date.now() + 120000; // 2 minutes
-    }
-    const sanitizedMsg = String(err.message || err).replace(/error/gi, "err-info");
-    logger.warn(`[Background Grounding Warning] Real web search completed with status for tracker ${tracker.query} on ${platform}: ${sanitizedMsg}`);
-    return null;
-  }
-}
-
-// ==========================================
-// VITE DEV SERVER / PRODUCTION SERVING WITH WEBSOCKETS
-// ==========================================
 async function startServer() {
   const server = http.createServer(app);
 

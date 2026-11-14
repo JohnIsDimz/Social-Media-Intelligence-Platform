@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { cn, channelLabel, fmt } from "../lib/ui";
-import { Menu, Radio } from "lucide-react";
+import { Menu, Radio, Wifi, WifiOff } from "lucide-react";
+import { PlatformMark } from "./PlatformMark";
 
 export interface StripSignal {
   platform: string;
@@ -10,6 +11,17 @@ export interface StripSignal {
   isSimulated?: boolean;
 }
 
+interface CommandStripProps {
+  trackers: { id: string; query: string; type: string }[];
+  totalSignals: number;
+  signals: StripSignal[];
+  connection: "connected" | "connecting" | "disconnected" | "polling";
+  clock: string;
+  activeChannels: number;
+  onOpenMenu: () => void;
+}
+
+/** Eight small bars: the room's pulse, one per channel. */
 interface CommandStripProps {
   trackers: { id: string; query: string; type: string }[];
   totalSignals: number;
@@ -116,13 +128,11 @@ export function CommandStrip({
         {/* live state + pulse + clock */}
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]">
           <span className="inline-flex items-center gap-2">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                isLive ? "bg-amber live-dot" : "bg-white/30"
-              )}
-              aria-hidden="true"
-            />
+            {isLive ? (
+              <Wifi size={13} aria-hidden="true" className="text-amber" />
+            ) : (
+              <WifiOff size={13} aria-hidden="true" className="text-white/40" />
+            )}
             <span className={cn("font-medium", isLive ? "text-amber" : "text-white/50")}>
               {connectionLabel}
             </span>
@@ -133,18 +143,33 @@ export function CommandStrip({
             <span>mentions collected</span>
           </span>
 
-          <span className="hidden items-center gap-1.5 lg:inline-flex" aria-label="Volume per channel">
-            {signals.slice(0, 8).map((s) => (
-              <span key={s.platform} className="flex items-center gap-1" title={`${channelLabel(s.platform)}: ${s.buzzVolume}`}>
-                <Beats value={s.buzzVolume} />
-              </span>
-            ))}
-          </span>
+          <ul className="hidden items-center gap-1.5 lg:flex" aria-label="Channels reporting">
+            {signals.map((s) => {
+              const hasData = s.buzzVolume > 0;
+              return (
+                <li key={s.platform}>
+                  <span
+                    title={
+                      hasData
+                        ? `${channelLabel(s.platform)}: ${fmt(s.buzzVolume)} mentions`
+                        : `${channelLabel(s.platform)}: nothing collected yet`
+                    }
+                    className={cn(
+                      "block rounded-[4px]",
+                      hasData ? "opacity-100" : "opacity-35"
+                    )}
+                  >
+                    <PlatformMark platform={s.platform} size={20} tone="solid" />
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
 
           <span className="hidden items-center gap-1.5 text-white/55 sm:inline-flex">
             <Radio size={12} aria-hidden="true" />
             <span className="tnum">
-              {activeChannels}/{signals.length || 8}
+              {activeChannels}/{signals.length}
             </span>
             <span>channels reporting</span>
           </span>

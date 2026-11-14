@@ -8,6 +8,7 @@ import {
   relativeTime,
 } from "../lib/ui";
 import type { MonitorResult } from "../types";
+import { PlatformMark } from "./PlatformMark";
 
 /**
  * One mention as a record line: channel, sentiment, who, what, when, source.
@@ -19,7 +20,10 @@ export function MentionRow({ item }: { item: MonitorResult }) {
   return (
     <article className="settle border-t border-hair py-4 first:border-t-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
-        <span className="font-medium text-ink">{channelLabel(item.platform)}</span>
+        <span className="inline-flex items-center gap-1.5 font-medium text-ink">
+          <PlatformMark platform={item.platform} size={15} />
+          {channelLabel(item.platform)}
+        </span>
         <span className={cn("inline-flex items-center gap-1 font-medium", sentimentColor(item.sentiment))}>
           <span aria-hidden="true">{sentimentMark(item.sentiment)}</span>
           {sentimentText(item.sentiment)}
@@ -78,7 +82,10 @@ export function AnalyzedRow({
   return (
     <article className="settle border-t border-hair py-4 first:border-t-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
-        <span className="font-medium text-ink">{channelLabel(item.platform)}</span>
+        <span className="inline-flex items-center gap-1.5 font-medium text-ink">
+          <PlatformMark platform={item.platform} size={15} />
+          {channelLabel(item.platform)}
+        </span>
         <span className={cn("inline-flex items-center gap-1 font-medium", sentimentColor(item.sentiment))}>
           <span aria-hidden="true">{sentimentMark(item.sentiment)}</span>
           {sentimentText(item.sentiment)}

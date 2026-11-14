@@ -123,6 +123,18 @@ export default function App() {
   const [view, setView] = useState<View>("overview");
   const [sources, setSources] = useState<DataSources | null>(null);
   const [showSources, setShowSources] = useState(false);
+  const [checkingSources, setCheckingSources] = useState(false);
+
+  const loadSources = async () => {
+    setCheckingSources(true);
+    try {
+      setSources(await api.get<DataSources>("/api/data-sources"));
+    } catch {
+      setSources(null);
+    } finally {
+      setCheckingSources(false);
+    }
+  };
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
   
@@ -268,10 +280,8 @@ export default function App() {
   // Initial Fetch
   useEffect(() => {
     fetchInitialData();
-    api
-      .get<DataSources>("/api/data-sources")
-      .then(setSources)
-      .catch(() => setSources(null));
+    loadSources();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep selectedTrackerId fresh for WebSocket handler without reconnecting
@@ -977,6 +987,8 @@ export default function App() {
         open={showSources}
         onClose={() => setShowSources(false)}
         sources={sources}
+        onRecheck={loadSources}
+        checking={checkingSources}
       />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />

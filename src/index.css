@@ -91,11 +91,6 @@
   }
 }
 
-@keyframes pulse-soft {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
 @keyframes sweep {
   from { transform: translateX(-100%); }
   to { transform: translateX(100%); }
@@ -108,10 +103,6 @@
 
 .settle {
   animation: settle 420ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
-}
-
-.live-dot {
-  animation: pulse-soft 2.4s ease-in-out infinite;
 }
 
 .sweep-line::after {
