@@ -10,7 +10,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "audit": "npm audit --omit=dev --audit-level=high"
+    "audit": "npm audit --omit=dev --audit-level=high",
+    "test": "tsx tests/mirror.test.ts",
+    "verify": "tsc --noEmit && tsx tests/mirror.test.ts && vite build"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

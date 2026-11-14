@@ -324,7 +324,7 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | — | Aset produksi tanpa cache header; shell bisa tersaji basi | DONE **Fixed** — `/assets/*` immutable 1 tahun, `index.html`/`sw.js`/`manifest.json` `no-cache` |
 | — | Dockerfile butuh toolchain C untuk `better-sqlite3` | DONE **Fixed** — 3-stage tanpa build tools, non-root, healthcheck, volume `src/data`; ditambah `docker-compose.yml`, `deploy/smip.service`, `deploy/nginx.conf`, `docs/VPS.md` |
 | — | Dependency animasi tak terpakai (`framer-motion`, `motion`) | DONE **Dihapus** — animasi sekarang CSS murni |
-| B3 | `syncToFirestore` tulis ulang semua dokumen | TODO Belum (biaya, bukan blocker live) |
+| B3 | `syncToFirestore` tulis ulang semua dokumen | DONE — diganti mirror inkremental di `src/lib/firestoreMirror.ts`: klien melaporkan dokumen yang berubah, antrean dide-dup per dokumen (set+delete kolaps jadi delete), di-flush dalam batch 200 tulisan tiap 1,5 detik, **tanpa pembacaan koleksi**. Kegagalan transien di-queue ulang, kegagalan kredensial mematikan mirror sekali, backlog dibatasi 5.000 dokumen, dan shutdown mem-flush sekali lalu menutup antrean. Diuji 15 kasus di `tests/mirror.test.ts` |
 | — | `App.tsx` 2.633 baris / tanpa code splitting | DONE — `App.tsx` 982 baris, chart di chunk terpisah (`charts` 377 kB vs app 341 kB) |
 | — | `aria-label` pada 22 tombol | DONE — semua tombol ikon punya label, tablist/panel punya `aria-selected`/`aria-controls` + navigasi panah, dialog memindahkan fokus, toast `aria-live` |
 

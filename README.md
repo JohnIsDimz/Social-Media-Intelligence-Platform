@@ -33,7 +33,7 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 
 ### 4. Penyimpanan Data (Database)
 *   **SQLite via `node:sqlite`** (modul bawaan Node 22, tanpa modul native): penyimpanan utama untuk trackers, analyzed posts, dan monitor results. Di lingkungan serverless (Vercel) file dialihkan ke `/tmp`; di VPS tersimpan di `src/data/database.sqlite` dan harus di-mount sebagai volume (tidak di-commit).
-*   **Firestore (opsional)**: Sinkronisasi lewat Firebase Admin SDK. Jika kredensial tidak tersedia, aplikasi tetap berjalan penuh dengan cache SQLite lokal.
+*   **Firestore (opsional)**: mirror lewat Firebase Admin SDK, sifatnya **inkremental**: setiap perubahan lokal mencatat dokumen yang berubah ke antrean (`src/lib/firestoreMirror.ts`), lalu antrean itu di-flush dalam batch maksimal 200 tulisan setiap 1,5 detik. Tidak ada pembacaan koleksi dan tidak ada penulisan ulang seluruh mirror, sehingga biaya Firestore sebanding dengan jumlah perubahan, bukan jumlah data. Bila kredensial tidak tersedia, mirror dimatikan sekali dan aplikasi tetap berjalan penuh dengan SQLite lokal.
 
 ---
 
@@ -158,3 +158,13 @@ npm run dev
 ```
 
 Buka `http://localhost:3000` di browser Anda untuk masuk ke antarmuka dashboard interaktif S.M.I.P.
+
+### Memeriksa perubahan sebelum deploy
+
+```bash
+npm run verify   # type-check + unit test + build
+npm test         # unit test antrean mirror Firestore (tanpa jaringan/kredensial)
+npm run lint     # type-check saja
+```
+
+Unit test di `tests/mirror.test.ts` memakai klien Firestore palsu: yang diuji adalah dokumen mana yang ditulis untuk sekumpulan perubahan lokal (dedup, batch, delete, kegagalan transien, backlog, shutdown).

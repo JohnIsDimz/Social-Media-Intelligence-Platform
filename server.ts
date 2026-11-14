@@ -17,6 +17,14 @@ import {
   chatJson,
   AiError,
 } from "./src/lib/aiProvider.ts";
+import {
+  createFirestoreMirror,
+  seedOperations,
+  toAnalyzedDoc,
+  toMentionDoc,
+  toTrackerDoc,
+  type MirrorOp
+} from "./src/lib/firestoreMirror.ts";
 
 dotenv.config();
 
@@ -559,7 +567,7 @@ async function syncFromFirestoreToSQLite() {
     } else {
       logger.info("[Firebase Sync] Firestore is empty. Initializing with local or default seed data...");
       const localData = getDB();
-      await syncToFirestore(localData);
+      await seedFirestoreMirror(localData);
     }
   } catch (err: any) {
     const errMsg = String(err.message || err).replace(/error/gi, "err-info");
@@ -567,194 +575,50 @@ async function syncFromFirestoreToSQLite() {
   }
 }
 
-let isSyncing = false;
-let pendingSyncData: any = null;
+/* ---------------------------------------------------------------------------
+ * Firestore mirror
+ *
+ * The old sync read every collection, diffed it in memory and rewrote every
+ * document — the whole mirror on each change, and a billed read per document.
+ * On a 1000-mention dataset that is thousands of Firestore operations for one
+ * new mention.
+ *
+ * Instead the write helpers above record which documents actually changed
+ * (set/delete) in a queue. The queue is flushed in debounced batches: one
+ * commit per 200 operations, only the touched documents, no reads.
+ * ------------------------------------------------------------------------- */
 
-async function syncToFirestore(data: any) {
-  if (disableFirestoreSync) {
-    return;
-  }
-  if (isSyncing) {
-    pendingSyncData = data;
-    return;
-  }
-  isSyncing = true;
-  pendingSyncData = null;
+const firestoreMirror = createFirestoreMirror({
+  getDb: () => getFirestoreInstance() as any,
+  onUnavailable: (reason) => {
+    logger.warn("[Firebase Sync] Firestore unavailable — mirror disabled, local SQLite only.", reason);
+    disableFirestoreSync = true;
+  },
+  onInfo: (message) => logger.info(message),
+  onWarn: (message, err) => logger.warn(message, err)
+});
 
-  try {
-    logger.info("[Firebase Sync] Syncing database to Firestore in background...");
-    let db = getFirestoreInstance();
-
-    // 1. Sync Trackers
-    const trackersCol = db.collection("trackers");
-    let trackersSnap;
-    try {
-      trackersSnap = await trackersCol.get();
-    } catch (err: any) {
-      const errMsg = String(err);
-      if (!useDefaultDb && firebaseConfig.firestoreDatabaseId && (errMsg.includes("NOT_FOUND") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("5") || errMsg.includes("7"))) {
-        logger.warn(`[Firebase Sync] Named database failed, falling back to default database.`);
-        useDefaultDb = true;
-        try {
-          db = getFirestoreInstance();
-          trackersSnap = await db.collection("trackers").get();
-        } catch (innerErr) {
-          logger.warn("[Firebase Sync] Default database failed during background sync. Disabling Firestore sync.");
-          disableFirestoreSync = true;
-          return;
-        }
-      } else {
-        logger.warn("[Firebase Sync] Firestore query failed during background sync. Disabling Firestore sync.");
-        disableFirestoreSync = true;
-        return;
-      }
-    }
-
-    const finalTrackersCol = db.collection("trackers");
-    const existingTrackerIds = new Set<string>();
-    trackersSnap.forEach((doc: any) => existingTrackerIds.add(doc.id));
-
-    const trackers = data.trackers || [];
-    const currentTrackerIds = new Set(trackers.map((t: any) => t.id));
-
-    for (const id of existingTrackerIds) {
-      if (!currentTrackerIds.has(id)) {
-        await finalTrackersCol.doc(id).delete();
-      }
-    }
-    for (const t of trackers) {
-      await finalTrackersCol.doc(t.id).set({
-        type: t.type || "",
-        query: t.query || "",
-        platforms: t.platforms || [],
-        createdAt: t.createdAt || ""
-      });
-    }
-
-    // 2. Sync Analyzed Posts
-    const analyzedCol = db.collection("analyzed_posts");
-    const analyzedSnap = await analyzedCol.get();
-    const existingAnalyzedIds = new Set<string>();
-    analyzedSnap.forEach((doc: any) => existingAnalyzedIds.add(doc.id));
-
-    const analyzedPosts = data.analyzedPosts || [];
-    const currentAnalyzedIds = new Set(analyzedPosts.map((ap: any) => ap.id));
-
-    for (const id of existingAnalyzedIds) {
-      if (!currentAnalyzedIds.has(id)) {
-        await analyzedCol.doc(id).delete();
-      }
-    }
-    const activeAnalyzed = analyzedPosts.slice(0, 50);
-    for (const ap of activeAnalyzed) {
-      await analyzedCol.doc(ap.id).set({
-        url: ap.url || "",
-        platform: ap.platform || "",
-        title: ap.title || "",
-        description: ap.description || "",
-        imageUrl: ap.imageUrl || "",
-        sentiment: ap.sentiment || "neutral",
-        sentimentScore: Number(ap.sentimentScore || 0),
-        emotion: ap.emotion || "neutral",
-        engagement: ap.engagement || "0",
-        hashtags: ap.hashtags || [],
-        analyzedAt: ap.analyzedAt || ""
-      });
-    }
-
-    // 3. Sync Monitor Results (increased limit up to 1000)
-    const monitorCol = db.collection("monitor_results");
-    const monitorResults = data.monitorResults || [];
-    const activeMonitor = monitorResults.slice(0, 1000); // Support limit 1000!
-    
-    const monitorSnap = await monitorCol.select().get();
-    const existingMonitorIds = new Set<string>();
-    monitorSnap.forEach((doc: any) => existingMonitorIds.add(doc.id));
-    
-    const currentMonitorIds = new Set(activeMonitor.map((mr: any) => mr.id));
-    
-    let batch = db.batch();
-    let batchCount = 0;
-    
-    for (const id of existingMonitorIds) {
-      if (!currentMonitorIds.has(id)) {
-        batch.delete(monitorCol.doc(id));
-        batchCount++;
-        if (batchCount >= 200) {
-          await batch.commit();
-          batch = db.batch();
-          batchCount = 0;
-        }
-      }
-    }
-    if (batchCount > 0) {
-      await batch.commit();
-    }
-    
-    batch = db.batch();
-    batchCount = 0;
-    
-    for (const mr of activeMonitor) {
-      const docRef = monitorCol.doc(mr.id);
-      batch.set(docRef, {
-        platform: mr.platform || "",
-        url: mr.url || "",
-        author: mr.author || "",
-        title: mr.title || "",
-        content: mr.content || "",
-        sentiment: mr.sentiment || "neutral",
-        sentimentScore: Number(mr.sentimentScore || 0),
-        emotion: mr.emotion || "neutral",
-        engagement: mr.engagement || "0",
-        date: mr.date || "",
-        trackerId: mr.trackerId || "",
-        country: mr.country || "Global",
-        latitude: mr.latitude !== undefined && mr.latitude !== null ? Number(mr.latitude) : null,
-        longitude: mr.longitude !== undefined && mr.longitude !== null ? Number(mr.longitude) : null
-      });
-      batchCount++;
-      if (batchCount >= 200) {
-        await batch.commit();
-        batch = db.batch();
-        batchCount = 0;
-      }
-    }
-    if (batchCount > 0) {
-      await batch.commit();
-    }
-
-    logger.info("[Firebase Sync] Sync completed successfully!");
-  } catch (err: any) {
-    const errMsg = String(err.message || err).replace(/error/gi, "err-info");
-    logger.warn("[Firebase Sync] Information syncing to Firestore:", errMsg);
-  } finally {
-    isSyncing = false;
-    if (pendingSyncData && !disableFirestoreSync) {
-      const nextData = pendingSyncData;
-      setTimeout(() => syncToFirestore(nextData), 5000);
-    }
-  }
+/** Records one changed document. Flushing is debounced and batched. */
+function queueMirrorOp(op: MirrorOp) {
+  if (disableFirestoreSync) return;
+  firestoreMirror.queue(op);
 }
 
 /**
- * Firestore sync is debounced: a burst of writes (a scan saving 20 mentions)
- * results in one sync, not twenty. The sync itself deletes only documents that
- * disappeared and upserts the rest, so a small change stays a small change.
+ * Seeds the mirror once, when the remote database is empty. This is the only
+ * path that writes documents not produced by a local change, so it is capped.
  */
-let firestoreSyncTimer: NodeJS.Timeout | null = null;
-
-function scheduleFirestoreSync(delayMs = 1500) {
-  if (disableFirestoreSync) return;
-  if (firestoreSyncTimer) clearTimeout(firestoreSyncTimer);
-  firestoreSyncTimer = setTimeout(() => {
-    firestoreSyncTimer = null;
-    const snapshot = getDB();
-    syncToFirestore(snapshot).catch((err) => {
-      logger.warn("[Firebase Sync] Background sync failed:", (err as any)?.message || err);
-    });
-  }, delayMs);
-  // Never hold the event loop open just for a sync.
-  firestoreSyncTimer.unref?.();
+async function seedFirestoreMirror(data: any): Promise<boolean> {
+  if (disableFirestoreSync) return false;
+  try {
+    for (const op of seedOperations(data)) firestoreMirror.queue(op);
+    const written = await firestoreMirror.flushNow();
+    logger.info(`[Firebase Sync] Seeded ${written} document(s) into an empty Firestore.`);
+    return true;
+  } catch (err: any) {
+    logger.warn("[Firebase Sync] Could not seed the mirror:", err?.message || err);
+    return false;
+  }
 }
 
 function getDB() {
@@ -885,7 +749,7 @@ function saveTracker(tracker: any): boolean {
         JSON.stringify(tracker.platforms || []),
         tracker.createdAt || new Date().toISOString()
       );
-    scheduleFirestoreSync();
+    queueMirrorOp({ kind: "set", collection: "trackers", id: tracker.id, data: toTrackerDoc(tracker) });
     return true;
   } catch (err) {
     logger.error("[DB] Failed to save tracker:", err);
@@ -900,7 +764,7 @@ function deleteTracker(id: string): boolean {
       dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(id);
       dbConn.prepare("DELETE FROM trackers WHERE id = ?").run(id);
     });
-    scheduleFirestoreSync();
+    queueMirrorOp({ kind: "delete", collection: "trackers", id });
     return true;
   } catch (err) {
     logger.error("[DB] Failed to delete tracker:", err);
@@ -928,7 +792,7 @@ function saveAnalyzedPost(post: any): boolean {
         JSON.stringify(post.hashtags || []),
         post.analyzedAt || new Date().toISOString()
       );
-    scheduleFirestoreSync();
+    queueMirrorOp({ kind: "set", collection: "analyzed_posts", id: post.id, data: toAnalyzedDoc(post) });
     return true;
   } catch (err) {
     logger.error("[DB] Failed to save analysed post:", err);
@@ -945,7 +809,9 @@ function saveMentions(mentions: any[]): number {
       const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
       for (const mr of rows) bindMention(stmt, mr);
     });
-    scheduleFirestoreSync();
+    for (const mr of rows) {
+      queueMirrorOp({ kind: "set", collection: "monitor_results", id: mr.id, data: toMentionDoc(mr) });
+    }
     return rows.length;
   } catch (err) {
     logger.error("[DB] Failed to save mentions:", err);
@@ -959,6 +825,10 @@ function saveMentions(mentions: any[]): number {
  */
 function replaceMentionsForTracker(trackerId: string, mentions: any[]): number {
   try {
+    // The rows about to disappear must be deleted from the mirror too.
+    const stale = dbConn
+      .prepare("SELECT id FROM monitor_results WHERE trackerId = ?")
+      .all(trackerId) as any[];
     runInTransaction(() => {
       dbConn.prepare("DELETE FROM monitor_results WHERE trackerId = ?").run(trackerId);
       const stmt = dbConn.prepare(SQL_UPSERT_MENTION);
@@ -966,7 +836,12 @@ function replaceMentionsForTracker(trackerId: string, mentions: any[]): number {
         if (mr?.id) bindMention(stmt, { ...mr, trackerId });
       }
     });
-    scheduleFirestoreSync();
+    for (const row of stale) {
+      queueMirrorOp({ kind: "delete", collection: "monitor_results", id: row.id });
+    }
+    for (const mr of mentions || []) {
+      if (mr?.id) queueMirrorOp({ kind: "set", collection: "monitor_results", id: mr.id, data: toMentionDoc({ ...mr, trackerId }) });
+    }
     return (mentions || []).length;
   } catch (err) {
     logger.error("[DB] Failed to replace tracker mentions:", err);
@@ -980,12 +855,19 @@ function pruneMentions(max = 1000): number {
     const before = dbConn.prepare("SELECT COUNT(*) AS c FROM monitor_results").get() as any;
     const total = Number(before?.c || 0);
     if (total <= max) return 0;
+    const doomed = dbConn
+      .prepare(
+        "SELECT id FROM monitor_results WHERE rowid NOT IN (SELECT rowid FROM monitor_results ORDER BY rowid DESC LIMIT ?)"
+      )
+      .all(max) as any[];
     dbConn
       .prepare(
         "DELETE FROM monitor_results WHERE rowid NOT IN (SELECT rowid FROM monitor_results ORDER BY rowid DESC LIMIT ?)"
       )
       .run(max);
-    scheduleFirestoreSync();
+    for (const row of doomed) {
+      queueMirrorOp({ kind: "delete", collection: "monitor_results", id: row.id });
+    }
     return total - max;
   } catch (err) {
     logger.error("[DB] Failed to prune mentions:", err);
@@ -2871,6 +2753,12 @@ async function startServer() {
     const shutdown = (signal: string) => {
       logger.info(`[Shutdown] Received ${signal}, closing server...`);
       wss?.clients.forEach((client) => client.close(1001, "Server shutting down"));
+      // Give queued mirror writes one short chance to land, then stop the queue
+      // so a dead process cannot keep retrying.
+      void firestoreMirror
+        .flushNow()
+        .catch(() => 0)
+        .finally(() => firestoreMirror.dispose());
       server.close(() => {
         try {
           dbConn.close();
