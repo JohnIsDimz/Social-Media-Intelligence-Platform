@@ -84,10 +84,71 @@ export function validateScrapeUrl(value: string): URL {
   return parsed;
 }
 
+/* ---------------------------------------------------------------------------
+ * DNS-level SSRF guard
+ *
+ * `validateScrapeUrl` rejects IP literals and non-allowlisted hosts, but an
+ * allowlisted NAME can still resolve to a private address: a record pointed at
+ * 127.0.0.1 or 169.254.169.254 would pass the allowlist and then let the server
+ * read its own metadata service. So the hostname is resolved first and refused
+ * if any address is private, loopback, link-local or CGNAT.
+ *
+ * Known limit, stated rather than hidden: this is a check-then-fetch, so a
+ * hostile resolver could answer differently on the second lookup (DNS
+ * rebinding). Closing that fully requires pinning the resolved IP into the
+ * socket, which fetch() does not expose. The mitigation in place is that this
+ * route is behind auth, rate limited, and only ever fetches six allowlisted
+ * social hosts.
+ * ------------------------------------------------------------------------- */
+
+/** True for addresses that must never be reachable from a scrape. */
+export function isPrivateAddress(ip: string): boolean {
+  const family = ip.includes(":") ? 6 : 4;
+  if (family === 4) {
+    const parts = ip.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+    const [a, b] = parts;
+    return (
+      a === 0 ||                          // "this network"
+      a === 10 ||                         // private
+      a === 127 ||                        // loopback
+      (a === 169 && b === 254) ||         // link-local / cloud metadata
+      (a === 172 && b >= 16 && b <= 31) || // private
+      (a === 192 && b === 168) ||         // private
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      a >= 224                            // multicast / reserved
+    );
+  }
+  const lower = ip.toLowerCase();
+  if (lower === "::" || lower === "::1") return true;
+  if (lower.startsWith("fe80")) return true;              // link-local
+  if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true;      // unique local
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateAddress(mapped[1]);
+  return false;
+}
+
+/** Resolves a hostname and refuses it when any answer is a private address. */
+export async function assertPublicHost(hostname: string): Promise<void> {
+  const dns = await import("node:dns/promises");
+  let addresses: string[];
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    addresses = records.map((r) => r.address);
+  } catch {
+    throw new Error("That domain could not be resolved.");
+  }
+  if (addresses.length === 0) throw new Error("That domain could not be resolved.");
+  if (addresses.some(isPrivateAddress)) {
+    throw new Error("That domain resolves to a private address and cannot be fetched.");
+  }
+}
+
 // Scrape Social Media URL Meta Tags using rotating User-Agents and multi-fallback parsing
 export async function scrapeSocialUrl(url: string) {
   try {
     const parsedUrl = validateScrapeUrl(url);
+    await assertPublicHost(parsedUrl.hostname);
     const randomUserAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
     const referer = `${parsedUrl.protocol}//${parsedUrl.hostname}/`;
 
@@ -576,6 +637,7 @@ export function toMention(args: {
 export async function fetchBlueskyPosts(query: string): Promise<any[]> {
   const out: any[] = [];
   let cursor: string | undefined;
+  const seenCursors = new Set<string>();
   for (let page = 0; page < 2; page++) {
     const params = new URLSearchParams({ q: query, limit: "50", sort: "latest" });
     if (cursor) params.set("cursor", cursor);
@@ -597,8 +659,12 @@ export async function fetchBlueskyPosts(query: string): Promise<any[]> {
         })
       );
     }
-    cursor = json.cursor;
-    if (!cursor) break;
+    // An API that returns the same cursor forever must not spin: stop when a
+    // cursor repeats, and stop when a page adds nothing new.
+    const next = json.cursor;
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
   }
   return out;
 }

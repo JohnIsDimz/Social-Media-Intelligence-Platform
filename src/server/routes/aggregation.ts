@@ -10,6 +10,7 @@ import { aiConfig, aiSummary, chatJson, AiError } from "../../lib/aiProvider.ts"
 import { describeAiFailure, isAiAvailable } from "../ai.ts";
 import { logger } from "../logger.ts";
 import { getDB } from "../data.ts";
+import { buildPlatformSignals } from "../signals.ts";
 
 export function registerAggregationRoutes(app: Express) {
 app.get("/api/social-signals", async (req, res) => {
@@ -28,75 +29,11 @@ app.get("/api/social-signals", async (req, res) => {
     : allMonitored;
 
   const combined = [...filteredAnalyzed, ...filteredMonitored];
-  // Every channel in the catalogue is reported, including ones with nothing in
-  // them: an empty row is information, a missing row is a lie of omission.
-  const platformsList = CHANNEL_KEYS;
-  
-  // Metrics come from stored mentions only. A channel with no collected items
-  // reports zero rather than a plausible-looking number.
-  const platformSignals = platformsList.map((platform) => {
-    const platformItems = combined.filter(
-      (item) => item.platform === platform || (platform === "twitter" && item.platform === "x")
-    );
 
-    let buzzVolume = platformItems.length;
-    let sentimentScore = 0;
-    let activeUsersCount = 0;
-
-    if (platformItems.length > 0) {
-      const sum = platformItems.reduce(
-        (acc: number, curr: any) => acc + (curr.sentimentScore || 0),
-        0
-      );
-      sentimentScore = sum / platformItems.length;
-      activeUsersCount = new Set(platformItems.map((item: any) => item.author || "user")).size;
-    }
-
-    sentimentScore = Math.max(-1, Math.min(1, sentimentScore));
-
-    // Velocity compares this half of the window against the previous half, so it
-    // is derived from timestamps instead of an invented growth figure.
-    const now = Date.now();
-    const halfWindow = (24 * 60 * 60 * 1000) / 2;
-    const recent = platformItems.filter((i: any) => now - new Date(i.date || 0).getTime() <= halfWindow).length;
-    const earlier = platformItems.length - recent;
-    const velocity =
-      earlier > 0
-        ? Number((((recent - earlier) / earlier) * 100).toFixed(1))
-        : recent > 0
-          ? 100
-          : 0;
-
-    // Engagement is only counted when the source actually published a number.
-    // Averaging over rows that have none would invent a value for the channel.
-    const withEngagement = platformItems
-      .map((i: any) => i.engagementScore)
-      .filter((v: unknown): v is number => typeof v === "number" && Number.isFinite(v));
-    const avgEngagement =
-      withEngagement.length > 0
-        ? Math.round(withEngagement.reduce((a: number, b: number) => a + b, 0) / withEngagement.length)
-        : null;
-
-    const normalizedVolume = Math.min(100, (buzzVolume / 60) * 100);
-    const sentimentBonus = (Math.abs(sentimentScore) + 1.0) * 25;
-    const rawStrength = normalizedVolume * 0.35 + velocity * 0.35 + sentimentBonus;
-    const signalStrength = Math.round(
-      buzzVolume > 0 ? Math.min(100, Math.max(0, rawStrength)) : 0
-    );
-
-    return {
-      platform,
-      buzzVolume,
-      sentimentScore: Number(sentimentScore.toFixed(2)),
-      velocity,
-      signalStrength,
-      activeUsersCount,
-      sampleSize: platformItems.length,
-      // null means "not measured", which the table renders as a dash.
-      avgEngagement,
-      engagementSamples: withEngagement.length,
-    };
-  });
+  // Every catalogue channel is reported, including empty ones: an empty row is
+  // information, a missing row is a lie of omission. The arithmetic lives in
+  // `signals.ts` where it is tested; this route only shapes the JSON.
+  const platformSignals = buildPlatformSignals(combined, CHANNEL_KEYS);
 
   // Totals only. An earlier version also returned a "global buzz index" (a
   // hard-coded division by 350), a "cross-platform coherence" score and a

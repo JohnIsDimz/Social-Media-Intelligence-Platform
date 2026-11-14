@@ -6,7 +6,7 @@ import type { AnalyzedPost } from "../types";
 interface AnalyzerViewProps {
   posts: AnalyzedPost[];
   isAnalyzing: boolean;
-  onSubmit: (payload: { url?: string; text?: string; platform: string }) => void;
+  onSubmit: (payload: { url?: string; text?: string; platform: string }) => Promise<boolean>;
   onExport: () => void;
 }
 
@@ -26,14 +26,18 @@ export function AnalyzerView({
   const canSubmit =
     !isAnalyzing && (mode === "link" ? url.trim().length > 0 : text.trim().length > 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    onSubmit({
+    const ok = await onSubmit({
       url: mode === "link" ? url.trim() : undefined,
       text: mode === "text" ? text.trim() : undefined,
       platform,
     });
+    // Only clear the input when the analysis actually happened. A failed fetch
+    // used to wipe the text the user had pasted, so the error toast arrived with
+    // nothing left to retry.
+    if (!ok) return;
     if (mode === "link") setUrl("");
     else setText("");
   };
@@ -46,8 +50,9 @@ export function AnalyzerView({
           Read the tone of a post before you join the conversation.
         </h1>
         <p className="mt-2 max-w-[64ch] text-[14px] leading-relaxed text-ink-2">
-          Paste a link or raw text. The model rates sentiment, emotion and engagement,
-          then saves the result to the history below.
+          Paste a link or raw text. The model rates sentiment and emotion, then saves the
+          result to the history below. Engagement is only shown when the platform
+          publishes a count.
         </p>
       </header>
 

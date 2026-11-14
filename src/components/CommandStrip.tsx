@@ -7,7 +7,8 @@ export interface StripSignal {
   platform: string;
   buzzVolume: number;
   sentimentScore: number;
-  velocity: number;
+  /** null when there is no earlier half-window to compare against. */
+  velocity: number | null;
 }
 
 interface CommandStripProps {

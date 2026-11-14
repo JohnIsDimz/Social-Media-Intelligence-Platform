@@ -985,3 +985,96 @@ Dua berkas baru adalah inti pembuktiannya:
   menandai semua kanal `down` di sini. Di VPS dengan internet biasa, status itu
   berubah menjadi `public`/`configured`. Yang diverifikasi di sini adalah
   parsing, bentuk permintaan, dan aturan datanya — bukan konektivitas.
+
+## 19. Audit balik atas putaran kedelapan — temuan dan perbaikannya
+
+Putaran ini membaca ulang commit `3f64a6e` baris per baris, bukan hanya
+menjalankan tes. Enam masalah ditemukan; dua di antaranya mengubah angka di
+dashboard, satu adalah lubang keamanan.
+
+### 19.1 Angka: velocity dan signal strength salah arah
+
+Kedua perhitungan ini tinggal di dalam rute sehingga tidak pernah diuji. Setelah
+dipindahkan ke `src/server/signals.ts` dan diberi 28 asersi, dua cacat terbukti:
+
+| Cacat | Dampak | Perbaikan |
+| --- | --- | --- |
+| `signalStrength = volume*0.35 + velocity*0.35 + sentiment` | velocity **-80%** mengurangi 28 poin, lalu hasil negatif dijepit ke 0. Kanal yang sedang turun dinilai lebih lemah daripada kanal yang sepi — padahal arah bukan kekuatan sinyal | velocity dikeluarkan; komponennya volume (40), kebaruan 12 jam (30), intensitas sentimen (30) |
+| `velocity = 100` saat paruh sebelumnya kosong | kanal yang baru menerima mention pertamanya hari ini melaporkan "100%" — itu penjaga pembagian, bukan pengukuran | `null`; UI menampilkan "—" |
+| `activeUsersCount` menghitung "Public discussion" sebagai satu orang | jumlah pengguna aktif bisa 1 padahal tidak ada penulis yang diketahui | placeholder dikecualikan |
+
+`velocity` kini `number | null` di seluruh jalur (rute, `types.ts`, `ChannelRow`,
+`StripSignal`), sebab `null` dan `0` artinya berbeda: "tidak bisa diukur" versus
+"tidak berubah".
+
+### 19.2 `engagement` dibuang setelah diubah menjadi label
+
+`engagement_score` sudah disimpan sejak putaran sebelumnya, tetapi UI tidak
+pernah menampilkannya, dan `types.ts` hanya mendeklarasikan `engagement: string`.
+Sekarang tabel kanal punya kolom **Engagement** berisi rata-rata hitungan nyata
+plus jumlah baris yang benar-benar punya hitungan (`30 of 2`), dan CSV
+mengekspor `Engagement Count` terpisah dari label. Bila tidak ada satu pun baris
+yang punya hitungan, nilainya `null` dan tabel menampilkan "—", bukan 0.
+
+### 19.3 25 kanal, dua di antaranya berisi data
+
+`ChannelTable` merender **semua** kanal katalog. Dengan 25 kanal, itu berarti
+23 baris "no data" menenggelamkan 2 baris yang ada isinya, masing-masing dengan
+tag `no data` sendiri. Sekarang baris kosong diringkas menjadi satu kalimat yang
+**menyebutkan nama kanalnya** — informasinya tetap ada, tapi tidak berteriak.
+
+### 19.4 Dialog tracker bisa membuat kanal yang dijamin kosong
+
+Dialog mencentang `tiktok` dan `instagram` secara default meski tidak ada
+penyedia pencarian. Kanal idle kini ditandai "idle" dengan alasan di tooltip,
+tidak ikut tercentang, dan tombol "select all" hanya memilih kanal yang benar-
+benar aktif di deployment itu (`/api/data-sources`).
+
+### 19.5 SSRF lewat nama, bukan IP
+
+`validateScrapeUrl` menolak IP literal dan host di luar allowlist, tetapi **nama**
+yang ada di allowlist tetap bisa mengarah ke alamat privat — satu record DNS ke
+`127.0.0.1` atau `169.254.169.254` akan lolos. Sekarang hostname di-resolve
+lebih dulu (`assertPublicHost`) dan ditolak bila ada jawaban privat, loopback,
+link-local, atau CGNAT. 30 asersi mengunci daftar alamat yang harus ditolak.
+
+Batasnya dinyatakan terbuka di kode: ini *check-then-fetch*, jadi resolver
+bermusuhan secara teori bisa menjawab berbeda pada lookup kedua (DNS rebinding).
+Menutup itu sepenuhnya butuh memaku IP ke socket, yang tidak diekspos `fetch()`.
+Mitigasi yang ada: rute di belakang auth, dibatasi laju, dan hanya mengambil enam
+host sosial yang di-allowlist.
+
+### 19.6 Dua hal kecil yang terasa besar saat dipakai
+
+- Analisis yang **gagal** dulu tetap mengosongkan input, jadi teks yang sudah
+  ditempel hilang tepat saat pengguna perlu mencoba lagi. Sekarang input hanya
+  dikosongkan bila analisisnya benar-benar berhasil.
+- Label "engagement" pada mention yang tidak punya hitungan sekarang berbunyi
+  "engagement not published", bukan "engagement —".
+- Paginasi Bluesky berhenti bila cursor berulang, sehingga API yang nakal tidak
+  membuat satu permintaan berputar selamanya.
+
+### 19.7 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 204 lulus (11 berkas)
+npm run build      # vite + esbuild ok
+```
+
+Tambahan: 28 asersi `tests/signals.test.ts` dan 30 asersi
+`tests/network-guards.test.ts`. Diperiksa juga terhadap server yang berjalan:
+`/api/social-signals` mengembalikan 25 kanal dengan `velocity: null` dan
+`avgEngagement: null` saat kosong — bukan `0`, yang akan menyamar sebagai
+pengukuran.
+
+### 19.8 Sisa risiko yang belum ditutup
+
+| Risiko | Status |
+| --- | --- |
+| DNS rebinding pada scrape | dinyatakan di kode; butuh IP pinning di level socket |
+| Halaman publik yang menyajikan login wall | dikembalikan sebagai `422 source-unreadable` + saran menempel teks, bukan dianalisis kosong |
+| Kuota gratis Tavily (1.000/bulan) | dicache 10 menit dan dibatasi 3 framing × 13 kanal, tetapi tetap bisa habis pada tracker besar; kegagalan menjadi `[]` + log, bukan data karangan |
+| Istilah Indonesia yang tidak ada di leksikon | skor netral, bukan tebakan; bagian ini hanya menyentuh koleksi otomatis, jalur analyzer memakai model |
+| Konektivitas nyata | tidak bisa diuji dari sandbox; audit jaringan akan menandai kanal `down` di sini dan `public` di VPS |
+

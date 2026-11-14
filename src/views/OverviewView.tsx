@@ -184,9 +184,9 @@ export function OverviewView({
           <p className="mt-3 flex items-start gap-2 text-[12px] leading-relaxed text-ink-3">
             <NoDataTag show />
             <span>
-              {platformCount - activePlatforms} channel
-              {platformCount - activePlatforms === 1 ? " has" : "s have"} no collected mentions yet.
-              Nothing is estimated — empty means empty.
+              {platformCount - activePlatforms} of {platformCount} channels have no collected
+              mentions yet. They are listed under the table and in Data sources, with the reason
+              for each. Nothing is estimated — empty means empty.
             </span>
           </p>
         )}

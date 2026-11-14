@@ -85,11 +85,13 @@ export default function App() {
       platform: string;
       buzzVolume: number;
       sentimentScore: number;
-      velocity: number;
+      /** null when there is no earlier half-window to compare against. */
+      velocity: number | null;
       signalStrength: number;
-      isSimulated?: boolean;
       sampleSize?: number;
       activeUsersCount: number;
+      avgEngagement?: number | null;
+      engagementSamples?: number;
     }[];
     totalSignalsDetected: number;
     platformCount: number;
@@ -550,7 +552,7 @@ export default function App() {
 
     if (!urlValue && !textValue) {
       setError("Add a URL or paste the post text to analyse.");
-      return;
+      return false;
     }
 
     setIsAnalyzing(true);
@@ -571,8 +573,10 @@ export default function App() {
       setStats(statsData);
 
       showNotification("Analysis complete.");
+      return true;
     } catch (err: any) {
       setError(err.message || "Analysis failed.");
+      return false;
     } finally {
       setIsAnalyzing(false);
     }
@@ -617,7 +621,7 @@ export default function App() {
     }
     const headers = [
       "ID", "Title", "Description", "Platform", "Sentiment", "Sentiment Score",
-      "Dominant Emotion", "Engagement", "Source URL", "Analysed At", "Hashtags"
+      "Dominant Emotion", "Engagement", "Engagement Count", "Source URL", "Analysed At", "Hashtags"
     ];
     const rows = analyzedPosts.map(post => [
       post.id,
@@ -627,7 +631,8 @@ export default function App() {
       post.sentiment,
       String(post.sentimentScore),
       post.emotion,
-      post.engagement,
+      post.engagement ?? "",
+      post.engagementScore === undefined ? "" : String(post.engagementScore),
       post.url || "",
       post.analyzedAt,
       (post.hashtags || []).join("; ")
@@ -646,7 +651,7 @@ export default function App() {
     const trackerName = activeTracker ? activeTracker.query : "all-trackers";
     const headers = [
       "Mention ID", "Author", "Platform", "Title", "Content", "Sentiment",
-      "Sentiment Score", "Emotion", "Engagement", "Source URL", "Collected At"
+      "Sentiment Score", "Emotion", "Engagement", "Engagement Count", "Source URL", "Collected At"
     ];
     const rows = monitorResults.map(res => [
       res.id,
@@ -657,7 +662,8 @@ export default function App() {
       res.sentiment,
       String(res.sentimentScore || 0),
       res.emotion,
-      res.engagement,
+      res.engagement ?? "",
+      res.engagementScore === undefined ? "" : String(res.engagementScore),
       res.url || "",
       res.date || ""
     ]);
@@ -718,6 +724,18 @@ export default function App() {
    * ------------------------------------------------------------------------- */
 
   const activeTracker = trackers.find((t) => t.id === selectedTrackerId);
+  /**
+   * Channels that will actually collect in this deployment, derived from the
+   * same health payload the Data sources dialog shows. Used to avoid opening a
+   * new tracker on channels that are guaranteed to stay empty.
+   */
+  const runnableChannels = sources?.channels
+    ? Object.entries(sources.channels)
+        .filter(([, health]) => ["public", "configured", "grounding"].includes(health.status))
+        .map(([key]) => key)
+    : undefined;
+
+
 
   const channelRows: ChannelRow[] =
     socialSignals?.platformSignals?.map((s) => ({
@@ -727,6 +745,9 @@ export default function App() {
       velocity: s.velocity,
       signalStrength: s.signalStrength,
       activeUsersCount: s.activeUsersCount,
+      avgEngagement: s.avgEngagement ?? null,
+      engagementSamples: s.engagementSamples,
+      sampleSize: s.sampleSize,
     })) ?? [];
 
   const activeChannelCount = channelRows.filter((r) => r.buzzVolume > 0).length;
@@ -873,6 +894,7 @@ export default function App() {
       <AddTrackerDialog
         open={showAddTrackerModal}
         onClose={() => setShowAddTrackerModal(false)}
+        runnable={runnableChannels}
         onCreate={async ({ type, query, platforms, accounts }) => {
           await createTrackerDirect(type, query, platforms, accounts);
         }}

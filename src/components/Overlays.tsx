@@ -56,6 +56,7 @@ export function AddTrackerDialog({
   open,
   onClose,
   onCreate,
+  runnable,
   busy,
 }: {
   open: boolean;
@@ -66,6 +67,8 @@ export function AddTrackerDialog({
     platforms: ChannelKey[];
     accounts?: string[];
   }) => void;
+  /** Channel keys that will actually collect with the current deployment. */
+  runnable?: string[];
   busy?: boolean;
 }) {
   const [type, setType] = useState<"brand" | "hashtag">("brand");
@@ -82,15 +85,13 @@ export function AddTrackerDialog({
       return () => window.clearTimeout(id);
     }
   }, [open]);
-  // Default to channels that can actually collect something without a key.
-  const [platforms, setPlatforms] = useState<ChannelKey[]>([
-    "reddit",
-    "bluesky",
-    "hackernews",
-    "news",
-    "tiktok",
-    "instagram",
-  ]);
+  // Default to channels that collect something in THIS deployment. A channel
+  // that would sit empty (no search provider, no handle) is shown but not
+  // preselected, so a new tracker does not open on a wall of empty rows.
+  const DEFAULT_PLATFORMS = ["reddit", "bluesky", "hackernews", "news", "tiktok", "instagram"];
+  const [platforms, setPlatforms] = useState<ChannelKey[]>(
+    runnable ? DEFAULT_PLATFORMS.filter((key) => runnable.includes(key)) : DEFAULT_PLATFORMS
+  );
 
   useEffect(() => {
     if (!open) {
@@ -113,6 +114,11 @@ export function AddTrackerDialog({
 
   const toggle = (key: ChannelKey) =>
     setPlatforms((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
+
+  const idleReason = (key: string): string => {
+    if (key === "telegram") return "needs a channel handle below";
+    return "needs a search provider and an AI key";
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -198,22 +204,30 @@ export function AddTrackerDialog({
               <div className="flex flex-wrap gap-1.5">
                 {CHANNELS.map((c) => {
                   const on = platforms.includes(c.key);
+                  const idle = runnable ? !runnable.includes(c.key) : false;
                   return (
                     <button
                       key={c.key}
                       type="button"
                       onClick={() => toggle(c.key)}
                       aria-pressed={on}
-                      title={c.collects}
+                      title={
+                        idle
+                          ? `${c.collects} — idle right now: ${idleReason(c.key)}`
+                          : c.collects
+                      }
                       className={cn(
                         "inline-flex items-center gap-1.5 rounded-[5px] border py-1 pl-1 pr-2 text-[12px] transition-colors",
                         on
                           ? "border-teal bg-teal-soft text-teal"
-                          : "border-hair bg-white text-ink-2 hover:border-ink-3"
+                          : idle
+                            ? "border-dashed border-hair bg-transparent text-ink-3 hover:border-ink-3"
+                            : "border-hair bg-white text-ink-2 hover:border-ink-3"
                       )}
                     >
                       <PlatformMark platform={c.key} size={14} />
                       {c.label}
+                      {idle && <span className="text-[10px] text-ink-3">idle</span>}
                     </button>
                   );
                 })}
@@ -221,10 +235,16 @@ export function AddTrackerDialog({
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
                 <button
                   type="button"
-                  onClick={() => setPlatforms(CHANNELS.filter((c) => c.kind !== "none").map((c) => c.key))}
+                  onClick={() =>
+                    setPlatforms(
+                      CHANNELS.filter(
+                        (c) => c.kind !== "none" && (runnable ? runnable.includes(c.key) : true)
+                      ).map((c) => c.key)
+                    )
+                  }
                   className="font-medium text-teal hover:underline underline-offset-2"
                 >
-                  select all collectable
+                  select all active
                 </button>
                 <button
                   type="button"
