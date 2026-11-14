@@ -1,5 +1,5 @@
 import React from "react";
-import { cn, fmt, SimulatedTag, Rule } from "../lib/ui";
+import { cn, fmt, Rule } from "../lib/ui";
 import type { DashboardStats } from "../types";
 
 interface ShareOfVoiceProps {
@@ -22,10 +22,10 @@ export function ShareOfVoice({ stats }: ShareOfVoiceProps) {
     <section aria-labelledby="sov-title">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h2 id="sov-title" className="font-display text-[19px] font-semibold text-ink">
-          Porsi suara
+          Share of voice
         </h2>
         <span className="text-[12px] text-ink-3">
-          {total > 0 ? `${fmt(total)} mention` : "belum ada mention"}
+          {total > 0 ? `${fmt(total)} mentions` : "no mentions yet"}
         </span>
       </div>
 
@@ -77,10 +77,10 @@ export function ShareOfVoice({ stats }: ShareOfVoiceProps) {
       ) : (
         <div className="border-t border-hair py-6">
           <p className="text-[13px] leading-relaxed text-ink-2">
-            Belum ada mention yang terkumpul.
+            No mentions collected yet.
           </p>
           <p className="mt-1 text-[12px] leading-relaxed text-ink-3">
-            Jalankan pemindaian pada salah satu pemantauan untuk mengisi bagian ini.
+            Run a scan on a tracker to fill this in.
           </p>
         </div>
       )}
@@ -98,14 +98,14 @@ export function EmotionBars({ stats }: { stats: DashboardStats | null }) {
     <section aria-labelledby="emotion-title">
       <div className="mb-3 flex items-baseline justify-between gap-3">
         <h2 id="emotion-title" className="font-display text-[19px] font-semibold text-ink">
-          Emosi dominan
+          Dominant emotions
         </h2>
-        <SimulatedTag show={emotions.length === 0} />
+        {emotions.length === 0 && <span className="text-[12px] text-ink-3">no data</span>}
       </div>
 
       {emotions.length === 0 ? (
         <p className="border-t border-hair py-6 text-[13px] text-ink-3">
-          Belum ada sebaran emosi. Analisis satu kiriman untuk melihat polanya.
+          No emotion distribution yet. Analyse a post to see the pattern.
         </p>
       ) : (
         <ul className="flex flex-col gap-2.5">

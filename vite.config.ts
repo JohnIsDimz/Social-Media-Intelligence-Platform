@@ -11,6 +11,17 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, './src'),
       },
     },
+    build: {
+      // recharts alone is ~400 kB. Splitting it out keeps the shell small and
+      // lets the browser cache the chart code separately from app code.
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            charts: ['recharts'],
+          },
+        },
+      },
+    },
     server: {
       // Allow any Host header: this server runs behind preview/proxy domains
       // (and as Vite middleware inside Express). Vite otherwise rejects unknown

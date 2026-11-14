@@ -2,6 +2,10 @@ import React from "react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import locale from "./locale";
+
+export { locale };
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -36,9 +40,9 @@ export function channelLabel(key: string): string {
 
 /** Sentiment never relies on colour alone: it also carries a sign. */
 export function sentimentText(s: string): string {
-  if (s === "positive") return "Positif";
-  if (s === "negative") return "Negatif";
-  return "Netral";
+  if (s === "positive") return "Positive";
+  if (s === "negative") return "Negative";
+  return "Neutral";
 }
 
 export function sentimentColor(s: string): string {
@@ -56,7 +60,7 @@ export function sentimentMark(s: string): string {
 /** Human-readable number: 1,284 — never 1.284k. */
 export function fmt(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return n.toLocaleString("id-ID", {
+  return n.toLocaleString(locale, {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
@@ -80,14 +84,14 @@ export function clockTime(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
 export function shortDate(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+  return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
 }
 
 export function relativeTime(iso?: string): string {
@@ -95,12 +99,12 @@ export function relativeTime(iso?: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "—";
   const mins = Math.round((Date.now() - then) / 60000);
-  if (mins < 1) return "baru saja";
-  if (mins < 60) return `${mins} menit lalu`;
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
   const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} jam lalu`;
+  if (hours < 24) return `${hours} h ago`;
   const days = Math.round(hours / 24);
-  return `${days} hari lalu`;
+  return `${days} d ago`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -112,10 +116,10 @@ export function Rule({ className }: { className?: string }) {
 }
 
 /**
- * Data provenance. Anything generated locally is labelled, because a fabricated
- * number that looks real is worse than no number.
+ * Marks a channel that has no collected data yet. Every number in the product
+ * comes from a real source, so the only thing worth flagging is emptiness.
  */
-export function SimulatedTag({
+export function NoDataTag({
   show,
   className,
 }: {
@@ -125,14 +129,14 @@ export function SimulatedTag({
   if (!show) return null;
   return (
     <span
-      title="Angka ini dihasilkan oleh model simulasi lokal, bukan dari data jaringan nyata."
+      title="No mentions have been collected from this channel yet."
       className={cn(
-        "inline-flex items-center gap-1 border border-amber/40 bg-amber-soft px-1.5 py-[1px] text-[10px] font-medium text-amber",
+        "inline-flex items-center gap-1 border border-hair bg-paper-2 px-1.5 py-[1px] text-[10px] font-medium text-ink-3",
         "rounded-[3px] whitespace-nowrap",
         className
       )}
     >
-      simulasi
+      no data
     </span>
   );
 }

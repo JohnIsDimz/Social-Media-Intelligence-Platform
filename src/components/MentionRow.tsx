@@ -6,7 +6,6 @@ import {
   sentimentColor,
   sentimentMark,
   relativeTime,
-  SimulatedTag,
 } from "../lib/ui";
 import type { MonitorResult } from "../types";
 
@@ -16,7 +15,6 @@ import type { MonitorResult } from "../types";
  * the text came from somewhere else.
  */
 export function MentionRow({ item }: { item: MonitorResult }) {
-  const simulated = item.isSimulated === true;
 
   return (
     <article className="settle border-t border-hair py-4 first:border-t-0">
@@ -27,7 +25,6 @@ export function MentionRow({ item }: { item: MonitorResult }) {
           {sentimentText(item.sentiment)}
         </span>
         <span className="text-ink-3">{item.emotion || "Neutral"}</span>
-        <SimulatedTag show={simulated} />
         <span className="ml-auto text-ink-3">{relativeTime(item.date)}</span>
       </div>
 
@@ -39,9 +36,9 @@ export function MentionRow({ item }: { item: MonitorResult }) {
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-3">
-        <span>{item.author || "diskusi publik"}</span>
+        <span>{item.author || "public discussion"}</span>
         {item.country && <span>{item.country}</span>}
-        <span>keterlibatan {item.engagement?.toLowerCase() || "—"}</span>
+        <span>engagement {item.engagement?.toLowerCase() || "—"}</span>
         {item.url && (
           <a
             href={item.url}
@@ -49,7 +46,7 @@ export function MentionRow({ item }: { item: MonitorResult }) {
             rel="noopener noreferrer"
             className="ml-auto font-medium text-teal hover:underline underline-offset-2"
           >
-            buka sumber
+            open source
           </a>
         )}
       </div>
@@ -88,7 +85,6 @@ export function AnalyzedRow({
         </span>
         <span className="tnum text-ink-3">{item.sentimentScore.toFixed(2)}</span>
         <span className="text-ink-3">{item.emotion}</span>
-        <SimulatedTag show={item.isSimulated} />
         <span className="ml-auto text-ink-3">{relativeTime(item.analyzedAt)}</span>
       </div>
 
@@ -98,7 +94,7 @@ export function AnalyzedRow({
       </p>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
-        <span>keterlibatan {item.engagement?.toLowerCase() || "—"}</span>
+        <span>engagement {item.engagement?.toLowerCase() || "—"}</span>
         {item.hashtags?.slice(0, 4).map((t) => (
           <span key={t} className="text-teal">
             #{t.replace(/^#/, "")}
@@ -109,7 +105,7 @@ export function AnalyzedRow({
             onClick={() => onOpen?.(item.url)}
             className="ml-auto font-medium text-teal hover:underline underline-offset-2"
           >
-            buka sumber
+            open source
           </button>
         )}
       </div>

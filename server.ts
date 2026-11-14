@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import { timingSafeEqual } from "node:crypto";
 import fs from "fs";
 import dotenv from "dotenv";
 
@@ -86,7 +87,7 @@ const apiRateLimiter = rateLimit({
   limit: 300,
   standardHeaders: "draft-7",
   legacyHeaders: false,
-  message: { error: "Terlalu banyak permintaan. Silakan coba lagi sebentar lagi." },
+  message: { error: "Too many requests. Please try again shortly." },
 });
 
 // Strict limit for endpoints that spend money on Gemini / external APIs.
@@ -96,15 +97,47 @@ const expensiveRateLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: {
-    error: "Batas permintaan analisis AI tercapai (20/menit). Silakan coba lagi nanti.",
+    error: "AI analysis rate limit reached (20/minute). Please try again later.",
   },
 });
+
+/** Constant-time string compare so token checks do not leak length or prefix. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 app.use("/api", apiRateLimiter);
 
 // Guards for every route that calls a paid/external service.
 const AI_ROUTES = ["/api/analyze-url", "/api/trigger-monitor", "/api/predict-trends"];
 app.use(AI_ROUTES, expensiveRateLimiter);
+
+/**
+ * Optional API authentication.
+ *
+ * The audit's open finding C1 was "no authentication on /api/*". Rate limiting
+ * is not authorisation: anyone who can reach the port can still write trackers
+ * and burn paid quota. Set API_AUTH_TOKEN to require a bearer token on every
+ * mutating or paid route. Left unset, the app stays usable for local
+ * development — but deployment notes require the token in production.
+ */
+const API_AUTH_TOKEN = process.env.API_AUTH_TOKEN?.trim();
+const PROTECTED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function requireApiToken(req: any, res: any, next: any) {
+  if (!API_AUTH_TOKEN) return next();
+  // Reads stay public so monitoring dashboards and uptime checks keep working.
+  if (!PROTECTED_METHODS.has(req.method)) return next();
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (token && timingSafeEqualStr(token, API_AUTH_TOKEN)) return next();
+  return res.status(401).json({ error: "A valid bearer token is required for this request." });
+}
+
+app.use("/api", requireApiToken);
 
 // Global WebSocket server and broadcast utility
 let wss: WebSocketServer | null = null;
@@ -136,10 +169,8 @@ const ai = new GoogleGenAI({
 let geminiRateLimitActive = false;
 let rateLimitResetTime = 0;
 
-// Synthetic data switch. When ENABLE_SIMULATED_DATA="false", S.M.I.P will only
-// ever surface data that came from a real network call. This is what you want
-// on a public production deployment: an empty dashboard beats a fabricated one.
-const SIMULATED_DATA_ENABLED = process.env.ENABLE_SIMULATED_DATA !== "false";
+// S.M.I.P surfaces collected data only. There is no synthetic fallback: if a
+// channel returns nothing, the product says so instead of inventing a mention.
 
 // @google/genai types `response.text` as optional. A missing body is a real
 // failure mode (safety block, truncation), so fail loudly instead of crashing
@@ -835,24 +866,24 @@ export function validateScrapeUrl(value: string): URL {
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error("URL tidak valid.");
+    throw new Error("That URL is not valid.");
   }
   if (parsed.protocol !== "https:") {
-    throw new Error("URL harus menggunakan HTTPS.");
+    throw new Error("Only HTTPS URLs are supported.");
   }
   if (parsed.username || parsed.password) {
-    throw new Error("URL tidak boleh memuat kredensial.");
+    throw new Error("URLs with embedded credentials are not allowed.");
   }
   if (parsed.port) {
-    throw new Error("URL tidak boleh menggunakan port kustom.");
+    throw new Error("Custom ports are not allowed.");
   }
   const hostname = parsed.hostname.toLowerCase();
   if (isIpLiteral(hostname)) {
-    throw new Error("Alamat IP tidak diizinkan.");
+    throw new Error("IP addresses are not allowed.");
   }
   if (!ALLOWED_SCRAPE_HOSTS.has(hostname)) {
     throw new Error(
-      "Domain tidak didukung. Gunakan tautan dari TikTok, Instagram, Facebook, WhatsApp, X/Twitter, YouTube, LinkedIn, atau Reddit."
+      "That domain is not supported. Use a link from TikTok, Instagram, Facebook, WhatsApp, X, YouTube, LinkedIn or Reddit."
     );
   }
   return parsed;
@@ -1306,19 +1337,16 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
     }
   }
 
-  // 5. Fallback Generation: If the total results are still empty (e.g. if APIs and Grounding failed or are blocked),
-  // return high-quality localized fallback signals across all 8 platforms so S.M.I.P always works reliably!
+  // 5. No synthetic fallback. An empty result is the honest answer, and the UI
+  // tells the user which data sources are configured so they know why.
   if (mergedResults.length === 0) {
-    logger.info(`[Unified API Engine] Performing elegant fallback generation for "${query}" across 8 platforms...`);
-    const fallback = localGenerateMonitorResults(query, selectedPlatforms);
-    mergedResults.push(...fallback);
+    logger.info(
+      `[Unified API Engine] No collected mentions for "${query}". No placeholder data will be invented.`
+    );
   }
 
-  // Set trackerId on all results and return. Anything that did not come from
-  // the local generator is a genuine network/grounding result.
   return mergedResults.map((item, index) => ({
     ...item,
-    isSimulated: item.isSimulated === true,
     id: `mr-${Date.now()}-${index}`,
     trackerId: tracker.id
   }));
@@ -1352,131 +1380,31 @@ function constructOfficialPlatformSearchUrl(platform: string, query: string): st
   }
 }
 
-// Local Fallback Mock Generator for Active Search Grounding Results (Used when search tools/scopes fail)
-function localGenerateMonitorResults(trackerQuery: string, platforms: string[]) {
-  if (!SIMULATED_DATA_ENABLED) {
-    logger.info(
-      "[Simulation] Disabled via ENABLE_SIMULATED_DATA=false — returning no synthetic mentions."
-    );
-    return [];
-  }
-
-  const selectedPlatforms = platforms && platforms.length > 0 ? platforms : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
-  
-  // List of high-fidelity global cities with coordinates
-  const globalRegions = [
-    { country: "United States", lat: 37.0902, lng: -95.7129, author: "@alex_boston", templates: {
-      positive: { title: `Amazing results with ${trackerQuery}!`, content: `The recent changes in ${trackerQuery} have been stellar for our US distribution channels. Absolute game changer! #global #success` },
-      neutral: { title: `Exploring ${trackerQuery} updates`, content: `Checking out the new features released on ${trackerQuery}. Interface looks clean, waiting to see performance. #tech` },
-      negative: { title: `Service bottleneck on ${trackerQuery}`, content: `Anyone else getting slow response times on ${trackerQuery} today? Trying to push an update but it keeps timing out. #issue` }
-    }},
-    { country: "United Kingdom", lat: 55.3781, lng: -3.4360, author: "@charlie_london", templates: {
-      positive: { title: `${trackerQuery} is absolutely fantastic`, content: `Shout out to the ${trackerQuery} team for outstanding support and seamless API integration! Splendid work. #production` },
-      neutral: { title: `${trackerQuery} integration review`, content: `Currently mapping our UK business pipelines to run over ${trackerQuery}. Average response times are standard.` },
-      negative: { title: `Pricing concerns for ${trackerQuery}`, content: `The tier adjustments of ${trackerQuery} make it tough for small teams. Value must align with regional costs.` }
-    }},
-    { country: "Japan", lat: 36.2048, lng: 138.2529, author: "@yuki_tokyo", templates: {
-      positive: { title: `非常に素晴らしい ${trackerQuery}`, content: `${trackerQuery} は本当に便利で生産性が向上しました。デザインも洗練されています！ #お勧め #便利` },
-      neutral: { title: `${trackerQuery} の動作確認`, content: `新しいバージョンの ${trackerQuery} の検証を行っています。今のところ大きな不具合はありません。` },
-      negative: { title: `${trackerQuery} のバグについて`, content: `アクセス集中時に ${trackerQuery} のレスポンスが遅延する問題があります。早急な改善を望みます。` }
-    }},
-    { country: "Australia", lat: -25.2744, lng: 133.7751, author: "@mate_sydney", templates: {
-      positive: { title: `Cracking experience with ${trackerQuery}`, content: `Honestly, ${trackerQuery} has made managing our digital assets so much smoother. Keep up the brilliant work! #australia` },
-      neutral: { title: `Testing ${trackerQuery} pipelines`, content: `Reviewing the data throughput on ${trackerQuery} for our Sydney cluster. Results seem steady so far.` },
-      negative: { title: `Latency issues on ${trackerQuery}`, content: ` Experiencing some heavy latency spikes on ${trackerQuery} from our end. Hope it is fixed soon.` }
-    }},
-    { country: "Indonesia", lat: -0.7893, lng: 113.9213, author: "@budi_jakarta", templates: {
-      positive: { title: `Inovasi keren dari ${trackerQuery}`, content: `Sumpah ini ${trackerQuery} ngebantu banget buat operasional kita sehari-hari! Sangat praktis dan responsif. #rekomendasi #mantap` },
-      neutral: { title: `Diskusi seputar ${trackerQuery}`, content: `Ada yang lagi pasang sistem ${trackerQuery} di perusahaannya? Pengen tau review pemakaian jangka panjang.` },
-      negative: { title: `Kendala teknis ${trackerQuery}`, content: `Aplikasi ${trackerQuery} agak lelet diakses pas jam sibuk kantor. Mohon ditingkatkan lagi kapasitas servernya.` }
-    }},
-    { country: "Germany", lat: 51.1657, lng: 10.4515, author: "@klaus_berlin", templates: {
-      positive: { title: `Hervorragende Leistung von ${trackerQuery}`, content: `Die API von ${trackerQuery} läuft absolut zuverlässig und schnell. Sehr empfehlenswert für Enterprise-Kunden!` },
-      neutral: { title: `Untersuchung von ${trackerQuery}`, content: `Wir bewerten derzeit die Compliance-Richtlinien von ${trackerQuery} für den europäischen Markt.` },
-      negative: { title: `Kritik am neuen Update von ${trackerQuery}`, content: `Das jüngste Interface-Update von ${trackerQuery} ist unübersichtlich geworden. Bitte Option für altes Layout anbieten.` }
-    }},
-    { country: "Brazil", lat: -14.2350, lng: -51.9253, author: "@tiago_saopaulo", templates: {
-      positive: { title: `Excelente suporte de ${trackerQuery}!`, content: `Parabéns aos desenvolvedores do ${trackerQuery}, a usabilidade está excelente e a entrega de dados é imediata! #top` },
-      neutral: { title: `Análise do ${trackerQuery}`, content: `Acompanhando o progresso da ferramenta ${trackerQuery} nos canais de marketing do Brasil.` },
-      negative: { title: `Instabilidade no ${trackerQuery}`, content: `Enfrentando quedas intermitentes ao autenticar no painel do ${trackerQuery} esta manhã. Alguém mais?` }
-    }},
-    { country: "South Africa", lat: -30.5595, lng: 22.9375, author: "@lerato_jozi", templates: {
-      positive: { title: `Great value with ${trackerQuery}`, content: `Local deployment of ${trackerQuery} has dramatically reduced overhead costs. Absolute game changer in our region!` },
-      neutral: { title: `Querying ${trackerQuery}`, content: `Monitoring the discussion volume of ${trackerQuery} across Johannesburg digital forums.` },
-      negative: { title: `Connection drop in ${trackerQuery}`, content: `Server timeouts are ruining the integration of ${trackerQuery} for our clients. Need support help asap.` }
-    }},
-    { country: "India", lat: 20.5937, lng: 78.9629, author: "@priya_tech", templates: {
-      positive: { title: `Superb innovation by ${trackerQuery}`, content: `${trackerQuery} has streamlined our multi-channel logistics beautifully. Extremely happy with the automation!` },
-      neutral: { title: `Evaluating ${trackerQuery} framework`, content: `Comparing ${trackerQuery} capabilities with local analytics engines. Seems highly scalable.` },
-      negative: { title: `Support delay with ${trackerQuery}`, content: `The response time from ${trackerQuery} helpdesk is extremely slow today. Need priority support.` }
-    }},
-    { country: "Singapore", lat: 1.3521, lng: 103.8198, author: "@sg_pulse", templates: {
-      positive: { title: `Amazing efficiency from ${trackerQuery}`, content: `Our ASEAN team has scaled up seamlessly thanks to ${trackerQuery}. Outstanding response speeds! #fintech` },
-      neutral: { title: `Standard check on ${trackerQuery}`, content: `Routine performance metrics of ${trackerQuery} are matching our SLA targets.` },
-      negative: { title: `Service disruption on ${trackerQuery}`, content: `Slight service degradation noticed on ${trackerQuery} early afternoon. Keep an eye out.` }
-    }}
-  ];
-
-  const results: any[] = [];
-  // Generate 8-12 diverse multi-regional results to represent a beautiful global distribution
-  const countToGenerate = Math.max(8, Math.min(12, selectedPlatforms.length * 2));
-  
-  for (let i = 0; i < countToGenerate; i++) {
-    const platform = selectedPlatforms[i % selectedPlatforms.length];
-    
-    // Choose a diverse country/region
-    const region = globalRegions[i % globalRegions.length];
-    
-    // Distribute sentiment: 55% positive, 25% neutral, 20% negative for a realistic optimistic outlook
-    const roll = Math.random();
-    let template;
-    let sentiment: "positive" | "neutral" | "negative";
-    let sentimentScore = 0;
-    let emotion = "Neutral";
-    
-    if (roll < 0.55) {
-      template = region.templates.positive;
-      sentiment = "positive";
-      sentimentScore = Number((0.35 + Math.random() * 0.55).toFixed(2));
-      emotion = "Joy";
-    } else if (roll < 0.80) {
-      template = region.templates.neutral;
-      sentiment = "neutral";
-      sentimentScore = Number((-0.15 + Math.random() * 0.3).toFixed(2));
-      emotion = "Neutral";
-    } else {
-      template = region.templates.negative;
-      sentiment = "negative";
-      sentimentScore = Number((-0.35 - Math.random() * 0.55).toFixed(2));
-      emotion = "Anger";
-    }
-    
-    results.push({
-      platform,
-      url: constructOfficialPlatformSearchUrl(platform, trackerQuery),
-      author: region.author,
-      title: template.title,
-      content: template.content,
-      sentiment,
-      sentimentScore,
-      emotion,
-      engagement: Math.random() > 0.4 ? "High" : "Medium",
-      date: new Date(Date.now() - Math.random() * 172800000).toISOString(),
-      country: region.country,
-      latitude: region.lat,
-      longitude: region.lng,
-      // Explicit provenance: this record was generated locally, not scraped
-      // from a real network. The UI renders a SIMULATED badge for it.
-      isSimulated: true
-    });
-  }
-  
-  return results;
-}
-
 // ==========================================
 // API ROUTES
 // ==========================================
+
+// 0a. Which collection sources are actually configured, so the UI can explain
+// an empty dashboard instead of guessing.
+app.get("/api/data-sources", (req, res) => {
+  res.json({
+    geminiGrounding: isGeminiKeyValid(),
+    reddit: true, // public read-only JSON endpoints, no credentials required
+    youtube: Boolean(process.env.YOUTUBE_API_KEY),
+    twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
+    tiktok: false, // no public read API; only reachable via search grounding
+    instagram: false,
+    facebook: false,
+    whatsapp: false,
+    linkedin: false,
+    notes: {
+      open: "TikTok, Instagram, Facebook, WhatsApp and LinkedIn have no public read API, so they are only covered through Google Search grounding.",
+      requiresGemini: "Set GEMINI_API_KEY to enable search-grounding coverage for closed channels.",
+      requiresYoutube: "Set YOUTUBE_API_KEY to collect YouTube comments and videos.",
+      requiresTwitter: "Set TWITTER_BEARER_TOKEN to collect posts from X.",
+    },
+  });
+});
 
 // 0. Health & readiness probe (used by load balancers and uptime monitors)
 app.get("/api/health", (req, res) => {
@@ -1485,7 +1413,12 @@ app.get("/api/health", (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     version: process.env.npm_package_version || "unknown",
     geminiConfigured: isGeminiKeyValid(),
-    simulatedDataEnabled: SIMULATED_DATA_ENABLED,
+    collectors: {
+      grounding: isGeminiKeyValid(),
+      reddit: true,
+      youtube: Boolean(process.env.YOUTUBE_API_KEY),
+      twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
+    },
     timestamp: new Date().toISOString(),
   });
 });
@@ -1508,10 +1441,10 @@ app.post("/api/trackers", (req, res) => {
 
   const cleanQuery = query.trim();
   if (cleanQuery.length < 1 || cleanQuery.length > 200) {
-    return res.status(400).json({ error: "Query harus terdiri dari 1-200 karakter." });
+    return res.status(400).json({ error: "Query must be between 1 and 200 characters." });
   }
   if (!ALLOWED_TRACKER_TYPES.includes(type)) {
-    return res.status(400).json({ error: "Tipe tracker tidak dikenal." });
+    return res.status(400).json({ error: "Unknown tracker type." });
   }
 
   const requestedPlatforms = Array.isArray(platforms) ? platforms : [];
@@ -1700,7 +1633,7 @@ app.post("/api/analyze-url", async (req, res) => {
   } catch (err: any) {
     logger.error("Critical error in /api/analyze-url:", err);
     logger.error("Failed to perform sentiment analysis:", err);
-    res.status(500).json({ error: "Gagal melakukan analisis sentimen. Silakan coba lagi." });
+    res.status(500).json({ error: "Sentiment analysis failed. Please try again." });
   }
 });
 
@@ -1731,30 +1664,14 @@ app.post("/api/trigger-monitor", async (req, res) => {
     broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
     res.json(formattedResults);
   } catch (err: any) {
-    logger.info("[Social Intelligence Engine] Status: Mengaktifkan pemantauan real-time via mesin pemicu monitoring lokal.");
-    
-    try {
-      const formattedResults = localGenerateMonitorResults(tracker.query, tracker.platforms).map((res: any, index: number) => ({
-        ...res,
-        id: `mr-${Date.now()}-${index}`,
-        trackerId
-      }));
-
-      // Save newly found results to local DB
-      db.monitorResults = db.monitorResults || [];
-      db.monitorResults = db.monitorResults.filter((mr: any) => mr.trackerId !== trackerId);
-      db.monitorResults.unshift(...formattedResults);
-      writeDB(db);
-      
-      broadcast("SYNC", { event: "monitor_triggered", trackerId, results: formattedResults });
-      res.json(formattedResults);
-    } catch (fallbackErr: any) {
-      logger.info("[Social Intelligence Engine] Status: Operasi pemantauan dialihkan ke sistem data sekunder.");
-      logger.error("Monitoring failed:", fallbackErr);
-      res.status(500).json({ error: "Gagal memproses pemantauan pencarian live. Silakan coba lagi." });
-    }
+    logger.error("Monitoring failed:", err);
+    res.status(500).json({
+      error: "The live search could not be completed. Check the server logs and configured data sources.",
+    });
   }
 });
+
+let lastMonitorRefreshAt = 0;
 
 // 6b. Get Cross-Platform Social Signals & Aggregation Index (Universal Intelligence Signal Engine)
 app.get("/api/social-signals", (req, res) => {
@@ -1785,84 +1702,44 @@ app.get("/api/social-signals", (req, res) => {
   const combined = [...filteredAnalyzed, ...filteredMonitored];
   const platformsList = ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
   
-  // Deterministic fallback helper for absolute accuracy and consistency
-  const getDeterministicSignal = (query: string, platform: string) => {
-    let hash = 0;
-    const combinedStr = `${query}-${platform}`;
-    for (let i = 0; i < combinedStr.length; i++) {
-      hash = combinedStr.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    hash = Math.abs(hash);
-    
-    // Deterministic buzz volume: higher for major platforms
-    let baseVolume = 15;
-    if (platform === "tiktok" || platform === "instagram" || platform === "twitter") {
-      baseVolume = 35;
-    }
-    const buzzVolume = (hash % 45) + baseVolume;
-    
-    // Deterministic sentiment score: typical realistic ranges (-0.25 to +0.65)
-    let baseScore = 0.15;
-    if (platform === "twitter") baseScore = -0.10;
-    if (platform === "linkedin") baseScore = 0.35;
-    const rawScore = (hash % 80) - 25; // -25 to 54
-    const sentimentScore = Number((baseScore + (rawScore / 100)).toFixed(2));
-    
-    // Deterministic velocity (growth rate): e.g., 20.5% to 98.4%
-    const velocity = Number((20.5 + (hash % 780) / 10).toFixed(1));
-    
-    // Deterministic active users count
-    const activeUsersCount = Math.floor(buzzVolume * (0.55 + (hash % 35) / 100)) || 1;
-    
-    return { buzzVolume, sentimentScore, velocity, activeUsersCount };
-  };
+  // Metrics come from stored mentions only. A channel with no collected items
+  // reports zero rather than a plausible-looking number.
+  const platformSignals = platformsList.map((platform) => {
+    const platformItems = combined.filter((item) => item.platform === platform);
 
-  // Calculate dynamic, highly accurate metrics per platform
-  const platformSignals = platformsList.map(platform => {
-    const platformItems = combined.filter(item => item.platform === platform);
-    const realItems = platformItems.filter((item: any) => item.isSimulated !== true);
-    const realItemCount = realItems.length;
-    const deterministic = getDeterministicSignal(targetQuery, platform);
-    
-    // Calculate final metrics integrating real data (for high accuracy) with deterministic baselines
     let buzzVolume = platformItems.length;
     let sentimentScore = 0;
     let activeUsersCount = 0;
-    
-    if (realItemCount > 0) {
-      // Only genuinely collected items are allowed to drive the metrics.
-      buzzVolume = realItemCount;
-      const sum = realItems.reduce((acc: number, curr: any) => acc + (curr.sentimentScore || 0), 0);
-      sentimentScore = sum / realItemCount;
-      activeUsersCount = new Set(realItems.map((item: any) => item.author || "user")).size;
-    } else if (SIMULATED_DATA_ENABLED) {
-      // Deterministic synthetic baseline (clearly flagged via isSimulated).
-      buzzVolume = deterministic.buzzVolume;
-      sentimentScore = deterministic.sentimentScore;
-      activeUsersCount = deterministic.activeUsersCount;
-    } else {
-      // Simulation disabled and no real data: report zeros rather than inventing
-      // numbers. An empty, honest dashboard beats a full, fabricated one.
-      buzzVolume = 0;
-      sentimentScore = 0;
-      activeUsersCount = 0;
+
+    if (platformItems.length > 0) {
+      const sum = platformItems.reduce(
+        (acc: number, curr: any) => acc + (curr.sentimentScore || 0),
+        0
+      );
+      sentimentScore = sum / platformItems.length;
+      activeUsersCount = new Set(platformItems.map((item: any) => item.author || "user")).size;
     }
 
-    // Clamp sentiment score between -1.00 and 1.00
     sentimentScore = Math.max(-1, Math.min(1, sentimentScore));
 
-    // Velocity (with real data boost if trending)
-    let velocity = SIMULATED_DATA_ENABLED || realItemCount > 0 ? deterministic.velocity : 0;
-    if (realItemCount > 5) {
-      velocity = Math.min(99.9, Number((velocity + (realItemCount * 1.5)).toFixed(1)));
-    }
+    // Velocity compares this half of the window against the previous half, so it
+    // is derived from timestamps instead of an invented growth figure.
+    const now = Date.now();
+    const halfWindow = (24 * 60 * 60 * 1000) / 2;
+    const recent = platformItems.filter((i: any) => now - new Date(i.date || 0).getTime() <= halfWindow).length;
+    const earlier = platformItems.length - recent;
+    const velocity =
+      earlier > 0
+        ? Number((((recent - earlier) / earlier) * 100).toFixed(1))
+        : recent > 0
+          ? 100
+          : 0;
 
-    // Signal Strength (Sophisticated mathematical model combining Volume, Sentiment magnitude, and Velocity)
     const normalizedVolume = Math.min(100, (buzzVolume / 60) * 100);
-    const sentimentBonus = (Math.abs(sentimentScore) + 1.0) * 25; // 25 to 50
-    const rawStrength = (normalizedVolume * 0.35) + (velocity * 0.35) + sentimentBonus;
+    const sentimentBonus = (Math.abs(sentimentScore) + 1.0) * 25;
+    const rawStrength = normalizedVolume * 0.35 + velocity * 0.35 + sentimentBonus;
     const signalStrength = Math.round(
-      Math.min(100, realItemCount > 0 || SIMULATED_DATA_ENABLED ? Math.max(20, rawStrength) : 0)
+      buzzVolume > 0 ? Math.min(100, Math.max(0, rawStrength)) : 0
     );
 
     return {
@@ -1872,26 +1749,34 @@ app.get("/api/social-signals", (req, res) => {
       velocity,
       signalStrength,
       activeUsersCount,
-      // A platform is only "real" when it has at least one stored item that was
-      // not generated locally. Stored-but-simulated posts still count as fake.
-      isSimulated: realItemCount === 0,
-      sampleSize: platformItems.length
+      sampleSize: platformItems.length,
     };
   });
 
   // Calculate global index metrics with ultimate mathematical precision
   const totalSignalsDetected = platformSignals.reduce((acc, curr) => acc + curr.buzzVolume, 0);
   const globalBuzzIndex = Math.min(100, Math.round((totalSignalsDetected / 350) * 100));
-  const globalSentimentIndex = Number((platformSignals.reduce((acc, curr) => acc + curr.sentimentScore, 0) / platformSignals.length).toFixed(2));
+  const channelsWithData = platformSignals.filter((p) => p.buzzVolume > 0);
+  const globalSentimentIndex = Number(
+    (
+      channelsWithData.length > 0
+        ? channelsWithData.reduce((acc, curr) => acc + curr.sentimentScore, 0) / channelsWithData.length
+        : 0
+    ).toFixed(2)
+  );
   
   // Cross-Platform Coherence (mathematical cohesion index)
   const meanSentiment = globalSentimentIndex;
-  const variance = platformSignals.reduce((acc, curr) => acc + Math.pow(curr.sentimentScore - meanSentiment, 2), 0) / platformSignals.length;
+  const variance =
+    channelsWithData.length > 0
+      ? channelsWithData.reduce((acc, curr) => acc + Math.pow(curr.sentimentScore - meanSentiment, 2), 0) /
+        channelsWithData.length
+      : 0;
   const coherenceScore = Math.round(Math.max(15, Math.min(100, 100 - (variance * 120))));
 
   // Dominant platform (by signal strength)
   const sortedByStrength = [...platformSignals].sort((a, b) => b.signalStrength - a.signalStrength);
-  const dominantPlatform = sortedByStrength[0]?.platform || "instagram";
+  const dominantPlatform = sortedByStrength[0]?.buzzVolume > 0 ? sortedByStrength[0].platform : null;
 
   res.json({
     platformSignals,
@@ -1901,8 +1786,8 @@ app.get("/api/social-signals", (req, res) => {
       crossPlatformCoherence: coherenceScore,
       dominantPlatform,
       totalSignalsDetected,
-      simulatedPlatformCount: platformSignals.filter((p) => p.isSimulated).length,
       platformCount: platformSignals.length,
+      activePlatformCount: platformSignals.filter((p) => p.buzzVolume > 0).length,
       lastAggregatedAt: new Date().toISOString()
     }
   });
@@ -2277,7 +2162,7 @@ Aturan Output JSON:
     } catch (fallbackErr: any) {
       logger.error("Gagal menjalankan fallback prediksi lokal:", fallbackErr);
       logger.error("Trend prediction failed:", fallbackErr);
-      res.status(500).json({ error: "Gagal membuat prediksi tren. Silakan coba lagi." });
+      res.status(500).json({ error: "Trend prediction failed. Please try again." });
     }
   }
 });
@@ -2388,66 +2273,42 @@ async function startServer() {
     });
   });
 
-  // Start real-time background ingestion simulation (auto-polling & live feeds simulation)
+  // Background collection: pulls genuinely new mentions from the configured
+  // sources. Runs on a short tick but only performs a network refresh every
+  // REFRESH_INTERVAL_MS so we do not exhaust API quota.
+  const REFRESH_INTERVAL_MS = Number(process.env.INGEST_INTERVAL_MS) || 120_000;
+
   setInterval(async () => {
     try {
       const db = getDB();
       if (!db.trackers || db.trackers.length === 0) return;
+      if (Date.now() - lastMonitorRefreshAt < REFRESH_INTERVAL_MS) return;
+      lastMonitorRefreshAt = Date.now();
 
-      // Pick a random tracker to generate new mentions
-      const randomTracker = db.trackers[Math.floor(Math.random() * db.trackers.length)];
-      const platforms = randomTracker.platforms && randomTracker.platforms.length > 0 
-        ? randomTracker.platforms 
-        : ["tiktok", "instagram", "facebook", "whatsapp", "twitter", "youtube", "linkedin", "reddit"];
+      // Refresh whichever tracker has gone longest without a scan.
+      const randomTracker =
+        [...db.trackers].sort(
+          (a: any, b: any) =>
+            new Date(a.lastScannedAt || 0).getTime() - new Date(b.lastScannedAt || 0).getTime()
+        )[0];
 
-      logger.info(`[Real-time Ingest] Initiating comprehensive network capture from all directions for tracker: "${randomTracker.query}"`);
-      
-      // Process a subset of up to 4 platforms concurrently to get multi-directional signals
-      const platformsToProcess = platforms.sort(() => 0.5 - Math.random()).slice(0, 4);
-      
-      const promises = platformsToProcess.map(async (platform: string) => {
-        try {
-          let freshMention: any = null;
+      logger.info(`[Collector] Refreshing mentions for "${randomTracker.query}"…`);
 
-          // Execute a real live search grounding when a key is available. When
-          // synthetic data is disabled this is the only source of new posts.
-          const groundingProbability = SIMULATED_DATA_ENABLED ? 0.15 : 1;
-          if (Math.random() < groundingProbability && isGeminiKeyValid() && !geminiRateLimitActive) {
-            logger.info(`[Real-time Ingest] Triggering real Google Search Grounding for "${randomTracker.query}" on ${platform}...`);
-            const realSignal = await runBackgroundGrounding(randomTracker, platform);
-            if (realSignal) {
-              freshMention = {
-                ...realSignal,
-                id: `mr-${Date.now()}-${platform}-real`,
-                trackerId: randomTracker.id
-              };
-              logger.info(`[Real-time Ingest] Successfully fetched REAL grounding signal from direction [${platform}]: "${freshMention.title}"`);
-            }
-          }
-
-          // Fallback/standard generator if search grounding is not triggered, fails, or is bypassed
-          if (!freshMention) {
-            const rawResults = localGenerateMonitorResults(randomTracker.query, [platform]);
-            if (rawResults && rawResults.length > 0) {
-              freshMention = {
-                ...rawResults[0],
-                id: `mr-${Date.now()}-${platform}-bg`,
-                trackerId: randomTracker.id,
-                date: new Date().toISOString() // Brand new timestamp
-              };
-            }
-          }
-
-          return freshMention;
-        } catch (platformErr) {
-          // Bypass error! "jangan lupa di bypass"
-          logger.warn(`[Real-time Ingest] [Bypassed] Failed to capture from direction [${platform}]:`, platformErr);
-          return null;
-        }
+      const collected = await fetchUnifiedSocialSignals(randomTracker).catch((err) => {
+        logger.warn("[Collector] Collection cycle failed:", err);
+        return [] as any[];
       });
 
-      const results = await Promise.all(promises);
-      const newMentions = results.filter((m): m is any => m !== null);
+      randomTracker.lastScannedAt = new Date().toISOString();
+
+      const existingKeys = new Set(
+        (db.monitorResults || []).map(
+          (m: any) => `${m.platform}|${(m.url || "").split("?")[0]}|${m.title}`
+        )
+      );
+      const newMentions = (collected || []).filter(
+        (m: any) => m && !existingKeys.has(`${m.platform}|${(m.url || "").split("?")[0]}|${m.title}`)
+      );
 
       if (newMentions.length > 0) {
         db.monitorResults = db.monitorResults || [];
@@ -2462,7 +2323,7 @@ async function startServer() {
 
         // Broadcast to all active clients for real-time UI injection
         for (const mention of newMentions) {
-          logger.info(`[Real-time Ingest] Ingested signal from direction [${mention.platform}]: "${mention.title}" (Bypassed warnings)`);
+          logger.info(`[Collector] New mention on ${mention.platform}: "${mention.title}"`);
           broadcast("LIVE_POST_INGESTED", {
             post: mention,
             tracker: randomTracker
@@ -2470,9 +2331,9 @@ async function startServer() {
         }
       }
     } catch (err) {
-      logger.warn("[Real-time Ingest] [Bypassed] Main background ingestion status:", err);
+      logger.warn("[Collector] Cycle failed:", err);
     }
-  }, 20000); // Dynamic real-time ingestion every 20 seconds!
+  }, 20_000);
 
   // Load latest data from Firestore to populate our local SQLite cache on boot
   try {

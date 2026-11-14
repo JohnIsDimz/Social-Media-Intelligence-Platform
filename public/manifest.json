@@ -1,12 +1,12 @@
 {
   "name": "Social Media Intelligence Platform (S.M.I.P)",
   "short_name": "S.M.I.P",
-  "description": "Platform intelijen media sosial: analisis sentimen, emosi, tagar, dan pemantauan penyebaran brand.",
+  "description": "Public conversation intelligence: sentiment, emotion, hashtags and brand monitoring, built only on collected data.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#6366f1",
-  "lang": "id",
+  "lang": "en",
   "icons": [
     {
       "src": "/favicon.png",

@@ -3,64 +3,61 @@ import { Tracker, AnalyzedPost, MonitorResult, DashboardStats, AIPredictionRepor
 import { api } from "./apiService";
 import { CommandStrip } from "./components/CommandStrip";
 import { SideRail, type View } from "./components/SideRail";
-import { AddTrackerDialog, RailDrawer, Toasts, type Toast } from "./components/Overlays";
+import {
+  AddTrackerDialog,
+  DataSourcesDialog,
+  RailDrawer,
+  Toasts,
+  type DataSources,
+  type Toast,
+} from "./components/Overlays";
 import type { ChannelRow } from "./components/ChannelTable";
 import { OverviewView } from "./views/OverviewView";
 import { AnalyzerView } from "./views/AnalyzerView";
 import { ChannelsView } from "./views/ChannelsView";
 
 /** Explicit provenance badge. A fabricated metric must never look like a real one. */
-function SimulatedBadge({ show, title }: { show?: boolean; title?: string }) {
-  if (!show) return null;
-  return (
-    <span
-      title={title || "Angka ini dihasilkan oleh model simulasi lokal, bukan dari data jaringan nyata."}
-      className="inline-flex items-center gap-1 rounded border border-amber-400/50 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-400"
-    >
-      Simulasi
-    </span>
-  );
-}
-
-const fallbackPredictions: AIPredictionReport = {
-  summary: "Berdasarkan analisis tren sentimen 7 hari terakhir, brand Anda menunjukkan tingkat kepuasan publik yang cukup stabil dengan sedikit fluktuasi negatif akibat keluhan teknis. AI memperkirakan adanya perbaikan sentimen dalam 3 hari ke depan seiring respons tim yang cepat.",
+/**
+ * Shown only until a real model run succeeds. The UI labels it as a sample, so
+ * it is never mistaken for a live prediction. This is presentational copy, not
+ * an invented data reading — it disappears the moment /api/predict-trends works.
+ */
+const samplePredictions: AIPredictionReport = {
+  summary:
+    "No live forecast has run yet. The figures below are a layout sample: add GEMINI_API_KEY and press recompute to generate a forecast from the mentions you have collected.",
   predictions: [
     {
-      day: "Hari ke-1 (Besok)",
-      dateLabel: new Date(Date.now() + 86400000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
-      predictedSentiment: "positive",
-      confidenceScore: 0.82,
-      expectedPosPct: 55,
-      expectedNeuPct: 30,
-      expectedNegPct: 15,
-      primaryDriver: "Penyebaran organik ulasan positif dari kampanye promo kuliner akhir pekan di Instagram."
-    },
-    {
-      day: "Hari ke-2 (Lusa)",
-      dateLabel: new Date(Date.now() + 172800000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
+      day: "Day 1 (tomorrow)",
+      dateLabel: new Date(Date.now() + 86400000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
       predictedSentiment: "neutral",
-      confidenceScore: 0.75,
-      expectedPosPct: 40,
-      expectedNeuPct: 45,
-      expectedNegPct: 15,
-      primaryDriver: "Normalisasi arus pembicaraan pasca-akhir pekan dan stabilisasi laporan peta lokasi oleh tim pengembang."
+      confidenceScore: 0,
+      expectedPosPct: 33,
+      expectedNeuPct: 34,
+      expectedNegPct: 33,
+      primaryDriver: "Sample row — not a prediction.",
     },
     {
-      day: "Hari ke-3",
-      dateLabel: new Date(Date.now() + 259200000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
-      predictedSentiment: "positive",
-      confidenceScore: 0.88,
-      expectedPosPct: 60,
-      expectedNeuPct: 28,
-      expectedNegPct: 12,
-      primaryDriver: "Peluncuran program loyalitas mitra pengemudi baru yang diprediksi meningkatkan apresiasi publik di TikTok."
-    }
+      day: "Day 2",
+      dateLabel: new Date(Date.now() + 172800000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
+      predictedSentiment: "neutral",
+      confidenceScore: 0,
+      expectedPosPct: 33,
+      expectedNeuPct: 34,
+      expectedNegPct: 33,
+      primaryDriver: "Sample row — not a prediction.",
+    },
+    {
+      day: "Day 3",
+      dateLabel: new Date(Date.now() + 259200000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
+      predictedSentiment: "neutral",
+      confidenceScore: 0,
+      expectedPosPct: 33,
+      expectedNeuPct: 34,
+      expectedNegPct: 33,
+      primaryDriver: "Sample row — not a prediction.",
+    },
   ],
-  actionableInsights: [
-    "Pantau terus interaksi ulasan promo kuliner di Instagram dan segera beri apresiasi kepada influencer pendukung.",
-    "Koordinasikan dengan tim teknis pemetaan untuk merilis pernyataan resmi atau update kecil guna meredam keluhan titik jemput.",
-    "Siapkan aset visual tambahan untuk menyambut rilis loyalitas pengemudi guna mengamplifikasi sentimen positif organik."
-  ]
+  actionableInsights: [],
 };
 
 const platformStyles: Record<string, { bg: string, text: string, border: string, color: string, badge: string }> = {
@@ -124,6 +121,8 @@ const platformStyles: Record<string, { bg: string, text: string, border: string,
 
 export default function App() {
   const [view, setView] = useState<View>("overview");
+  const [sources, setSources] = useState<DataSources | null>(null);
+  const [showSources, setShowSources] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
   
@@ -207,14 +206,14 @@ export default function App() {
 
     // 2. Clock Interval (Asia/Jakarta)
     const updateTime = () => {
-      const formatter = new Intl.DateTimeFormat("id-ID", {
+      const formatter = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Jakarta",
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
         hour12: false,
       });
-      const dateFormatter = new Intl.DateTimeFormat("id-ID", {
+      const dateFormatter = new Intl.DateTimeFormat("en-GB", {
         timeZone: "Asia/Jakarta",
         weekday: "long",
         day: "numeric",
@@ -222,7 +221,7 @@ export default function App() {
         year: "numeric",
       });
       const now = new Date();
-      setJakartaTime(`${dateFormatter.format(now)} • ${formatter.format(now)} WIB`);
+      setJakartaTime(`${dateFormatter.format(now)} · ${formatter.format(now)} GMT+7`);
     };
 
     updateTime();
@@ -232,20 +231,20 @@ export default function App() {
 
   const requestNotificationPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
-      showNotification("Browser Anda tidak mendukung notifikasi desktop.");
+      showNotification("This browser does not support desktop notifications.");
       return;
     }
     try {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
       if (permission === "granted") {
-        showNotification("Notifikasi browser berhasil diaktifkan!");
+        showNotification("Desktop notifications enabled.");
         new Notification("S.M.I.P Active Engine", {
-          body: "Sistem Notifikasi Browser Aktif. Anda akan menerima peringatan jika mendeteksi anomali atau sentimen negatif.",
-          icon: "/favicon.ico"
+          body: "You will be alerted when a channel moves sharply.",
+          icon: "/favicon.png"
         });
       } else if (permission === "denied") {
-        showNotification("Notifikasi browser ditolak oleh pengguna.");
+        showNotification("Notification permission was denied.");
       }
     } catch (err) {
       console.error("Gagal meminta izin notifikasi:", err);
@@ -257,7 +256,7 @@ export default function App() {
       try {
         new Notification(title, {
           body,
-          icon: "/favicon.ico",
+          icon: "/favicon.png",
           ...options
         });
       } catch (err) {
@@ -269,6 +268,10 @@ export default function App() {
   // Initial Fetch
   useEffect(() => {
     fetchInitialData();
+    api
+      .get<DataSources>("/api/data-sources")
+      .then(setSources)
+      .catch(() => setSources(null));
   }, []);
 
   // Keep selectedTrackerId fresh for WebSocket handler without reconnecting
@@ -312,7 +315,7 @@ export default function App() {
           const data = await api.get<MonitorResult[]>(`/api/monitor-results?trackerId=${selectedTrackerIdRef.current}`);
           setMonitorResults(data);
         } catch (innerErr) {
-          console.error("Gagal memperbarui hasil monitor secara latar belakang:", innerErr);
+          console.error("Background monitor refresh failed:", innerErr);
         }
       }
     } catch (err) {
@@ -379,14 +382,14 @@ export default function App() {
               // Trigger Browser Notification
               if (post.sentiment === "negative") {
                 sendBrowserNotification(
-                  `🚨 Lonjakan Sentimen Negatif! [S.M.I.P Engine]`,
-                  `Kritis (${post.platform.toUpperCase()}): "${post.content}"`,
+                  `Negative spike on ${post.platform.toUpperCase()}`,
+                  post.content,
                   { tag: post.id }
                 );
               } else {
                 sendBrowserNotification(
-                  `🔔 Sinyal Penting Terdeteksi [S.M.I.P Engine]`,
-                  `Sinyal (${post.platform.toUpperCase()}): "${post.content}"`,
+                  `New mention on ${post.platform.toUpperCase()}`,
+                  post.content,
                   { tag: post.id }
                 );
               }
@@ -534,7 +537,7 @@ export default function App() {
       // Load AI predictions in the background
       fetchPredictions();
     } catch (err: any) {
-      setError(err.message || "Koneksi ke server terputus.");
+      setError(err.message || "Lost connection to the server.");
     } finally {
       setIsLoading(false);
     }
@@ -556,7 +559,7 @@ export default function App() {
         setSocialSignals(signalsData);
       }
     } catch (err) {
-      console.error("Gagal mengambil hasil monitoring:", err);
+      console.error("Could not load monitoring results:", err);
     }
   };
 
@@ -578,9 +581,13 @@ export default function App() {
         setSocialSignals(signalsData);
       }
 
-      showNotification("Sistem memproses " + data.length + " mention live dari Google Search Grounding!");
+      showNotification(
+        data.length > 0
+          ? `Collected ${data.length} mentions from live sources.`
+          : "Scan finished. No new mentions were returned by the configured sources."
+      );
     } catch (err: any) {
-      setError(err.message || "Gagal memonitor data.");
+      setError(err.message || "The scan could not be completed.");
     } finally {
       setIsMonitoring(false);
     }
@@ -606,18 +613,18 @@ export default function App() {
       setNewTrackerQuery("");
       setView("channels");
 
-      showNotification(`Pemantauan "${newTracker.query}" ditambahkan.`);
+      showNotification(`Tracker "${newTracker.query}" added.`);
 
       // Auto-trigger live scanning
       triggerLiveMonitoring(newTracker.id);
     } catch (err: any) {
-      setError(err.message || "Gagal menyimpan pemantauan baru.");
+      setError(err.message || "Could not save the new tracker.");
     }
   };
 
   // Delete Tracker
   const handleDeleteTracker = async (id: string) => {
-    if (!confirm("Apakah Anda yakin ingin menghapus tracker ini beserta semua datanya?")) return;
+    if (!confirm("Delete this tracker and all of its collected mentions?")) return;
 
     try {
       await api.delete(`/api/trackers/${id}`);
@@ -630,9 +637,9 @@ export default function App() {
       const statsData = await api.get<DashboardStats>("/api/dashboard-stats");
       setStats(statsData);
 
-      showNotification("Tracker berhasil dihapus.");
+      showNotification("Tracker deleted.");
     } catch (err: any) {
-      setError(err.message || "Gagal menghapus tracker.");
+      setError(err.message || "Could not delete the tracker.");
     }
   };
 
@@ -647,7 +654,7 @@ export default function App() {
     const platformValue = payload?.platform ?? manualPlatform;
 
     if (!urlValue && !textValue) {
-      setError("Masukkan URL atau salin teks kiriman untuk dianalisis.");
+      setError("Add a URL or paste the post text to analyse.");
       return;
     }
 
@@ -668,9 +675,9 @@ export default function App() {
       const statsData = await api.get<DashboardStats>("/api/dashboard-stats");
       setStats(statsData);
 
-      showNotification("Analisis sentimen & emosi AI selesai!");
+      showNotification("Analysis complete.");
     } catch (err: any) {
-      setError(err.message || "Gagal menganalisis.");
+      setError(err.message || "Analysis failed.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -710,12 +717,12 @@ export default function App() {
   // 1. Export Sentiment Analyzer History
   const exportAnalyzedPostsCSV = () => {
     if (analyzedPosts.length === 0) {
-      setError("Tidak ada data hasil analisis untuk diekspor.");
+      setError("There is no analysis history to export yet.");
       return;
     }
     const headers = [
-      "ID", "Judul", "Deskripsi", "Platform", "Sentimen", "Skor Sentimen", 
-      "Emosi Dominan", "Tingkat Keterlibatan", "URL Asal", "Waktu Analisis", "Tagar"
+      "ID", "Title", "Description", "Platform", "Sentiment", "Sentiment Score",
+      "Dominant Emotion", "Engagement", "Source URL", "Analysed At", "Hashtags"
     ];
     const rows = analyzedPosts.map(post => [
       post.id,
@@ -730,21 +737,21 @@ export default function App() {
       post.analyzedAt,
       (post.hashtags || []).join("; ")
     ]);
-    downloadCSV("SIP_Hasil_Analisis_Sentimen.csv", headers, rows);
-    showNotification("Berhasil mengunduh data hasil analisis!");
+    downloadCSV("smip_analysis_history.csv", headers, rows);
+    showNotification("Analysis history downloaded.");
   };
 
   // 2. Export Brand Monitoring Results
   const exportMonitorResultsCSV = () => {
     if (monitorResults.length === 0) {
-      setError("Tidak ada hasil monitoring untuk diekspor.");
+      setError("There are no mentions to export yet.");
       return;
     }
     const activeTracker = trackers.find(t => t.id === selectedTrackerId);
-    const trackerName = activeTracker ? activeTracker.query : "Umum";
+    const trackerName = activeTracker ? activeTracker.query : "all-trackers";
     const headers = [
-      "ID Mention", "Penulis/Akun", "Platform", "Judul", "Konten/Kutipan", 
-      "Sentimen", "Skor Sentimen", "Emosi", "Keterlibatan", "Tautan Asli", "Tanggal Ditemukan"
+      "Mention ID", "Author", "Platform", "Title", "Content", "Sentiment",
+      "Sentiment Score", "Emotion", "Engagement", "Source URL", "Collected At"
     ];
     const rows = monitorResults.map(res => [
       res.id,
@@ -762,49 +769,49 @@ export default function App() {
     
     // Replace spaces and special chars in filename
     const safeName = trackerName.replace(/[^a-zA-Z0-9]/g, "_");
-    downloadCSV(`SIP_Monitoring_${safeName}.csv`, headers, rows);
-    showNotification(`Berhasil mengunduh laporan monitoring brand ${trackerName}!`);
+    downloadCSV(`smip_mentions_${safeName}.csv`, headers, rows);
+    showNotification(`Mentions for ${trackerName} downloaded.`);
   };
 
   // 3. Export Comprehensive Dashboard Overview
   const exportDashboardReport = () => {
     if (!stats) {
-      setError("Data dashboard tidak tersedia.");
+      setError("Dashboard data is not available yet.");
       return;
     }
     
-    const headers = ["Metrik Laporan Kecerdasan Media Sosial", "Nilai", "Keterangan"];
+    const headers = ["Metric", "Value", "Note"];
     const rows = [
-      ["Platform", "Social Media Intelligence Platform (S.I.P)", "Sistem Analitis Utama"],
-      ["Waktu Ekspor", new Date().toLocaleString("id-ID"), "Waktu lokal server"],
-      ["Total Postingan Dianalisis", String(stats.totalAnalyzed), "Jumlah seluruh postingan di database"],
-      ["Skor Sentimen Rata-rata", String(stats.averageScore), "Skor berkisar antara -1.0 sampai +1.0"],
-      ["Sentimen Keseluruhan", stats.overallSentiment === "positive" ? "Positif" : stats.overallSentiment === "negative" ? "Negatif" : "Netral", "Arah sentimen mayoritas"],
+      ["Product", "Social Media Intelligence Platform (S.M.I.P)", "Collected data only"],
+      ["Exported at", new Date().toLocaleString("en-GB"), "Server local time"],
+      ["Mentions analysed", String(stats.totalAnalyzed), "Total records in the database"],
+      ["Mean sentiment score", String(stats.averageScore), "Range -1.0 to +1.0"],
+      ["Overall sentiment", stats.overallSentiment === "positive" ? "Positive" : stats.overallSentiment === "negative" ? "Negative" : "Neutral", "Majority direction"],
       ["", "", ""],
       ["SEBARAN EMOSI PUBLIK", "Frekuensi / Nilai", "Persentase Relatif"],
       ...(stats.emotionDistribution || []).map(emo => [
         `Emosi: ${emo.name}`,
         String(emo.value),
-        "Berdasarkan analisis percakapan AI"
+        "Derived from collected public conversation"
       ]),
       ["", "", ""],
-      ["DISTRIBUSI PLATFORM SALURAN", "Jumlah Mention", "Kode Warna Visual"],
+      ["CHANNEL DISTRIBUTION", "Mentions", "Volume"],
       ...(stats.platformDistribution || []).map(p => [
         `Platform: ${p.name.toUpperCase()}`,
         String(p.value),
         p.color
       ]),
       ["", "", ""],
-      ["DAFTAR TAGAR TERPOPULER", "Frekuensi Kemunculan", "Status"],
+      ["TOP HASHTAGS", "Occurrences", "Status"],
       ...(stats.topHashtags || []).map(tag => [
         `#${tag.text}`,
         String(tag.value),
-        "Aktif Dilacak"
+        "Tracked"
       ])
     ];
     
-    downloadCSV("SIP_Laporan_Utama_Dashboard.csv", headers, rows);
-    showNotification("Berhasil mengunduh Laporan Analitik Dashboard!");
+    downloadCSV("smip_dashboard_report.csv", headers, rows);
+    showNotification("Dashboard report downloaded.");
   };
 
   // Platform Colors for UI Badges
@@ -828,8 +835,7 @@ export default function App() {
       isSimulated: s.isSimulated,
     })) ?? [];
 
-  const simulatedPlatformCount =
-    channelRows.filter((r) => r.isSimulated).length;
+  const activeChannelCount = channelRows.filter((r) => r.buzzVolume > 0).length;
   const totalSignals =
     socialSignals?.aggregateIndex?.totalSignalsDetected ??
     (stats?.totalAnalyzed ?? 0);
@@ -865,7 +871,6 @@ export default function App() {
     connection: webSocketStatus,
     notificationsOn: notificationPermission === "granted",
     onToggleNotifications: requestNotificationPermission,
-    simulated: simulatedPlatformCount > 0,
   };
 
   return (
@@ -876,7 +881,7 @@ export default function App() {
         signals={channelRows}
         connection={connectionForStrip}
         clock={jakartaTime}
-        isSimulated={simulatedPlatformCount > 0}
+        activeChannels={activeChannelCount}
         onOpenMenu={() => setIsDrawerOpen(true)}
       />
 
@@ -915,16 +920,16 @@ export default function App() {
             <OverviewView
               stats={stats}
               channels={channelRows}
-              predictions={predictions ?? fallbackPredictions}
-              predictionsAreFallback={!predictions}
+              predictions={predictions ?? samplePredictions}
+              predictionsLive={Boolean(predictions)}
               isLoadingPredictions={isLoadingPredictions}
               onRefreshPredictions={fetchPredictions}
               onExport={exportDashboardReport}
               activeQuery={activeTracker?.query ?? ""}
-              simulatedPlatforms={simulatedPlatformCount}
+              activePlatforms={activeChannelCount}
               platformCount={channelRows.length || 8}
-              ip={userIp}
               clock={jakartaTime}
+              onOpenSources={() => setShowSources(true)}
             />
           ) : view === "analyzer" ? (
             <AnalyzerView
@@ -950,7 +955,7 @@ export default function App() {
 
       <footer className="border-t border-hair">
         <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-1 px-5 py-5 text-[12px] text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <span>S.M.I.P — pemantauan percakapan publik</span>
+          <span>S.M.I.P — public conversation monitoring</span>
           <span className="tnum">
             {jakartaTime || "—"} · {userIp}
           </span>
@@ -966,6 +971,12 @@ export default function App() {
           setNewTrackerPlatforms(platforms as any);
           await createTrackerDirect(type, query, platforms);
         }}
+      />
+
+      <DataSourcesDialog
+        open={showSources}
+        onClose={() => setShowSources(false)}
+        sources={sources}
       />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />

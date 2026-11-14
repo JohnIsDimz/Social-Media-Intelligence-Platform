@@ -53,7 +53,7 @@ LICENSE      : tidak ada
 
 | # | Temuan | Lokasi | Dampak |
 |---|---|---|---|
-| C1 | **Tidak ada autentikasi sama sekali** di seluruh `/api/*` | `server.ts:1341-2080` | Siapa pun bisa baca, tambah, hapus tracker dan memicu pemanggilan Gemini (biaya uang Anda) |
+| C1 | **Tidak ada autentikasi sama sekali** di seluruh `/api/*` | `server.ts:1341-2080` | Siapa pun bisa baca, tambah, hapus tracker dan memicu pemanggilan Gemini (biaya uang Anda). **Fixed:** `API_AUTH_TOKEN` + cek bearer constant-time pada semua rute mutasi |
 | C2 | **Firestore rules `allow read, write: if true`** untuk semua koleksi | `firestore.rules:8-20` | Database bisa di-wipe/diisi siapa pun dari internet memakai apiKey publik. (PR #1 sudah memperbaiki ini — **belum di-merge**) |
 | C3 | **SSRF pada `/api/analyze-url`** — server melakukan `fetch()` ke URL sembarang dari input pengguna | `server.ts:1399` → `scrapeSocialUrl` `server.ts:741` | Penyerang bisa memindai jaringan internal (`http://169.254.169.254/`, `http://localhost:3000/...`, IP privat), jadi proxy baca internal. (PR #1 menambahkan allowlist host + `redirect: "manual"` — **belum di-merge**) |
 | C4 | **Firebase Web API key + project config di-commit** | `firebase-applet-config.json:4` | `AIzaSyBALulSjQnQ0Oof0BURVpIavr6IrIbfHrQ`. Untuk Firebase Web API key memang "boleh publik", **tapi hanya jika rules ketat**. Dikombinasikan dengan C2, ini = database terbuka. |
@@ -279,13 +279,13 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | Rate limit endpoint AI | ✅ `429` tepat pada request ke-21/menit |
 | Validasi tracker (query kosong / 500 char / tipe ngawur) | ✅ ditolak `400` |
 | Platform whitelist (`myspace`, `<script>`) | ✅ difilter diam-diam |
-| `ENABLE_SIMULATED_DATA=false` + tanpa data nyata | ✅ volume `0`, bukan angka karangan |
+| Tanpa sumber data yang berfungsi | ✅ volume `0`, bukan angka karangan |
 
 ## Temuan → Status
 
 | ID | Temuan | Status |
 |---|---|---|
-| C1 | Tanpa autentikasi di `/api/*` | 🟠 **Sebagian** — rate limit + validasi sudah ada; auth belum (lihat catatan) |
+| C1 | Tanpa autentikasi di `/api/*` | ✅ **Fixed** — rate limit + validasi + `API_AUTH_TOKEN` (bearer, constant-time) pada semua rute `POST/PUT/PATCH/DELETE`; `GET` tetap publik agar dashboard & uptime check jalan |
 | C2 | Firestore `allow write: if true` | ✅ **Fixed** — deny-all, akses hanya via Admin SDK |
 | C3 | SSRF di `/api/analyze-url` | ✅ **Fixed** — allowlist host, HTTPS-only, `redirect: "manual"`, tolak IP literal |
 | C4 | Firebase Web API key di repo | 🟠 **Mitigated** — key kini tidak berguna tanpa rules longgar; tetap disarankan batasi HTTP referrer |
@@ -301,7 +301,7 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | B6 | Sanitizer "error"→"err-info" | ✅ **Dihapus** |
 | B7 | `uncaughtException` diabaikan | ✅ **Fixed** — log lalu `exit(1)` |
 | B8 | `PORT` hardcoded | ✅ **Fixed** — `process.env.PORT` |
-| — | Data simulasi tampil seperti data nyata | ✅ **Fixed** — flag `isSimulated` + badge UI + saklar `ENABLE_SIMULATED_DATA` |
+| — | Data simulasi tampil seperti data nyata | ✅ **Fixed** — seluruh jalur simulasi dihapus dari `server.ts`; kanal kosong melaporkan nol |
 | — | Alarm "lonjakan negatif" acak tiap 8 detik | ✅ **Dihapus** |
 | — | Dependency tak terpakai (`firebase`, `d3`, `three`, 3 file UI demo) | ✅ **Dihapus** — ini yang menghilangkan 13 vulnerability |
 | — | `@types/react` hilang | ✅ **Ditambahkan** |
@@ -319,5 +319,5 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 1. **Firestore rules harus di-deploy.** File `firestore.rules` di repo baru berlaku setelah dijalankan: `firebase deploy --only firestore:rules`.
 2. **Kunci API key** di Google Cloud Console (HTTP referrer restriction) karena key-nya publik di repo.
 3. **Set `GEMINI_API_KEY`** — tanpa itu fitur AI nonaktif (`geminiConfigured: false` di health check).
-4. **Set `ENABLE_SIMULATED_DATA="false"`** jika dashboard dipakai untuk keputusan nyata.
+4. **Sediakan minimal satu sumber data nyata** (`GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`); tanpa itu dashboard memang kosong — itu perilaku yang benar.
 5. **Autentikasi belum ada (C1).** Endpoint masih terbuka untuk umum, sekarang dibatasi rate limit. Jika ini akan diakses publik luas, tambahkan login (Firebase Auth / API key header) sebelum promosi.

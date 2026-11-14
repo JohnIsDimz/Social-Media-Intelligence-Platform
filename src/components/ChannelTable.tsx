@@ -1,12 +1,5 @@
 import React from "react";
-import {
-  cn,
-  channelLabel,
-  velocityMark,
-  signed,
-  fmt,
-  SimulatedTag,
-} from "../lib/ui";
+import { cn, channelLabel, velocityMark, signed, fmt, NoDataTag } from "../lib/ui";
 
 export interface ChannelRow {
   platform: string;
@@ -29,20 +22,21 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
     <div className="overflow-x-auto">
       <table className="w-full min-w-[620px] border-collapse text-[13px]">
         <caption className="sr-only">
-          Volume, sentimen, laju, dan kekuatan sinyal per kanal media sosial
+          Volume, sentiment, velocity and signal strength for each social channel
         </caption>
         <thead>
           <tr className="border-b border-hair text-left">
-            <th scope="col" className="label py-2 pr-4 font-medium">Kanal</th>
+            <th scope="col" className="label py-2 pr-4 font-medium">Channel</th>
             <th scope="col" className="label py-2 pr-4 font-medium">Volume</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Sentimen</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Laju</th>
-            <th scope="col" className="label py-2 pr-1 text-right font-medium">Kekuatan</th>
+            <th scope="col" className="label py-2 pr-4 text-right font-medium">Sentiment</th>
+            <th scope="col" className="label py-2 pr-4 text-right font-medium">Velocity</th>
+            <th scope="col" className="label py-2 pr-1 text-right font-medium">Signal</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => {
             const pct = Math.round((r.buzzVolume / maxVolume) * 100);
+            const empty = r.buzzVolume === 0;
             const tone =
               r.sentimentScore > 0.05
                 ? "text-jade"
@@ -67,26 +61,30 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
                       <span
                         className={cn(
                           "absolute inset-y-0 left-0 rounded-full",
-                          r.isSimulated ? "bg-ink-3/35" : "bg-teal"
+                          "bg-teal"
                         )}
                         style={{ width: `${Math.max(3, pct)}%` }}
                       />
                     </span>
-                    <span className="tnum text-ink-2">{fmt(r.buzzVolume)}</span>
+                    <span className="tnum text-ink-2">{empty ? "—" : fmt(r.buzzVolume)}</span>
                   </span>
                 </td>
 
                 <td className={cn("tnum py-2.5 pr-4 text-right font-medium", tone)}>
-                  {signed(r.sentimentScore)}
+                  {empty ? "—" : signed(r.sentimentScore)}
                 </td>
 
                 <td className="tnum py-2.5 pr-4 text-right text-ink-2">
-                  <span className="inline-flex items-center gap-1">
-                    <span aria-hidden="true" className="text-ink-3">
-                      {velocityMark(r.velocity)}
+                  {empty ? (
+                    <span className="text-ink-3">—</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <span aria-hidden="true" className="text-ink-3">
+                        {velocityMark(r.velocity)}
+                      </span>
+                      <span>{r.velocity.toFixed(1)}%</span>
                     </span>
-                    <span>{r.velocity.toFixed(1)}%</span>
-                  </span>
+                  )}
                 </td>
 
                 <td className="py-2.5 pl-1 pr-0 text-right">
@@ -104,9 +102,11 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
                         style={{ width: `${Math.max(2, r.signalStrength)}%` }}
                       />
                     </span>
-                    <span className="tnum w-7 text-ink-2">{Math.round(r.signalStrength)}</span>
+                    <span className="tnum w-7 text-ink-2">
+                      {empty ? "—" : Math.round(r.signalStrength)}
+                    </span>
                   </span>
-                  <SimulatedTag show={r.isSimulated} className="ml-2 align-middle" />
+                  <NoDataTag show={empty} className="ml-2 align-middle" />
                 </td>
               </tr>
             );

@@ -61,20 +61,28 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 *   **Tanpa dependency rentan**: `npm audit --omit=dev` → **0 vulnerabilities**.
 
 ### Transparansi data (penting!)
-S.M.I.P dapat berjalan dalam dua mode, dikendalikan `ENABLE_SIMULATED_DATA`:
 
-| Mode | Perilaku |
+**Tidak ada data simulasi sama sekali.** Setiap angka yang muncul berasal dari hasil pengumpulan jaringan nyata dan tersimpan di database. Bila sebuah kanal tidak mengembalikan apa pun, kanal itu dilaporkan **kosong** — bukan diisi angka karangan. Tidak ada fork percabangan sinyal, tidak ada generator cadangan, tidak ada "mode demo".
+
+Konsekuensinya:
+
+| Kondisi | Perilaku |
 |---|---|
-| `true` (default, demo) | Jika data nyata tidak tersedia, engine membuat *sinyal simulasi*. Setiap record diberi `isSimulated: true` dan UI menampilkan badge **SIMULASI** berwarna kuning. |
-| `false` (produksi) | Tidak ada data yang dikarang. Platform tanpa data nyata melaporkan volume `0` dan ditandai `isSimulated: true`. |
+| Sumber belum dikonfigurasi | Kanal tetap kosong; UI menampilkan tanda `no data` |
+| Sumber dikonfigurasi tetapi gagal (jaringan, kuota, TLS) | Kanal tetap kosong; kegagalan dicatat di log server |
+| Sumber mengembalikan hasil | Hanya mention yang benar-benar tersimpan yang dihitung |
+| `/api/predict-trends` tidak tersedia | UI menandai forecast sebagai *sample*, bukan prediksi |
 
-> **Rekomendasi:** untuk deployment publik yang dipakai mengambil keputusan, set `ENABLE_SIMULATED_DATA="false"` dan sediakan `GEMINI_API_KEY`. Dashboard kosong lebih baik daripada dashboard yang berisi angka karangan.
+`GET /api/data-sources` menjelaskan sumber mana yang aktif, sehingga tampilan kosong tidak pernah salah diartikan sebagai aplikasi rusak. Untuk melihat data, setidaknya satu sumber harus berfungsi: `GEMINI_API_KEY` (Google Search grounding, mencakup kanal tertutup), `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, atau akses jaringan ke Reddit.
+
+### Autentikasi API (opsional, wajib saat deploy)
+Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pada setiap `POST`/`PUT`/`PATCH`/`DELETE` di bawah `/api`. Rute `GET` tetap publik agar dashboard dan uptime check tidak perlu menyimpan token. Perbandingan token memakai `timingSafeEqual`. Bila variabel kosong (mode pengembangan lokal), auth dimatikan.
 
 ### Variabel lingkungan
-Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Gemini, port, CORS, trust proxy, Firestore, sumber data opsional, dan saklar simulasi).
+Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Gemini, port, CORS, trust proxy, Firestore, dan sumber data opsional).
 
 ### Health check
-`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, simulatedDataEnabled }`. Cocok untuk load balancer dan uptime monitor.
+`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`. Cocok untuk load balancer dan uptime monitor.
 
 ## 💻 Cara Menjalankan Secara Lokal (Local Development)
 
