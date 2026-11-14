@@ -410,7 +410,7 @@ perbandingan klaim README dengan kode.
 | # | Temuan | Kenapa belum |
 |---|---|---|
 | L1 | `src/components/CommandStrip.tsx` mendefinisikan `StripSignal`/`connection`/`signals` yang sebagian tidak dirender lagi setelah pita sweep dihapus; masih ada sisa parameter | perlu keputusan desain: kembalikan pita kanal atau sederhanakan komponennya |
-| L2 | `server.ts` masih 2.236 baris: kolektor (9 fungsi), health probe, rute, dan bootstrap dalam satu file | pemecahan menyentuh hampir seluruh file; sebaiknya PR terpisah agar mudah di-review |
+| L2 | ~~`server.ts` 2.236 baris~~ | **SELESAI** (commit `4734e9a`): `server.ts` kini 291 baris; modul di `src/server/` + `src/server/routes/` |
 | L3 | `/api/social-signals` mengembalikan `globalBuzzIndex`, `crossPlatformCoherence`, dan `dominantPlatform` yang **tidak dipakai UI mana pun** | endpoint masih masuk akal sebagai API publik; alternatifnya menyederhanakan respons |
 | L4 | `samplePredictions` di `App.tsx` masih ada sebagai kerangka tata letak saat forecast belum berjalan | disengaja: diberi label "sample" dan `confidenceScore: 0`, bukan angka karangan — namun tetap perlu ditinjau apakah mau dipakai sama sekali |
 | L5 | Belum ada LICENSE | perlu keputusan lisensi |
@@ -429,3 +429,65 @@ npm audit --omit=dev                                     # 0 vulnerabilities
 
 Ukuran sekarang: `server.ts` 2.236 baris, `App.tsx` 916 (dari 2.633), 16
 dependency produksi, bundle `index` ~342 kB + `charts` ~377 kB.
+
+---
+
+## 12. Audit putaran ketiga — setelah pemecahan `server.ts`
+
+Dijalankan 2026-11-14 setelah commit `4734e9a` (pemecahan server) dan `2bfb9b5`
+(file SQLite).
+
+### 12.1 Temuan baru yang diperbaiki
+
+| Kode | Temuan | Bukti | Perbaikan |
+|---|---|---|---|
+| R20 | **Database SQLite ikut ter-commit di branch ini** | `git ls-files src/data/database.sqlite` mengembalikan file 68 KB; `git log --diff-filter=A` menunjuk `3d4d772`, commit yang justru membersihkan sisa SQLite | `git rm --cached` + hapus direktori, aturan `.gitignore` (`src/data/`, `*.sqlite`, `*.sqlite3`) dikembalikan — commit `2bfb9b5` |
+| R21 | **Catch-all `/api` didaftarkan di dalam `startServer()`**, yaitu setelah handler statis dan SPA | pada pengujian, layer catch-all baru muncul setelah `app.use(vite.middlewares)`; siapa pun yang mengimpor `app` tanpa memanggil `startServer()` tidak akan mendapat 404 JSON | dipindahkan tepat setelah tabel rute, sebelum blok statis; dijaga oleh `tests/server-routes.test.ts` |
+| R22 | **POST `/api/trackers` menjawab 200 saat penyimpanan gagal** | uji runtime tanpa database: respons 200 berisi tracker yang tidak pernah tersimpan; UI menampilkannya lalu lenyap pada polling berikutnya | sekarang 503 + `reason: "storage-unavailable"`; DELETE mengikuti aturan yang sama |
+| R23 | Sisa pembungkus `if (true) {` di jalur `listen` | `server.ts` sebelum pembersihan | dihapus, isi blok di-dedent |
+| R24 | Komentar CSP menyatakan CSP "sengaja dimatikan" padahal `helmet` memasang CSP yang disesuaikan | `server.ts` baris komentar vs konfigurasi `csp` di bawahnya | komentar diperbaiki agar sesuai kenyataan |
+
+### 12.2 Verifikasi
+
+```bash
+npx tsc --noEmit            # 0 error
+npm test                    # 25 storage + 6 route = 31 lulus, 0 gagal
+npm run build               # vite + esbuild ok, dist/server.cjs 91 kB
+node dist/server.cjs        # bundle produksi, tanpa .env
+```
+
+Uji runtime bundle produksi:
+
+| Permintaan | Hasil |
+|---|---|
+| `GET /api/health` | 200, `database.reason: "not-configured"` |
+| `GET /api/trackers` | 200, `[]`, `X-Data-Status: unavailable` |
+| `GET /api/dashboard-stats` | 200, semua angka 0 (bukan simulasi) |
+| `GET /api/social-signals` | 200, 25 kanal, semua volume 0 |
+| `GET /api/predict-trends` | 422, `reason: "no-data"` |
+| `GET /api/nope` | 404 JSON |
+| `POST /api/trackers` | 503, `reason: "storage-unavailable"` |
+| `DELETE /api/trackers/:id` | 503, `reason: "storage-unavailable"` |
+
+### 12.3 Peta modul setelah pemecahan
+
+| File | Baris | Isi |
+|---|---|---|
+| `server.ts` | 291 | boot, helmet/cors/rate-limit/token, registrasi rute, listen, shutdown |
+| `src/server/routes/aggregation.ts` | 471 | social-signals, dashboard-stats, predict-trends |
+| `src/server/routes/analysis.ts` | 180 | analyze-url, trigger-monitor |
+| `src/server/routes/trackers.ts` | 102 | CRUD tracker |
+| `src/server/routes/system.ts` | 55 | data-sources, channel-health, health |
+| `src/server/collectors.ts` | 862 | scraper + 10 kolektor + fan-out (berisi SSRF guard) |
+| `src/server/network-audit.ts` | 181 | probe egress/endpoint, cache health |
+| `src/server/data.ts` | 90 | `getDB` + 6 helper tulis |
+| `src/server/realtime.ts` | 50 | WebSocket, broadcast, close |
+| `src/server/ai.ts` | 45 | ketersediaan AI, cooldown, deskripsi kegagalan |
+| `src/server/logger.ts` | 33 | filter level + timestamp |
+| `src/server/scan-state.ts` | 22 | waktu scan terakhir (dipakai rute + loop latar) |
+
+### 12.4 Sisa yang masih terbuka
+
+L1 (sisa parameter `CommandStrip`), L3 (field `/api/social-signals` tak dipakai),
+L4 (`samplePredictions`), L5 (LICENSE), L6 (catatan egress sandbox di README).
+L2 sudah selesai.
