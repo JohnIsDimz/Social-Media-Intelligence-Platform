@@ -17,9 +17,14 @@
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="manifest" href="/manifest.json" />
     <title>Social Media Intelligence Platform (S.M.I.P)</title>
+    <!-- These two placeholders are replaced at build time with hashed asset
+         names (see scripts/build.mjs). A file the browser has to guess the name
+         of is a file that gets cached wrongly, so the names are content-addressed
+         and the HTML is the only thing that changes between deployments. -->
+    <link rel="stylesheet" href="%APP_CSS%" />
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="%APP_JS%"></script>
   </body>
 </html>

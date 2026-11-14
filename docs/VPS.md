@@ -57,6 +57,9 @@ sudo useradd --system --create-home --shell /usr/sbin/nologin smip
 sudo mkdir -p /opt/smip && sudo chown smip:smip /opt/smip
 sudo -u smip git clone https://github.com/JohnIsDimz/Social-Media-Intelligence-Platform.git /opt/smip
 cd /opt/smip
+# `npm ci` must install devDependencies: the build uses esbuild, the Tailwind CLI
+# and TypeScript, all of which are dev-only. `npm ci --omit=dev` here leaves you
+# with no CSS and no bundle.
 sudo -u smip npm ci && sudo -u smip npm run build
 sudo -u smip cp .env.example .env && sudo -u smip $EDITOR .env
 sudo cp deploy/smip.service /etc/systemd/system/
@@ -66,6 +69,29 @@ journalctl -u smip -f
 
 The unit runs with `ProtectSystem=strict`, `NoNewPrivileges`, a private `/tmp`,
 and write access limited to `src/data`.
+
+## 2a. What `npm run build` produces (build pipeline 2.0)
+
+```
+dist/index.html                  the shell; asset names injected, served no-cache
+dist/assets/app.<hash>.js        the client bundle, served immutable for a year
+dist/assets/index.<hash>.css     Tailwind output, served immutable for a year
+dist/server.cjs                  the Express server, run by node
+dist/sw.js, dist/manifest.json   copied from public/, served no-cache
+```
+
+No Vite, no rollup, no source maps. `dist/` is the only thing the server reads, so
+a deploy is "build, then restart" — there is no middleware that compiles on demand.
+
+Two things worth checking after a deploy:
+
+```bash
+curl -s https://your.domain/ | grep -o 'assets/app\.[a-f0-9]*\.js'   # hashed name
+curl -s -o /dev/null -w '%{http_code}\n' https://your.domain/server.cjs  # 404
+curl -sI https://your.domain/assets/$(...) | grep -i cache-control     # immutable
+```
+
+If `/server.cjs` answers 200, the deploy is running a build from before 2.0.
 
 ## 3. TLS reverse proxy
 

@@ -9,14 +9,37 @@ Selamat datang di repositori resmi **S.M.I.P (Social Media Intelligence Platform
 Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang menjamin penyajian data secara instan, interaktif, dan andal.
 
 ### 1. Antarmuka Pengguna (Frontend Stack)
-*   **React 19 & Vite**: Kerangka kerja utama dengan bundler ultra-cepat untuk rendering visual yang responsif.
-*   **Tailwind CSS**: Desain visual presisi tinggi dengan pendekatan modern, kontras yang seimbang, dan ramah pengguna.
-*   **Recharts**: grafik forecast dan sebaran emosi; `share of voice` memakai bar chart ringan buatan sendiri. Dimuat sebagai chunk terpisah (`charts`, ~377 kB) supaya shell tetap ringan.
+*   **React 19 + esbuild**: klien dibundel esbuild langsung (tanpa Vite) menjadi satu file `dist/assets/app.<hash>.js`. Tidak ada bundler framework di jalur produksi maupun di jalur dev — lihat §1a.
+*   **Tailwind CSS v4 (CLI)**: desain visual presisi tinggi; stylesheet dibangun `@tailwindcss/cli` dengan hash nama file.
+*   **Tanpa library chart**: grafik forecast adalah SVG buatan sendiri (`ConfidenceTrend`), `share of voice` adalah bar chart CSS. `recharts` (~377 kB) sudah dihapus pada migrasi 2.0.
 *   **CSS motion saja (tanpa library animasi)**: satu `settle` saat konten masuk, sapuan radar 60 detik di dial, semuanya dinonaktifkan otomatis saat `prefers-reduced-motion: reduce`.
 *   **Browser Notifications API & Service Worker**:
     *   Mendaftarkan Service Worker (`/sw.js`) di latar belakang untuk menjamin aplikasi tetap terdaftar pada sistem operasi.
     *   Dinyalakan dari panel kiri bawah (**Desktop alerts off/on**).
     *   Memicu notifikasi desktop saat mention baru masuk lewat WebSocket selama tab masih terbuka; notifikasi saat browser tertutup butuh Web Push (belum ada).
+
+### 1a. Build & dev tanpa Vite (migrasi 2.0)
+
+Vite sudah dihapus dari `package.json`, kode, dan lockfile. Yang menggantikannya hanya
+dua alat yang sudah ada di rantai build sejak awal:
+
+| Kebutuhan | Dulu (Vite) | Sekarang |
+| --- | --- | --- |
+| Bundel klien | `vite build` (rollup) | `esbuild --bundle` → `dist/assets/app.<hash>.js` |
+| Stylesheet | `@tailwindcss/vite` (plugin) | `@tailwindcss/cli` → `dist/assets/index.<hash>.css` |
+| Dev server | `vite` middleware di dalam Express | esbuild `context().watch()` + Tailwind `--watch=always` menulis ke `dist/`, Express hanya menyajikan |
+| HTML | `index.html` diproses Vite | `index.html` di root, `%APP_CSS%`/`%APP_JS%` diganti nama ber-hash oleh `scripts/build.mjs` |
+| Flag dev/prod | `import.meta.env.DEV` | `__DEV__` yang di-`define` saat build |
+| Server | `esbuild` (sudah ada) | tidak berubah: `dist/server.cjs` |
+
+Konsekuensi yang disengaja:
+
+*   **Server tidak lagi menjalankan compiler di dalam request.** Dulu `NODE_ENV !== "production"` memasang middleware Vite di Express, sehingga satu proses menjalankan bundler saat melayani halaman. Sekarang `npm run dev` menjalankan tiga proses biasa (esbuild watch, Tailwind watch, `tsx watch server.ts`) yang menulis ke `dist/`, dan server hanya membaca direktori itu. Yang diuji lokal adalah bentuk yang sama dengan yang di-deploy.
+*   **Nama file ber-hash.** `dist/assets/*` disajikan `Cache-Control: public, max-age=31536000, immutable`; `index.html`, `sw.js`, dan `manifest.json` disajikan `no-cache`.
+*   **`dist/` tidak lagi bocor.** `server.cjs` dan source map tinggal di direktori yang sama dengan aset klien. Request `/server.cjs`, `/server.cjs.map`, dan seluruh `*.map` diblokir 404 sebelum `express.static`, dan build produksi tidak lagi menghasilkan source map klien.
+*   **Tidak ada HMR.** Perubahan klien memicu rebuild (<100 ms) dan halaman perlu di-refresh. Itu pertukaran yang disengaja: satu alat lebih sedikit, dan tidak ada websocket dev yang harus diizinkan CSP.
+
+Perintahnya tetap sama: `npm run dev`, `npm run build`, `npm start`, `npm test`, `npm run verify`.
 
 ### 2. Layanan Backend & Real-time (Backend Stack)
 *   **Node.js & Express**: Server backend yang tangguh untuk memproses analitik, mengelola tracker, dan menyajikan API.

@@ -291,3 +291,13 @@
     opacity: 0.9;
   }
 }
+
+/* Tailwind v4 scans source files for class names; it does not know about classes
+ * that only exist inside a template string. Listing them here is the documented
+ * way to keep them from being tree-shaken away.
+ *
+ * Currently empty: every class in this app is a literal in a className. The
+ * comment exists so the next person who builds a class name dynamically puts it
+ * here instead of wondering why the style silently never applies.
+ */
+@source inline("hidden");

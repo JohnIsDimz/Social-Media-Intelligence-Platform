@@ -40,6 +40,23 @@ jobs:
       - name: Build frontend + server bundle
         run: npm run build
 
+      # The build replaces Vite with esbuild + the Tailwind CLI, so this asserts
+      # the artefacts exist with hashed names and that nothing the server is not
+      # supposed to publish ended up in dist/.
+      - name: Verify build output
+        run: |
+          set -e
+          test -f dist/index.html
+          ls dist/assets/app.*.js > /dev/null
+          ls dist/assets/index.*.css > /dev/null
+          test -f dist/server.cjs
+          if ls dist/assets/*.map > /dev/null 2>&1; then
+            echo "source maps must not be published"; exit 1
+          fi
+          grep -q 'assets/app\.' dist/index.html
+          grep -q 'assets/index\.' dist/index.html
+          echo "build output OK"
+
       - name: Security audit
         run: npm audit --omit=dev --audit-level=high
 
@@ -53,4 +70,7 @@ jobs:
             sleep 1
           done
           curl -sf http://127.0.0.1:3000/api/health
+          # The server bundle lives in dist/ next to the client and must never be
+          # downloadable.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/server.cjs)" = "404"
           kill $SERVER_PID
