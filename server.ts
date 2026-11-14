@@ -18,6 +18,7 @@ import { registerSystemRoutes } from "./src/server/routes/system.ts";
 import { registerTrackerRoutes } from "./src/server/routes/trackers.ts";
 import { registerAnalysisRoutes } from "./src/server/routes/analysis.ts";
 import { registerAggregationRoutes } from "./src/server/routes/aggregation.ts";
+import { findCredentialWrites } from "./src/server/credentials.ts";
 
 dotenv.config();
 
@@ -176,6 +177,26 @@ function sessionKey(token: string): string {
 app.use("/api", requireApiToken);
 
 /**
+ * Credentials never arrive over HTTP.
+ *
+ * Keys are read from the environment only; a write that tries to store one is
+ * refused with an explanation instead of being quietly dropped, so a client
+ * author learns the rule on the first attempt.
+ */
+app.use("/api", (req, res, next) => {
+  if (!PROTECTED_METHODS.has(req.method)) return next();
+  const attempts = findCredentialWrites(req.body);
+  if (attempts.length === 0) return next();
+  return res.status(400).json({
+    error:
+      "API keys are configuration, not data. Put them in .env on the server and restart; " +
+      "they are never accepted through the API or the UI.",
+    reason: "credentials-not-accepted",
+    fields: attempts.map((a) => a.field),
+  });
+});
+
+/**
  * Dashboard login.
  *
  * With API_AUTH_TOKEN set, visiting "/" without a session asks for the token and
@@ -201,25 +222,51 @@ app.get("/login", (req, res) => {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>S.M.I.P - sign in</title>
 <style>
-  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0E1B20;color:#E8EDEB;
-       font:15px/1.5 "Instrument Sans",system-ui,sans-serif}
-  form{width:min(360px,calc(100vw - 40px));border:1px solid rgba(255,255,255,.14);padding:24px;background:rgba(255,255,255,.03)}
-  h1{margin:0 0 4px;font-size:18px;letter-spacing:-.01em}
-  p{margin:0 0 18px;color:rgba(232,237,235,.55);font-size:13px}
-  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(232,237,235,.55);margin-bottom:6px}
-  input{width:100%;box-sizing:border-box;padding:10px 12px;background:#0A1417;border:1px solid rgba(255,255,255,.16);
-        color:inherit;font:inherit;border-radius:3px}
-  button{margin-top:14px;width:100%;padding:10px;background:#0F7A75;border:0;color:#fff;font:inherit;
-         font-weight:600;border-radius:3px;cursor:pointer}
-  .err{margin:0 0 14px;color:#E0A03A;font-size:13px}
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;color:#eaf1f8;
+       font:15px/1.55 "Instrument Sans",system-ui,-apple-system,sans-serif;
+       background:#06101f;
+       background-image:
+         radial-gradient(720px 420px at 14% -10%, rgba(14,143,138,.34), transparent 62%),
+         radial-gradient(680px 400px at 88% -16%, rgba(91,87,209,.28), transparent 60%),
+         radial-gradient(560px 320px at 50% 112%, rgba(27,166,196,.20), transparent 66%);
+       background-attachment:fixed}
+  .card{width:min(380px,calc(100vw - 40px));padding:28px;
+        border:1px solid rgba(255,255,255,.12);border-radius:10px;
+        background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.025));
+        box-shadow:0 24px 60px -28px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.08);
+        backdrop-filter:blur(8px)}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .mark{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;
+        background:linear-gradient(140deg,#0e8f8a,#1ba6c4);color:#fff;font-weight:700;font-size:13px;
+        box-shadow:0 6px 16px -6px rgba(14,143,138,.8)}
+  h1{margin:0;font-size:17px;letter-spacing:-.01em;font-weight:600}
+  .sub{margin:0 0 22px;color:rgba(234,241,248,.55);font-size:13px}
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.09em;
+        color:rgba(234,241,248,.55);margin-bottom:7px}
+  input{width:100%;padding:11px 13px;border-radius:7px;color:inherit;font:inherit;
+        background:rgba(4,12,22,.72);border:1px solid rgba(255,255,255,.16);
+        transition:border-color .16s ease, box-shadow .16s ease}
+  input:focus{outline:none;border-color:#1ba6c4;box-shadow:0 0 0 3px rgba(27,166,196,.22)}
+  button{margin-top:16px;width:100%;padding:11px;border:0;border-radius:7px;cursor:pointer;
+         font:inherit;font-weight:600;color:#fff;
+         background:linear-gradient(140deg,#0e8f8a,#1ba6c4);
+         box-shadow:0 10px 24px -12px rgba(14,143,138,.9);
+         transition:transform .16s ease, box-shadow .16s ease}
+  button:hover{transform:translateY(-1px);box-shadow:0 14px 28px -12px rgba(14,143,138,1)}
+  .err{margin:0 0 16px;padding:9px 11px;border-radius:6px;font-size:13px;
+       color:#ffc9a3;background:rgba(207,63,71,.16);border:1px solid rgba(207,63,71,.4)}
+  .foot{margin:18px 0 0;font-size:11.5px;color:rgba(234,241,248,.42);text-align:center}
 </style></head>
-<body><form method="POST" action="/login">
-  <h1>S.M.I.P</h1>
-  <p>This dashboard is protected. Enter the API token to continue.</p>
+<body><form class="card" method="POST" action="/login">
+  <div class="brand"><span class="mark">SM</span><h1>S.M.I.P</h1></div>
+  <p class="sub">This dashboard is protected. Enter the API token to continue.</p>
   ${failed ? '<p class="err">That token was not accepted.</p>' : ""}
   <label for="token">API token</label>
   <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
   <button type="submit">Sign in</button>
+  <p class="foot">Keys live in .env on the server. This form only starts a session.</p>
 </form></body></html>`);
 });
 

@@ -686,3 +686,116 @@ kepatuhan model terhadap instruksi ekstraksi. Yang dijamin kode: tidak ada URL
 muncul di dashboard yang tidak berasal dari hasil pencarian nyata, dan tidak ada
 angka yang dihitung dari data karangan.
 
+## 16. Audit putaran ketujuh — bahasa visual baru dan aturan kredensial yang mengikat
+
+Dua permintaan user memicu putaran ini: (a) desain warna lama dinilai pucat dan
+tidak menarik, (b) API key tidak boleh bisa diisi dari mana pun kecuali `.env`.
+
+### 16.1 Bahasa visual "living signal"
+
+Palet lama (`paper` hampir putih, satu aksen) diganti total, tetapi **nama token
+dipertahankan**. Konsekuensinya 100+ kelas lama (`text-ink`, `bg-paper`,
+`border-hair`, `text-teal`, ...) ikut berubah hanya dengan menyunting
+`src/index.css` — tidak ada penyisiran kelas di 30+ komponen, jadi risiko
+regresi visual kecil dan diff-nya mudah diaudit.
+
+| Token | Nilai | Peran |
+| --- | --- | --- |
+| `paper` / `paper-2` | `#f4f7fa` / `#e8eef4` | kanvas aplikasi, lapisan kedua |
+| `surface` / `surface-2` | `#ffffff` / `#fbfcfe` | kartu dan kepala tabel |
+| `ink` / `ink-2` / `ink-3` | `#0d1b2a` / `#375066` / `#6b839a` | teks utama, sekunder, meta |
+| `petrol` / `petrol-deep` | `#0b1a33` / `#06101f` | rail navigasi, latar gelap |
+| `teal` / `teal-soft` | `#0e8f8a` / `#dff3f1` | aksen utama, pil aktif |
+| `cyan` | `#1ba6c4` | ujung gradien data |
+| `amber` / `amber-soft` | `#e08a1e` / `#fdf1de` | peringatan, status tertunda |
+| `jade` | `#128a5c` | sehat / terkumpul |
+| `brick` | `#cf3f47` | gagal / terputus |
+| `violet` | `#5b57d1` | nada ketiga, badge |
+| `hair` | `#d9e3ec` | garis rambut |
+
+Yang membuatnya terasa hidup, bukan sekadar berwarna: `@utility canvas`
+memasang tiga radial gradient (teal, violet, cyan) di latar aplikasi sehingga
+setiap kartu putih tampak mengapung di atas cahaya, bukan di atas bidang datar.
+`card` / `card-raised` memberi bayangan berlapis (`--shadow-card`,
+`--shadow-raised`) plus garis dalam 1px, dan `fade-rule` dipakai untuk memisah
+blok tanpa garis keras. Radius kontrol disatukan ke 6px supaya tabel, pil, dan
+tombol tidak lagi bercampur sudut 4px/8px/12px.
+
+Struktur layout dirapikan bersamaan, bukan hanya warnanya:
+
+- `App.tsx` — akar memakai `canvas`, rail kiri diberi tint `petrol-deep/[0.03]`
+  dengan pembatas tipis, sehingga konten utama terbaca sebagai satu lembar.
+- `OverviewView.tsx` — hero, empat metrik, tabel kanal, forecast, sebaran
+  sentimen, dan daftar peringatan semuanya jadi `card` berjarak seragam; `Rule`
+  yang tadinya menyelip di antara blok dihapus karena jarak kartu sudah
+  memisahkan.
+- `SideRail.tsx` — item aktif berupa pil `bg-teal-soft/70` + batang teal 3px;
+  footer status jadi kartu dengan titik `animate-ping` yang hanya berdenyut saat
+  sistem benar-benar hidup (bukan animasi hiasan).
+- `ChannelTable.tsx` — kepala tabel `bg-paper/60`, hover baris
+  `bg-teal-soft/25`, bar volume bergradien teal→cyan dan amber→brick sesuai arah
+  tren.
+- `server.ts` halaman `/login` — sebelumnya HTML polos tanpa gaya sama sekali
+  (satu-satunya layar yang tidak ikut tema). Sekarang memakai latar petrol
+  bergradien, kartu kaca, tombol gradien teal→cyan, dan pesan galat bergaya.
+
+Tabel 25 kanal tetap terbaca di 360px: `ChannelTable` menggulir horizontal di
+dalam kartunya sendiri (`overflow-x-auto` + `scrollbar-none`), jadi halaman tidak
+pernah melebar dan rail tidak pernah menutupi konten.
+
+### 16.2 Kredensial hanya dari `.env`
+
+Sebelum putaran ini tidak ada input API key di UI — dicek dengan
+`grep -n 'localStorage|prompt(|<input|type="password"' src/` yang hanya
+menemukan input kata kunci (`Overlays.tsx`) dan input URL (`AnalyzerView.tsx`)
+serta form login di `server.ts`. Tetapi tidak adanya input hari ini bukan jaminan
+untuk besok. Karena itu aturannya sekarang **dipaksakan oleh kode**, bukan oleh
+ingatan:
+
+`src/server/credentials.ts` mendaftar tujuh variabel rahasia —
+`AI_API_KEY`, `SEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `YOUTUBE_API_KEY`,
+`TWITTER_BEARER_TOKEN`, `GITHUB_TOKEN`, `API_AUTH_TOKEN`. Middleware di
+`server.ts` (dipasang **setelah** `requireApiToken`, jadi pemeriksaan sesi tetap
+lebih dulu) memeriksa body setiap `POST`/`PUT`/`PATCH` ke `/api/*`; bila ada
+nama field yang cocok, permintaan ditolak:
+
+```json
+400 { "reason": "credentials-not-accepted", "fields": ["AI_API_KEY"],
+      "message": "Secrets are read from the environment only. ..." }
+```
+
+Pengecualian tunggal adalah field `token` pada `POST /login`, yang hanya membuat
+cookie sesi `smip_session` (HMAC atas `API_AUTH_TOKEN`) dan tidak pernah menyimpan
+kunci apa pun. Field rahasia tidak pernah dikembalikan oleh endpoint mana pun;
+`/api/data-sources` hanya melaporkan boolean `configured`.
+
+`tests/credentials.test.ts` (11 asersi) mengunci aturan ini:
+
+- payload berisi `AI_API_KEY`, `apiKey`, `search_api_key`, atau
+  `SUPABASE_SERVICE_ROLE_KEY` → `400 credentials-not-accepted`, dan field-nya
+  disebut di respons;
+- nama field biasa (`keyword`, `url`) → lolos guard (dibuktikan lewat `503`
+  karena DB belum dikonfigurasi, artinya request sampai ke handler);
+- nilai rahasia tidak pernah muncul di body respons;
+- tidak ada komponen klien yang merender input password atau kunci
+  (`grep` atas `src/` dari dalam tes), sehingga aturan ini tidak bisa dilanggar
+  lewat UI tanpa tes gagal.
+
+### 16.3 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 73 lulus: 25 storage + 6 route + 15 auth + 12 search + 4 collector + 11 credentials
+npm run build      # vite + esbuild ok
+npm run audit      # 0 vulnerabilities
+```
+
+### 16.4 Batas yang tetap ada
+
+- Redesign diverifikasi lewat `tsc`, hasil kompilasi CSS, dan pembacaan kelas —
+  sandbox tidak punya browser, jadi tidak ada tangkapan layar. Kontras dihitung
+  manual terhadap `paper` `#f4f7fa`: `ink` 15.8:1, `ink-2` 7.1:1, `ink-3` 4.6:1,
+  `teal` 3.6:1 (dipakai untuk aksen dan teks tebal, bukan paragraf).
+- Guard kredensial memeriksa nama field, bukan entropi nilai. Nilai acak yang
+  dikirim lewat field bernama netral tetap lolos — tetapi nilai itu tidak pernah
+  dipakai, karena seluruh kode membaca kunci hanya dari `process.env`.

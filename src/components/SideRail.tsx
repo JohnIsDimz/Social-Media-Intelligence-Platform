@@ -59,16 +59,22 @@ export function SideRail({
                   onClick={() => onChangeView(key)}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "group flex w-full items-start gap-2.5 border-l-2 py-2 pl-3 pr-2 text-left transition-colors",
+                    "group relative flex w-full items-start gap-2.5 rounded-[6px] py-2 pl-3 pr-2 text-left transition-all",
                     active
-                      ? "border-amber text-ink"
-                      : "border-transparent text-ink-2 hover:border-hair hover:text-ink"
+                      ? "bg-teal-soft/70 text-ink shadow-[inset_0_0_0_1px_rgba(14,143,138,0.22)]"
+                      : "text-ink-2 hover:bg-surface hover:text-ink"
                   )}
                 >
+                  {active && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-teal"
+                    />
+                  )}
                   <Icon
                     size={14}
                     aria-hidden="true"
-                    className={cn("mt-[3px] shrink-0", active ? "text-amber" : "text-ink-3")}
+                    className={cn("mt-[3px] shrink-0", active ? "text-teal" : "text-ink-3")}
                   />
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span className={cn("text-[14px]", active ? "font-semibold" : "font-medium")}>
@@ -141,14 +147,21 @@ export function SideRail({
         )}
       </div>
 
-      <div className="mt-auto flex flex-col gap-2 border-t border-hair pt-4">
+      <div className="mt-auto flex flex-col gap-2 rounded-[6px] border border-hair bg-surface/70 p-3">
         <div className="flex items-center gap-2">
-          <Activity
-            size={12}
-            aria-hidden="true"
-            className={cn(isUp ? "text-jade" : connection === "connecting" ? "text-amber" : "text-brick")}
-          />
-          <span className="text-[12px] text-ink-2">{connectionLabel}</span>
+          <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
+            {isUp && (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-jade opacity-70" />
+            )}
+            <span
+              className={cn(
+                "relative inline-flex h-1.5 w-1.5 rounded-full",
+                isUp ? "bg-jade" : connection === "connecting" ? "bg-amber" : "bg-brick"
+              )}
+            />
+          </span>
+          <span className="text-[12px] font-medium text-ink-2">{connectionLabel}</span>
+          <Activity size={11} aria-hidden="true" className="ml-auto text-ink-3" />
         </div>
 
         <button

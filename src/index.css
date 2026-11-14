@@ -2,26 +2,46 @@
 @import "tailwindcss";
 
 @theme {
-  /* Signal Room palette — porcelain canvas with a cool cast, petrol ink. */
-  --color-paper: #f2f4f3;
-  --color-paper-2: #e8ecea;
-  --color-ink: #10232a;
-  --color-ink-2: #3b5158;
-  --color-ink-3: #6c8087;
-  --color-petrol: #0e3f4a;
-  --color-petrol-deep: #0a2c34;
-  --color-teal: #0f7a75;
-  --color-teal-soft: #e3efed;
-  --color-amber: #d9861f;
-  --color-amber-soft: #fbf0dd;
-  --color-jade: #1f7a5c;
-  --color-brick: #b03a32;
-  --color-hair: #d3dad7;
+  /* "Living signal" palette.
+   *
+   * A cool porcelain canvas so figures read cleanly, a deep navy chrome for the
+   * top and left edges so the workspace looks like an instrument rather than a
+   * document, and four saturated accents with distinct jobs: teal is the product
+   * voice, cyan is movement, amber is attention, emerald/rose are sentiment.
+   *
+   * Token names are stable on purpose — bg-petrol still means "the dark chrome"
+   * everywhere — so a palette change is one file, not a hundred class edits.
+   */
+  --color-paper: #f4f7fa;
+  --color-paper-2: #e8eef4;
+  --color-surface: #ffffff;
+  --color-surface-2: #fbfcfe;
+
+  --color-ink: #0d1b2a;
+  --color-ink-2: #375066;
+  --color-ink-3: #6b839a;
+
+  --color-petrol: #0b1a33;
+  --color-petrol-deep: #06101f;
+  --color-teal: #0e8f8a;
+  --color-teal-soft: #dff3f1;
+  --color-cyan: #1ba6c4;
+  --color-amber: #e08a1e;
+  --color-amber-soft: #fdf1de;
+  --color-jade: #128a5c;
+  --color-brick: #cf3f47;
+  --color-violet: #5b57d1;
+  --color-hair: #d9e3ec;
 
   --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
 
-  --radius-control: 5px;
+  --radius-control: 6px;
+
+  /* Depth: two steps, so a card can sit on the page and a raised card on a card. */
+  --shadow-card: 0 1px 2px rgba(13, 27, 42, 0.05), 0 8px 24px -12px rgba(13, 27, 42, 0.18);
+  --shadow-raised: 0 2px 4px rgba(13, 27, 42, 0.06), 0 18px 40px -20px rgba(13, 27, 42, 0.28);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 @layer base {
@@ -32,6 +52,8 @@
   body {
     background-color: var(--color-paper);
     color: var(--color-ink);
+    /* The canvas gradient is painted by the .canvas utility at the app root; a
+     * flat colour stays here as the fallback for print and for no-support. */
     font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
@@ -57,8 +79,8 @@
   }
 
   ::selection {
-    background: var(--color-amber-soft);
-    color: var(--color-ink);
+    background: var(--color-teal-soft);
+    color: var(--color-petrol-deep);
   }
 
   /* Quiet, product-appropriate scrollbars. */
@@ -78,6 +100,38 @@
     width: 0;
     height: 0;
   }
+}
+
+/* The page has a faint instrument glow so it does not read as a blank sheet. */
+@utility canvas {
+  background-color: var(--color-paper);
+  background-image:
+    radial-gradient(900px 480px at 12% -8%, rgba(14, 143, 138, 0.10), transparent 62%),
+    radial-gradient(760px 420px at 92% -14%, rgba(91, 87, 209, 0.09), transparent 60%),
+    radial-gradient(680px 380px at 50% 108%, rgba(27, 166, 196, 0.07), transparent 65%);
+  background-attachment: fixed;
+}
+
+/* One card style, so every panel in the product matches. */
+@utility card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-hair);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 180ms ease, transform 180ms ease, border-color 180ms ease;
+}
+
+@utility card-raised {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-hair);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-raised);
+}
+
+/* A hairline that fades out, used to separate bands without drawing a hard rule. */
+@utility fade-rule {
+  background-image: linear-gradient(to right, transparent, var(--color-hair), transparent);
+  height: 1px;
 }
 
 @utility hairline {

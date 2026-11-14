@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "audit": "npm audit --omit=dev --audit-level=high",
-    "test": "tsx tests/supabase.test.ts && tsx tests/server-routes.test.ts && tsx tests/auth-session.test.ts && tsx tests/search.test.ts && tsx tests/search-collector.test.ts",
+    "test": "tsx tests/supabase.test.ts && tsx tests/server-routes.test.ts && tsx tests/auth-session.test.ts && tsx tests/search.test.ts && tsx tests/search-collector.test.ts && tsx tests/credentials.test.ts",
     "verify": "tsc --noEmit && npm test && npm run build"
   },
   "dependencies": {

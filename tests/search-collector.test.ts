@@ -16,7 +16,6 @@ process.env.AI_BASE_URL = "http://127.0.0.1:9188/v1";
 
 import http from "node:http";
 
-const realFetch = globalThis.fetch;
 const server = http.createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));

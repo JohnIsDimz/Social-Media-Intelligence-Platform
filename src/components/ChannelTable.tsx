@@ -25,11 +25,11 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
         </caption>
         <thead>
           <tr className="border-b border-hair text-left">
-            <th scope="col" className="label py-2 pr-4 font-medium">Channel</th>
-            <th scope="col" className="label py-2 pr-4 font-medium">Volume</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Sentiment</th>
-            <th scope="col" className="label py-2 pr-4 text-right font-medium">Velocity</th>
-            <th scope="col" className="label py-2 pr-1 text-right font-medium">Signal</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 font-medium">Channel</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 font-medium">Volume</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 text-right font-medium">Sentiment</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-4 text-right font-medium">Velocity</th>
+            <th scope="col" className="label bg-paper/60 py-2 pr-1 text-right font-medium">Signal</th>
           </tr>
         </thead>
         <tbody>
@@ -45,7 +45,7 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
             return (
               <tr
                 key={r.platform}
-                className="settle border-b border-hair/70 last:border-0"
+                className="settle border-b border-hair/60 transition-colors last:border-0 hover:bg-teal-soft/25"
                 style={{ animationDelay: `${60 + i * 40}ms` }}
               >
                 <th scope="row" className="py-2.5 pr-4 text-left font-medium text-ink">
@@ -65,13 +65,10 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
 
                 <td className="py-2.5 pr-4">
                   <span className="flex items-center gap-2">
-                    <span className="relative h-[3px] w-24 overflow-hidden rounded-full bg-paper-2">
+                    <span className="relative h-[4px] w-24 overflow-hidden rounded-full bg-paper-2">
                       <span
-                        className={cn(
-                          "absolute inset-y-0 left-0 rounded-full",
-                          "bg-teal"
-                        )}
-                        style={{ width: `${Math.max(3, pct)}%` }}
+                        className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-teal to-cyan transition-[width] duration-500"
+                        style={{ width: `${empty ? 0 : Math.max(4, pct)}%` }}
                       />
                     </span>
                     <span className="tnum text-ink-2">{empty ? "—" : fmt(r.buzzVolume)}</span>
@@ -97,15 +94,15 @@ export function ChannelTable({ rows }: { rows: ChannelRow[] }) {
 
                 <td className="py-2.5 pl-1 pr-0 text-right">
                   <span className="inline-flex items-center justify-end gap-2">
-                    <span className="relative h-[6px] w-14 overflow-hidden rounded-[1px] bg-paper-2">
+                    <span className="relative h-[6px] w-14 overflow-hidden rounded-[2px] bg-paper-2">
                       <span
                         className={cn(
-                          "absolute inset-y-0 left-0",
+                          "absolute inset-y-0 left-0 rounded-[2px] transition-[width] duration-500",
                           r.signalStrength >= 70
-                            ? "bg-amber"
+                            ? "bg-gradient-to-r from-amber to-brick"
                             : r.signalStrength >= 40
-                              ? "bg-teal"
-                              : "bg-ink-3/45"
+                              ? "bg-gradient-to-r from-teal to-cyan"
+                              : "bg-ink-3/50"
                         )}
                         style={{ width: `${Math.max(2, r.signalStrength)}%` }}
                       />
