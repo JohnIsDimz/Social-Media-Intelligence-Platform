@@ -1,4 +1,3 @@
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { cn } from "../lib/ui";
 import type { AIPredictionReport } from "../types";
 import { RefreshCw, Sparkles } from "lucide-react";
@@ -87,49 +86,12 @@ export function TrendForecast({
 
       <p className="max-w-[72ch] text-[14px] leading-relaxed text-ink-2">{predictions.summary}</p>
 
-      <div className="mt-5 h-24 w-full" aria-hidden="true">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart
-            data={predictions.predictions.map((p, i) => ({
-              day: `D+${i + 1}`,
-              confidence: Math.round(p.confidenceScore * 100),
-            }))}
-            margin={{ top: 6, right: 4, left: 4, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id="confFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#0F7A75" stopOpacity={0.22} />
-                <stop offset="100%" stopColor="#0F7A75" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <XAxis
-              dataKey="day"
-              axisLine={false}
-              tickLine={false}
-              tick={{ fontSize: 11, fill: "#6C8087" }}
-            />
-            <Tooltip
-              contentStyle={{
-                borderRadius: 5,
-                border: "1px solid #D3DAD7",
-                fontSize: 12,
-                fontFamily: "Instrument Sans, sans-serif",
-              }}
-              formatter={(v) => [`${v}% confidence`, ""]}
-            />
-            <Area
-              type="monotone"
-              dataKey="confidence"
-              stroke="#0F7A75"
-              strokeWidth={1.5}
-              fill="url(#confFill)"
-              dot={{ r: 2.5, fill: "#0F7A75", strokeWidth: 0 }}
-              isAnimationActive
-              animationDuration={700}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
+      <ConfidenceTrend
+        points={predictions.predictions.map((p, i) => ({
+          day: `D+${i + 1}`,
+          confidence: Math.round(p.confidenceScore * 100),
+        }))}
+      />
 
       <ol className="mt-1 flex flex-col">
         {predictions.predictions.map((p, i) => {
@@ -195,5 +157,60 @@ export function TrendForecast({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Three-day confidence sparkline, drawn as a plain SVG path.
+ *
+ * This was a recharts `AreaChart`, which pulled ~400 kB of charting code into the
+ * client for a 96 px-high line with three points. What it drew is now what the
+ * component is, so the bundle is a fraction of the size and there is one less
+ * dependency to audit.
+ *
+ * Decorative only (`aria-hidden`): every value is also printed as text in the
+ * table below, so no information depends on seeing the line.
+ */
+function ConfidenceTrend({ points }: { points: { day: string; confidence: number }[] }) {
+  const W = 320;
+  const H = 96;
+  const PAD = { top: 8, right: 6, bottom: 18, left: 6 };
+  if (points.length === 0) return null;
+
+  const values = points.map((p) => Math.max(0, Math.min(100, p.confidence)));
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+  const baseline = PAD.top + innerH;
+  const x = (i: number) =>
+    PAD.left + (values.length === 1 ? innerW / 2 : (i / (values.length - 1)) * innerW);
+  const y = (v: number) => baseline - (v / 100) * innerH;
+
+  const line = values
+    .map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(2)} ${y(v).toFixed(2)}`)
+    .join(" ");
+  const area = `${line} L${x(values.length - 1).toFixed(2)} ${baseline} L${x(0).toFixed(2)} ${baseline} Z`;
+
+  return (
+    <div className="mt-5 w-full" aria-hidden="true">
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-24 w-full" preserveAspectRatio="none" role="presentation">
+        <defs>
+          <linearGradient id="confFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0F7A75" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#0F7A75" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <line x1={PAD.left} y1={baseline} x2={W - PAD.right} y2={baseline} stroke="#d9e3ec" strokeWidth="1" />
+        <path d={area} fill="url(#confFill)" />
+        <path d={line} fill="none" stroke="#0F7A75" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+        {values.map((v, i) => (
+          <g key={points[i].day}>
+            <circle cx={x(i)} cy={y(v)} r="2.5" fill="#0F7A75" />
+            <text x={x(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#6b839a">
+              {points[i].day}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }

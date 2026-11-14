@@ -1,9 +1,9 @@
 import express from "express";
 import path from "path";
+import { existsSync } from "node:fs";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import dotenv from "dotenv";
 
-import { createServer as createViteServer } from "vite";
 import http from "http";
 import helmet from "helmet";
 import cors from "cors";
@@ -34,14 +34,14 @@ const PORT = Number(process.env.PORT) || 3000;
 // "IP spoofing" class of issues when not behind a proxy.
 app.set("trust proxy", process.env.TRUST_PROXY === "false" ? false : 1);
 
-// Security headers. The CSP below is tuned to what the app actually loads:
-// the self-hosted bundle, Tailwind/Vite inline styles, the dev websocket, and
+// Security headers. The CSP below is tuned to what the app actually loads: the
+// self-hosted bundle, inline styles emitted by Tailwind, the websocket feed, and
 // Google Fonts. A wrong CSP breaks the live site silently, so any new external
 // origin must be added here in the same commit that starts using it.
 app.use(
   helmet({
-    // A CSP that matches what the app actually loads: self-hosted bundle, the
-    // Vite dev websocket, Google Fonts, and data: images. Anything else is
+    // A CSP that matches what the app actually loads: the self-hosted bundle,
+    // the websocket feed, Google Fonts, and data: images. Anything else is
     // blocked, which is the point on a public VPS.
     contentSecurityPolicy: {
       useDefaults: false,
@@ -313,6 +313,79 @@ app.use("/api", (req, res) => {
 
 // Global WebSocket server and broadcast utility
 
+/**
+ * Mounts dist/ as the client, and the SPA fallback behind it.
+ *
+ * Asset filenames are content-addressed by the build, so they can be cached for a
+ * year. The shell must not be: a cached index.html is a cached set of asset names,
+ * which is how a browser ends up asking for a bundle that no longer exists.
+ */
+async function serveClient() {
+  const distPath = path.join(process.cwd(), "dist");
+
+  if (!existsSync(distPath)) {
+    // A missing build is an operator mistake, not a 404. Say which command fixes
+    // it instead of serving a blank page that looks like an application bug.
+    app.use((_req, res) => {
+      res
+        .status(503)
+        .type("text")
+        .send(
+          "Client build not found. Run `npm run build` first " +
+            "(or use `npm run dev`, which watches and rebuilds as you edit)."
+        );
+    });
+    return;
+  }
+
+  // Never serve the server bundle or any source map.
+  //
+  // `dist/` is a flat directory: it holds the client *and* `server.cjs` (plus its
+  // `.map`, which contains the full TypeScript source). A bare express.static on
+  // that directory answers GET /server.cjs with the entire backend, so the check
+  // has to sit in front of it rather than behind.
+  const BLOCKED_PATH = /^\/server\.(cjs|js)(\.map)?$|\.map$/;
+  app.use((req, res, next) => {
+    if (BLOCKED_PATH.test(req.path)) {
+      return res.status(404).type("text").send("Not found");
+    }
+    next();
+  });
+
+  app.use(
+    express.static(distPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith("manifest.json")) {
+          // Revalidate always: these three decide which build the browser runs.
+          res.setHeader("Cache-Control", "no-cache");
+          return;
+        }
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          // Content-addressed: the name changes when the bytes change.
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    })
+  );
+
+  // A missing file under /assets/ must be a 404, not the SPA shell.
+  //
+  // Without this, a request for a bundle that no longer exists returns index.html
+  // with status 200 and Content-Type text/html. The browser then fails to parse
+  // HTML as a module and reports a syntax error, which hides the real cause — a
+  // stale index.html pointing at a deleted hashed bundle. A 404 says it plainly.
+  app.use("/assets", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.status(404).type("text").send("Not found");
+  });
+
+  app.get("*", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+}
+
 // Helper for real-time background Google Search Grounding to fetch authentic, non-simulated signals
 async function startServer() {
   const server = http.createServer(app);
@@ -410,33 +483,15 @@ async function startServer() {
     }
   }
 
-if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    // Hashed assets are immutable; the shell must always be revalidated so a
-    // deploy is picked up instead of served from a stale cache.
-    app.use(
-      express.static(distPath, {
-        index: false,
-        maxAge: "1y",
-        immutable: true,
-        setHeaders: (res, filePath) => {
-          if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith("manifest.json")) {
-            res.setHeader("Cache-Control", "no-cache");
-          }
-        },
-      })
-    );
-    app.get("*", (_req, res) => {
-      res.setHeader("Cache-Control", "no-cache");
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+  // Static hosting for the built client.
+  //
+  // There is no bundler middleware any more: `npm run dev` starts esbuild in watch
+  // mode and Tailwind in watch mode alongside this process, and both of them write
+  // into dist/. By the time a request arrives, dist/ is already the current build,
+  // so the server only ever has to serve files. That removes a middleware that ran
+  // a second compiler inside the request path — the part of the stack that could
+  // serve a module the build never produced.
+  await serveClient();
 
   server.listen(PORT, "0.0.0.0", () => {
     logger.info(`[Social Intelligence Engine] Full-stack with WebSockets running on port ${PORT}`);

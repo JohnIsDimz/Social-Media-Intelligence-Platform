@@ -1166,3 +1166,96 @@ Batas yang tetap ada: perangkat yang sudah memasang worker `v3` tidak bisa
 diperbaiki dari sisi server pada kunjungan pertama — worker lama masih melayani
 dokumen dari cache. `navigate()` pada `activate` memperbaikinya pada kunjungan
 berikutnya; menghapus data situs sekali menyelesaikannya seketika.
+
+## 21. Migrasi Vite → Node.js + Express (build 2.0) dan auditnya
+
+Permintaan: "ganti Vite ke Node.js + Express.js, jadi Vite kita hapus segera,
+migrasi dan audit sedalam mungkin."
+
+Yang **tidak** berubah: Express sudah menjadi server aplikasi sejak awal. Yang
+dihapus adalah **Vite sebagai bundler dan dev server** — perannya diganti esbuild
+(bundel) dan `@tailwindcss/cli` (stylesheet), keduanya alat yang sudah ada di
+rantai build ini. Jadi hasilnya satu bahasa, satu server, dua alat tanpa framework
+pembungkus.
+
+### 21.1 Yang dihapus
+
+| Paket | Alasan |
+| --- | --- |
+| `vite` | bundler + dev middleware; diganti esbuild |
+| `@vitejs/plugin-react` | plugin bundler; esbuild punya `jsx: "automatic"` |
+| `@tailwindcss/vite` | plugin bundler; diganti `@tailwindcss/cli` |
+| `recharts` | 377 kB untuk satu area chart 96 px; diganti `ConfidenceTrend` (SVG) |
+| `autoprefixer` | tidak dipakai siapa pun sejak Tailwind 4 |
+| `vite.config.ts` | tidak ada lagi yang membacanya |
+
+Tambahan: `@tailwindcss/cli`. `vite` bahkan sebelumnya berada di `dependencies`
+(bukan dev) sehingga ikut ke image produksi — temuan H4 pada audit pertama.
+Setelah migrasi, `dependencies` berisi 12 paket runtime saja.
+
+### 21.2 Arsitektur baru
+
+| Kebutuhan | Dulu | Sekarang |
+| --- | --- | --- |
+| Bundel klien | `vite build` (rollup, 2 chunk) | `esbuild --bundle` → 1 file `app.<hash>.js` |
+| Stylesheet | plugin Vite | `tailwindcss -i src/index.css -o ... --minify` |
+| Nama berkas | hash rollup | SHA-256 isi berkas, 10 karakter |
+| HTML | diproses Vite | template root + `%APP_CSS%`/`%APP_JS%` |
+| Dev | Vite middleware di dalam Express | esbuild watch + Tailwind watch + `tsx watch`, Express hanya menyajikan |
+| Flag dev/prod | `import.meta.env.DEV` | `__DEV__` yang di-`define` |
+| Tipe `import.meta` | `src/vite-env.d.ts` | `src/env.d.ts` |
+
+`server.ts` tidak lagi mengimpor apa pun dari bundler. Fungsi `serveClient()`
+menggantikan blok `if (NODE_ENV !== "production")` yang dulu memasang middleware
+Vite, dan sekarang berjalan di **semua** lingkungan — dev dan produksi menyajikan
+`dist/` yang sama persis.
+
+### 21.3 Temuan audit pada kode baru (dan perbaikannya)
+
+Audit ini dilakukan terhadap hasil migrasi, bukan hanya terhadap migrasi.
+
+| # | Temuan | Dampak | Perbaikan |
+| --- | --- | --- | --- |
+| 21.3.1 | `dist/server.cjs` dan `server.cjs.map` berada di direktori yang sama dengan aset klien, dan `express.static(distPath)` menyajikan seluruh direktori | **Kritis**: `GET /server.cjs` mengunduh seluruh backend; `.map`-nya memuat source TypeScript lengkap. Sebelum migrasi ini tidak terjadi karena Vite menyajikan `dist/` hanya di mode produksi dengan middleware yang berbeda | guard regex `^/server\.(cjs\|js)(\.map)?$\|\.map$` dipasang **sebelum** `express.static`; build produksi tidak lagi menghasilkan source map klien; `splitting: false` supaya React ikut chunk utama |
+| 21.3.2 | `dist/assets/` tanpa berkas yang diminta akan jatuh ke SPA fallback | Permintaan bundel lama dibalas `200 text/html`, lalu browser melaporkan "Unexpected token '<'" dan penyebab sebenarnya (index.html basi) tersembunyi | `app.use("/assets", ...)` mengembalikan `404` + `Cache-Control: no-store` |
+| 21.3.3 | `import.meta.env.DEV` → `__DEV__`, tetapi percabangannya masih di level atas | esbuild hanya membuang cabang bila kondisinya literal; `if (__DEV__)` tidak ter-fold saat `const isDev = __DEV__` | `src/main.tsx` ditulis ulang menjadi `if (__DEV__) { ... } else { ... }`; bundel produksi diverifikasi **tidak** memuat `getRegistrations` |
+| 21.3.4 | Tailwind `--watch` keluar begitu stdin tertutup (setiap proses yang di-spawn script) | Stylesheet berhenti diperbarui setelah build pertama di `npm run dev` — ditemukan saat menguji, bukan dari dokumentasi | `--watch=always` |
+| 21.3.5 | `spawnSync` Tailwind mengembalikan `status: null` bila binary tidak ada (mis. `npm ci --omit=dev`) | Build "sukses" dengan CSS lama atau tanpa CSS | `result.error` diperiksa lebih dulu dan pesannya menyebut devDependencies |
+| 21.3.6 | `@source inline()` belum dipakai | Kelas yang dibangun dinamis (template string) akan hilang tanpa gejala | ditambahkan blok `@source inline("hidden")` dengan penjelasan; diverifikasi kelas tetap ter-emit |
+| 21.3.7 | Cache `sw.js` masih `v4` | Nama berkas aset berubah total; worker v4 di perangkat menyimpan nama lama | `CACHE_NAME` → `smip-static-v5` |
+| 21.3.8 | Semua request tak dikenal (termasuk `/package.json`, `/.env`) dibalas SPA `200` | Terlihat seperti kebocoran saat diuji dengan `curl`, padahal bukan: isinya `index.html` | Tidak diubah — halaman itu memang shell SPA — tetapi dicatat di sini supaya tidak salah dibaca sebagai temuan |
+| 21.3.9 | CSP memuat `'unsafe-inline'` pada `script-src` | XSS yang berhasil menyuntikkan `<script>` inline tidak tertahan | **Dibiarkan, dengan alasan**: tidak ada `<script>` inline di build (`index.html` hanya memuat `<script type="module" src=...>`, dan bundel tidak memakai `eval`/`new Function`). Menghapusnya butuh verifikasi ulang seluruh jalur, jadi dicatat sebagai item terbuka, bukan dihapus diam-diam |
+
+### 21.4 Verifikasi
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| `npx tsc --noEmit` | bersih |
+| `npm test` | **205 lulus, 0 gagal** (10 berkas) |
+| `npm run build` | 0.6–0.8 dtk; `app.<hash>.js` 350,8 kB (113,8 kB gzip), `index.<hash>.css` 37,6 kB (7,9 kB gzip) |
+| Kelengkapan kelas Tailwind | 318 token `className` diekstrak dari `src/**/*.tsx`, **0 hilang** dari CSS hasil build |
+| `npm ls --depth=0` | tidak ada `vite`, `recharts`, `autoprefixer`; `dependencies` 12 paket |
+| `grep -c "vite" package-lock.json` | 0 |
+| Bundel klien | `process.env` 0, `import.meta` 0, `require(` 0, `getRegistrations` 0 di bundel produksi |
+| `node --check` bundel | lolos sebagai ESM |
+| Server nyata (`node dist/server.cjs`) | `/` 200 dengan nama ber-hash; `/assets/*` → `immutable`; `sw.js` → `no-cache`; `/trackers` → 200 (SPA); `/api/nope` → JSON 404; `/server.cjs` → 404; `/assets/app.deadbeef.js` → 404 |
+| Traversal (`--path-as-is`, `..%2f`, `%00`) | tidak ada berkas di luar `dist/` yang tersaji — semuanya `index.html` atau 404 |
+| `npm run dev` | 3 proses jalan; edit `src/App.tsx` → bundel berubah <100 ms; edit `src/index.css` → CSS berubah <100 ms; API tetap 200 tanpa restart |
+| `npm audit` | 0 kerentanan (semua dan `--omit=dev`) |
+
+### 21.5 Yang hilang dan yang tetap ada
+
+**Hilang (disengaja):** HMR, transformasi TypeScript per-modul saat dev, prefetch
+chunk otomatis, dan plugin ekosistem Vite. Kompensasinya: dev memakai esbuild watch
+(<100 ms) dan satu refresh manual; tidak ada lagi websocket dev yang perlu
+diizinkan CSP.
+
+**Tetap ada:** dua artefak runtime yang sama (`app.<hash>.js`, `index.<hash>.css`),
+satu bundel, `immutable` untuk aset ber-hash, `no-cache` untuk shell, SPA fallback,
+WebSocket, seluruh 205 asersi, dan seluruh route API. Produksi tidak menyajikan
+source map dan tidak menyajikan `server.cjs`.
+
+**Batas yang jujur:** `npm run build` sekarang membutuhkan devDependencies
+(esbuild, Tailwind CLI, TypeScript). Image Docker sudah memakai stage builder penuh,
+tetapi VPS dengan `npm ci --omit=dev` akan gagal build dengan pesan yang jelas —
+perilaku ini lebih baik daripada menghasilkan CSS basi secara diam-diam.

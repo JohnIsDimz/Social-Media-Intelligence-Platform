@@ -1,4 +1,7 @@
-const CACHE_NAME = 'smip-static-v4';
+// Bumped for the 2.0 build-pipeline migration: asset names are now
+// content-addressed, and a v4 worker on a device is still holding the old
+// filenames in its caches. Activation deletes them and reloads once.
+const CACHE_NAME = 'smip-static-v5';
 
 // Only images are precached. The documents used to be in here as well, which
 // meant the worker kept a frozen copy of the app shell: the phone would load the
