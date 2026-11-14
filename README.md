@@ -86,9 +86,14 @@ Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya ter
 
 | Cara | Kanal | Kredensial |
 |---|---|---|
-| **API publik langsung** | Reddit, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community, GitHub, Medium, Vimeo | tidak perlu (GitHub opsional `GITHUB_TOKEN`) |
-| **API ber-kunci** | YouTube, X/Twitter, Twitch | `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET` |
-| **Hanya lewat search grounding** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `AI_API_KEY` |
+| **Kolektor menulis, API publik** | Reddit, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community | tidak perlu |
+| **Kolektor menulis, API ber-kunci** | YouTube, X/Twitter, GitHub | `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `GITHUB_TOKEN` (opsional: tanpa token GitHub tetap jalan dengan batas laju lebih rendah) |
+| **Kolektor menulis, butuh model** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `AI_API_KEY` |
+| **Belum ada kolektor** | Twitch | tidak ada — kanal dilaporkan `closed`, bukan "siap dipakai" |
+
+Medium dan Vimeo punya endpoint di katalog untuk keperluan audit jaringan, tetapi **belum punya kolektor**, jadi keduanya tidak mengumpulkan apa pun. Status ini terlihat di dialog **Data sources**, bukan disembunyikan.
+
+**Kanal yang butuh model.** Grup `grounding` memanggil gateway model tanpa tool pencarian apa pun: gateway Sakelar hanya menyediakan `/chat/completions`. Artinya kelompok ini **tidak bisa mengambil posting baru dari web**, dan sejak itu disadari, kanal tersebut memang tidak menghasilkan baris. Kanal dengan kolektor nyata (Reddit, Bluesky, Mastodon, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community, GitHub, serta YouTube dan X bila kuncinya diisi) adalah satu-satunya sumber data yang berjalan hari ini. Ini batasan arsitektur yang perlu diketahui sebelum mengharapkan angka dari TikTok atau Instagram.
 
 **Audit jaringan otomatis.** `GET /api/channel-health` (alias `GET /api/data-sources`) benar-benar memanggil setiap endpoint lalu melaporkan status per kanal: `public`, `configured`, `grounding`, `needs-key`, `closed`, `down`, atau `unverified`. Hasil di-cache 60 detik; panggil dengan `?force=1` untuk menguji ulang. Dialog **Data sources** di UI menampilkan hasil yang sama, lengkap dengan logo tiap platform dan tombol **test all**.
 

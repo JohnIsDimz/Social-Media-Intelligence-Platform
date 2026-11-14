@@ -167,7 +167,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
     }
   }
 
-  throw lastError || new ApiError(`Permintaan gagal setelah ${retries} percobaan.`, 500, "Internal Error", "");
+  throw lastError || new ApiError(`Request failed after ${retries} attempts.`, 500, "Internal Error", "");
 }
 
 export const api = {

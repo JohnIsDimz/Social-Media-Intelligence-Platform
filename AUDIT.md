@@ -548,3 +548,67 @@ Uji manual `curl` pada bundle produksi juga dijalankan untuk sepuluh skenario ya
 | R1-R27 | selesai (lihat §11 dan §12 untuk R1-R24) |
 
 Tidak ada temuan audit yang masih terbuka. Yang tetap berupa **keputusan produk** (bukan cacat) hanya: apakah `GET /login` perlu kustomisasi tampilan lebih lanjut, dan apakah ingin menambah `NOTICE` bila nanti menerima kontribusi pihak ketiga.
+
+---
+
+## 14. Audit putaran kelima — klaim kredensial, radar, dan bahasa
+
+Dipicu oleh tiga laporan pengguna: "ada platform yang mengklaim API key nyata",
+"radar terlalu palsu", "masih banyak bahasa Indonesia".
+
+### 14.1 Klaim kredensial yang tidak berdasar
+
+| Kode | Temuan | Bukti | Perbaikan |
+|---|---|---|---|
+| R28 | **Twitch mengiklankan `TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET`** padahal tidak ada kolektor Twitch sama sekali. `grep -rn "TWITCH_CLIENT" src/ server.ts` mengembalikan **nol** hasil di luar katalog kanal, dan `fetchUnifiedSocialSignals` tidak pernah memanggil endpoint Twitch. Kredensial itu tidak pernah dibaca kode mana pun. | `src/channels.ts` (entri twitch) | Kanal diubah ke `kind: "none"`, `collects: "no collector yet"`, kredensial dihapus. Laporan kesehatan kini berbunyi "No collector implemented yet, so nothing is collected." |
+| R29 | **Medium dan Vimeo juga tanpa kolektor** tetapi dikelompokkan bersama kanal publik yang berjalan | tidak ada `fetchMedium`/`fetchVimeo` di `collectors.ts` | Tidak diubah tipenya (endpoint-nya benar-benar hidup dan berguna untuk audit), tetapi README sekarang menyatakannya eksplisit: "punya endpoint, belum punya kolektor". |
+
+**Jawaban untuk pertanyaan "apakah itu benar?":** sebagian. Tiga kredensial yang
+benar-benar dibaca kode adalah `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, dan
+`GITHUB_TOKEN` (`grep -o "process.env\.[A-Z_]*"` di server hanya menemukan tiga
+itu plus `AI_API_KEY` dan kredensial Supabase). `TWITCH_CLIENT_ID` dan
+`TWITCH_CLIENT_SECRET` adalah klaim kosong, dan sudah dihapus.
+
+**Temuan tambahan yang lebih besar dari pertanyaan awal:** grup `grounding`
+(11 kanal, termasuk TikTok/Instagram/Facebook) meminta model "mencari di web",
+tetapi `chatText()` di `aiProvider.ts` tidak pernah mengirim `tools`, dan gateway
+Sakelar hanya menyediakan `/chat/completions`. Tidak ada tool pencarian, sehingga
+grup itu tidak dapat mengambil posting baru — apa pun isi kuncinya. Ini
+didokumentasikan di README; memperbaikinya berarti menambah penyedia pencarian
+atau memakai gateway yang mendukung grounding, yang merupakan keputusan produk,
+bukan perbaikan satu baris.
+
+### 14.2 Radar
+
+| Sebelum | Sesudah |
+|---|---|
+| Lingkaran dengan 60 tick menit dan angka 60/15/30/45 — muka jam, bukan radar | PPI sebenarnya: 4 cincin jarak, 72 tick bearing (panjang tiap 30 derajat), label N/E/S/W |
+| Tidak ada objek yang dipantau | Kontak diplot dari kanal yang **benar-benar berisi mention**; kanal kosong tidak menghasilkan blip |
+| Posisi tidak bermakna | Bearing diturunkan dari hash nama kanal (deterministik, 0 tabrakan pada 25 kanal), jarak dari `signalStrength`: makin kuat makin dekat pusat |
+| Sapuan hanya hiasan | Kontak menyala saat sapuan melewati bearing-nya lalu meredup — perilaku scope sungguhan, dihitung dari bearing dan durasi putaran |
+| Grid rapat ke pusat | Radius minimum 15 unit menjaga readout di tengah tetap terbaca |
+
+`prefers-reduced-motion` tetap menghentikan seluruh animasi; pada kondisi itu
+kontak ditampilkan statis dengan opasitas penuh, bukan hilang.
+
+### 14.3 Bahasa
+
+Empat string Indonesia terakhir yang dilihat pengguna diterjemahkan: tiga alert
+`/api/dashboard-stats` ("Anomali Sentimen Negatif", "Tren Tagar Baru",
+"Pemantauan Brand Aktif") dan satu pesan `ApiError`. Pemindai kata Indonesia pada
+`src/**` kini bersih; satu-satunya sisa adalah daftar kata kunci sentimen
+(`bagus`, `kecewa`, …) yang memang **data**, bukan UI — kata-kata itu diperlukan
+untuk menganalisis posting berbahasa Indonesia.
+
+### 14.4 Verifikasi
+
+```bash
+npx tsc --noEmit   # 0 error
+npm test           # 46 lulus (25 storage + 6 route + 15 auth)
+npm run build      # vite + esbuild ok
+```
+
+Geometri radar diverifikasi terpisah dengan skrip yang memakai rumus yang sama
+dengan komponen: seluruh 25 bearing jatuh di dalam cincin luar (radius maksimum
+44.0) dan tidak ada dua kanal yang berbagi bearing.
+

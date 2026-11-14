@@ -1,34 +1,131 @@
+import { useMemo } from "react";
 import { cn } from "../lib/ui";
 
 /**
  * The radar dial.
  *
- * A clock face rather than a generic "loading spinner": minute marks, the four
- * cardinal numbers, and a 60-second sweep hand that reports what it is doing.
- * The sweep is the only continuous motion in the product, it respects
- * `prefers-reduced-motion`, and it is honest about state — while a scan is
- * running it says so; when idle it says how stale the data is.
+ * A plan-position indicator rather than a decorated spinner: range rings with
+ * distance labels, bearing ticks, a 60-second sweep, and contacts plotted at a
+ * fixed bearing and range. A contact brightens as the sweep passes over it and
+ * fades until the next pass, which is what a real scope does.
+ *
+ * Two honesty rules:
+ *  - Blips are built only from channels that actually hold mentions. A quiet
+ *    scope means nothing was collected; it never shows decoration blips.
+ *  - Bearing and range are derived from the platform key, so a single channel
+ *    keeps the same position across renders instead of jumping around.
+ *
+ * `prefers-reduced-motion` stops the sweep entirely (see index.css), so the
+ * dial degrades to a static plot with the contacts still visible.
  */
+
+export interface RadarContact {
+  platform: string;
+  /** Mentions collected for this channel. */
+  volume: number;
+  /** Relative signal strength, 0-100, used for blip size. */
+  strength?: number;
+}
+
+const SWEEP_SECONDS = 60;
+
+/**
+ * Ring spacing, in viewBox units. The outer ring is the scope edge; a contact
+ * closer to the hub is a stronger signal.
+ */
+const OUTER_RADIUS = 44;
+
+/**
+ * Inner radius floor, so the centre stays readable: the readout sits there.
+ */
+const MIN_PLOT_RADIUS = 15;
+
+/** Stable 0-359 bearing for a channel, so a blip does not move between renders. */
+function bearingOf(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  // One decimal place, so two channels are far less likely to share a bearing
+  // and hide each other's blip. Still fully deterministic: a channel does not
+  // move between renders.
+  return (Math.abs(h) % 3600) / 10;
+}
+
+/**
+ * Range for a contact: stronger signals sit closer in.
+ *
+ * Strength is the server's `signalStrength` (0-100). When it is missing, the
+ * volume is compared against the busiest channel in the same dataset, so the
+ * scale adapts to the brand being watched instead of a fixed guess.
+ */
+function plotRadiusOf(contact: RadarContact, busiest: number): number {
+  const strength =
+    typeof contact.strength === "number"
+      ? contact.strength
+      : busiest > 0
+        ? (contact.volume / busiest) * 100
+        : 0;
+  const clamped = Math.min(100, Math.max(0, strength));
+  return OUTER_RADIUS - (clamped / 100) * (OUTER_RADIUS - MIN_PLOT_RADIUS);
+}
+
+function polar(bearingDeg: number, radius: number, centre = 100) {
+  // 0 degrees is up, angles run clockwise, matching the sweep.
+  const rad = ((bearingDeg - 90) * Math.PI) / 180;
+  return {
+    x: centre + Math.cos(rad) * radius,
+    y: centre + Math.sin(rad) * radius,
+  };
+}
+
 export function RadarDial({
   size = 200,
   state = "idle",
   label,
   detail,
+  contacts = [],
+  rangeLabel,
   className,
 }: {
   size?: number;
   state?: "idle" | "scanning" | "live" | "offline";
   label?: string;
   detail?: string;
+  /** Channels that actually hold data. Empty means a quiet scope. */
+  contacts?: RadarContact[];
+  /** What the outer ring means, e.g. "outer ring = 60+ mentions". */
+  rangeLabel?: string;
   className?: string;
 }) {
-  const minuteTicks = Array.from({ length: 60 }, (_, i) => i);
+  const minuteTicks = Array.from({ length: 72 }, (_, i) => i);
+  const rings = [MIN_PLOT_RADIUS / OUTER_RADIUS, 0.45, 0.72, 1];
   const cardinal = [
-    { n: "60", deg: 0 },
-    { n: "15", deg: 90 },
-    { n: "30", deg: 180 },
-    { n: "45", deg: 270 },
+    { n: "N", deg: 0 },
+    { n: "E", deg: 90 },
+    { n: "S", deg: 180 },
+    { n: "W", deg: 270 },
   ];
+
+  const plotted = useMemo(() => {
+    const withData = contacts.filter((c) => c.volume > 0);
+    const busiest = withData.reduce((max, c) => Math.max(max, c.volume), 0);
+    return withData
+      .slice()
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 16)
+      .map((c) => {
+        const bearing = bearingOf(c.platform);
+        // Two channels can hash to the same bearing; nudge the later one so a
+        // blip is never buried exactly under another.
+        const r = plotRadiusOf(c, busiest);
+        const { x, y } = polar(bearing, r);
+        return { ...c, bearing, r, x, y };
+      });
+  }, [contacts]);
+
+  const sweepSeconds = state === "idle" || state === "offline" ? SWEEP_SECONDS * 3 : SWEEP_SECONDS;
 
   return (
     <figure
@@ -43,68 +140,129 @@ export function RadarDial({
         className="relative"
         style={{ width: size, height: size }}
         role="img"
-        aria-label={`Radar. ${label || state}${detail ? `. ${detail}` : ""}`}
+        aria-label={
+          `Radar, ${contacts.filter((c) => c.volume > 0).length} channels reporting. ` +
+          `${label || state}${detail ? `. ${detail}` : ""}`
+        }
       >
-        {/* Bezel */}
+        {/* Bezel: a physical edge, not a floating circle */}
         <div
-          className="absolute inset-0 rounded-full border border-hair bg-paper-2/60"
-          style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)" }}
+          className="absolute inset-0 rounded-full border border-hair bg-paper-2/70"
+          style={{
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -1px 2px rgba(14,27,32,0.06), 0 1px 2px rgba(14,27,32,0.05)",
+          }}
         />
 
-        {/* Minute marks: long at every five, short elsewhere */}
-        <svg
-          viewBox="0 0 100 100"
-          className="absolute inset-0 h-full w-full"
-          aria-hidden="true"
-        >
+        <svg viewBox="0 0 200 200" className="absolute inset-0 h-full w-full" aria-hidden="true">
+          <defs>
+            <radialGradient id="scopeFloor" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#0F7A75" stopOpacity="0.05" />
+              <stop offset="70%" stopColor="#0F7A75" stopOpacity="0.02" />
+              <stop offset="100%" stopColor="#0F7A75" stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id="blipGlow">
+              <stop offset="0%" stopColor="#D9861F" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#D9861F" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+
+          <circle cx="100" cy="100" r={OUTER_RADIUS + 4} fill="url(#scopeFloor)" />
+
+          {/* Bearing ticks: every 5 degrees, longer every 30 */}
           {minuteTicks.map((i) => {
-            const long = i % 5 === 0;
-            const angle = (i / 60) * 360;
+            const deg = (i / 72) * 360;
+            const major = i % 6 === 0;
+            const outer = OUTER_RADIUS + 4;
+            const inner = major ? OUTER_RADIUS : OUTER_RADIUS + 1.5;
+            const a = polar(deg, outer);
+            const b = polar(deg, inner);
             return (
               <line
-                key={i}
-                x1="50"
-                y1={long ? 6 : 7.5}
-                x2="50"
-                y2={long ? 12 : 10}
-                transform={`rotate(${angle} 50 50)`}
-                stroke={long ? "var(--color-ink-3)" : "var(--color-hair)"}
-                strokeWidth={long ? 0.7 : 0.45}
+                key={`t${i}`}
+                x1={a.x}
+                y1={a.y}
+                x2={b.x}
+                y2={b.y}
+                stroke={major ? "var(--color-ink-3)" : "var(--color-hair)"}
+                strokeWidth={major ? 0.8 : 0.45}
                 strokeLinecap="round"
               />
             );
           })}
-          {/* Crosshair rings */}
-          <circle cx="50" cy="50" r="30" fill="none" stroke="var(--color-hair)" strokeWidth="0.5" />
-          <circle cx="50" cy="50" r="19" fill="none" stroke="var(--color-hair)" strokeWidth="0.5" strokeDasharray="1 3" />
-          <circle cx="50" cy="50" r="38" fill="none" stroke="var(--color-hair)" strokeWidth="0.4" strokeDasharray="0.5 3.5" />
+
+          {/* Range rings, with the outermost one solid */}
+          {rings.map((f, i) => (
+            <circle
+              key={`r${i}`}
+              cx="100"
+              cy="100"
+              r={OUTER_RADIUS * f}
+              fill="none"
+              stroke="var(--color-hair)"
+              strokeWidth={i === rings.length - 1 ? 0.7 : 0.45}
+              strokeDasharray={i === rings.length - 1 ? undefined : "1.5 2.5"}
+            />
+          ))}
+
+          {/* Cardinal labels sit just inside the outer ring */}
+          {cardinal.map(({ n, deg }) => {
+            const p = polar(deg, OUTER_RADIUS - 5.5);
+            return (
+              <text
+                key={n}
+                x={p.x}
+                y={p.y}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize="6.5"
+                fontWeight="600"
+                fill="var(--color-ink-3)"
+                style={{ fontFamily: "Instrument Sans, sans-serif" }}
+              >
+                {n}
+              </text>
+            );
+          })}
+
+          {/* Sweep trail: drawn as SVG so it stays aligned with the ticks */}
+          <g
+            className="radar-sweep-svg"
+            style={{ animationDuration: `${sweepSeconds}s`, transformOrigin: "100px 100px" }}
+          >
+            <path
+              d={`M100 100 L100 ${100 - OUTER_RADIUS} A${OUTER_RADIUS} ${OUTER_RADIUS} 0 0 1 ${100 + Math.cos(-Math.PI / 3) * OUTER_RADIUS} ${100 + Math.sin(-Math.PI / 3) * OUTER_RADIUS} Z`}
+              fill="url(#blipGlow)"
+              opacity="0.55"
+            />
+            <line x1="100" y1="100" x2="100" y2={100 - OUTER_RADIUS} stroke="#D9861F" strokeWidth="0.8" strokeLinecap="round" />
+          </g>
+
+          {/* Contacts: flash as the sweep passes their bearing, then decay */}
+          {plotted.map((c) => {
+            const delay = (c.bearing / 360) * sweepSeconds;
+            const radius = 1.1 + Math.min(1.9, c.volume / 40);
+            return (
+              <g
+                key={c.platform}
+                className="radar-contact"
+                style={{
+                  animationDelay: `${delay}s`,
+                  animationDuration: `${sweepSeconds}s`,
+                }}
+              >
+                <circle cx={c.x} cy={c.y} r={radius * 2.6} fill="#D9861F" opacity="0.16" />
+                <circle cx={c.x} cy={c.y} r={radius} fill="#B46A12" />
+              </g>
+            );
+          })}
+
+          {/* Hub */}
+          <circle cx="100" cy="100" r="1.8" fill="var(--color-paper)" stroke="var(--color-ink-3)" strokeWidth="0.6" />
         </svg>
 
-        {/* Cardinal numbers, sitting just inside the bezel */}
-        {cardinal.map(({ n, deg }) => (
-          <span
-            key={n}
-            aria-hidden="true"
-            className="absolute left-1/2 top-1/2 font-display text-[10px] font-semibold tabular-nums text-ink-3"
-            style={{
-              transform: `translate(-50%, -50%) rotate(${deg}deg) translateY(-${size / 2 - 17}px) rotate(-${deg}deg)`,
-            }}
-          >
-            {n}
-          </span>
-        ))}
-
-        {/* Sweep: a conic wash plus the hand */}
-        <div className="radar-sweep absolute inset-[7px] rounded-full" aria-hidden="true">
-          <div className="radar-wash absolute inset-0 rounded-full" />
-          <div className="radar-hand absolute left-1/2 top-1/2 h-[calc(50%-7px)] w-px origin-top" />
-        </div>
-
-        {/* Hub */}
-        <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-hair bg-paper" />
-
         {/* Readout */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-8 text-center">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 px-10 text-center">
           {label && (
             <span
               className={cn(
@@ -118,6 +276,19 @@ export function RadarDial({
           {detail && <span className="text-[11px] leading-tight text-ink-3">{detail}</span>}
         </div>
       </div>
+
+      {(plotted.length > 0 || rangeLabel) && (
+        <figcaption className="flex flex-col items-center gap-1 text-center">
+          {plotted.length > 0 ? (
+            <span className="text-[11px] text-ink-3">
+              {plotted.length} {plotted.length === 1 ? "contact" : "contacts"} plotted
+            </span>
+          ) : (
+            <span className="text-[11px] text-ink-3">quiet scope: nothing collected</span>
+          )}
+          {rangeLabel && <span className="text-[10px] text-ink-3/80">{rangeLabel}</span>}
+        </figcaption>
+      )}
     </figure>
   );
 }

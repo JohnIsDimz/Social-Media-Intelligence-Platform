@@ -3,8 +3,12 @@
  *
  * Each channel declares how it can actually be collected:
  *   - `api`       a documented public/keyed API is queried directly
- *   - `grounding` no public read API; only reachable through search grounding
- *   - `none`      nothing collectable today (private/closed or no read access)
+ *   - `grounding` no public read API; only reachable through the model
+ *   - `none`      no collector is implemented, so nothing is collected
+ *
+ * `none` is not a placeholder for "probably works": the health report says so
+ * in as many words, and no credential is advertised for a channel that has no
+ * collector behind it.
  *
  * `endpoint` and `credential` are what the health probe uses, so the audit of
  * "which networks are dead" is driven by data instead of by guesswork.
@@ -127,9 +131,8 @@ export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     key: "twitch",
     label: "Twitch",
-    collects: "stream channels and categories",
-    kind: "api",
-    credential: "TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET",
+    collects: "no collector yet",
+    kind: "none",
     endpoint: "https://api.twitch.tv/helix/games/top?first=1",
     okStatus: [200, 401, 403],
   },

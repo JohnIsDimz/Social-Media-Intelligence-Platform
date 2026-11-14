@@ -244,33 +244,34 @@ app.get("/api/dashboard-stats", async (req, res) => {
     .sort((a, b) => b.value - a.value)
     .slice(0, 8);
 
-  // 6. Recent Alerts (Indonesian / English business-oriented notification)
+  // 6. Recent alerts, derived from the counts above.
   const recentAlerts = [];
   if (negCount > (posCount + neuCount) * 0.4) {
     recentAlerts.push({
       id: "alert-1",
-      title: "Anomali Sentimen Negatif",
+      title: "Negative sentiment spike",
       type: "negative_spikes",
-      message: `Terdeteksi lonjakan mention negatif (${negCount} post) pada beberapa platform yang dipantau.`,
+      message: `Negative mentions are outrunning the rest: ${negCount} negative against ${posCount} positive and ${neuCount} neutral.`,
       timestamp: new Date().toISOString()
     });
   }
   if (topHashtags.length > 0) {
     recentAlerts.push({
       id: "alert-2",
-      title: "Tren Tagar Baru",
+      title: "Rising hashtag",
       type: "new_trend",
-      message: `Tagar #${topHashtags[0]?.text} saat ini sedang naik daun dalam topik pembicaraan brand Anda.`,
+      message: `#${topHashtags[0]?.text} is the most used hashtag in what has been collected so far (${topHashtags[0]?.value} mentions).`,
       timestamp: new Date().toISOString()
     });
   }
   
   recentAlerts.push({
     id: "alert-3",
-    title: "Pemantauan Brand Aktif",
+    title: "Monitoring active",
     type: "brand_mention",
-    message: "Sistem aktif memonitor platform TikTok, Instagram, Facebook & WhatsApp menggunakan Google Search Grounding.",
-    timestamp: new Date().toISOString()
+    message:
+      "Collectors are running. Channels without a public read API stay empty until an AI key is configured.",
+    timestamp: new Date().toISOString(),
   });
 
   res.json({

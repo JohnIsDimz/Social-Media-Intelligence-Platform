@@ -99,7 +99,14 @@ export async function buildChannelHealth(force = false) {
       }
 
       if (spec.kind === "none") {
-        channels[spec.key] = { status: "closed", detail: spec.collects };
+        // No collector exists for this channel. Say that plainly instead of
+        // letting a reachable endpoint imply coverage that is not there.
+        channels[spec.key] = {
+          status: "closed",
+          detail: spec.endpoint
+            ? `No collector implemented yet, so nothing is collected. Endpoint is ${new URL(spec.endpoint).host} if one is added.`
+            : `Nothing collectable today: ${spec.collects}.`,
+        };
         return;
       }
 

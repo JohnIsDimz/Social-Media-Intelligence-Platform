@@ -101,42 +101,53 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Radar dial
+ * Radar dial (plan-position indicator)
  *
- * A 60-second sweep, like a clock hand: one full turn a minute, which is also
- * the collector's tick. The wash trails the hand so the dial reads as a radar
- * rather than a spinner. Idle or paused states simply drop the animation.
+ * The sweep and the contacts live in SVG so they share the dial's geometry.
+ * Widths, rings and ticks are drawn by RadarDial.tsx; this file only owns the
+ * motion: one turn a minute while active, one turn every three minutes when
+ * idle, and a contact flash that decays over the turn.
  * ------------------------------------------------------------------------- */
 
-.radar-sweep {
-  animation: radar-turn 60s linear infinite;
-  transform-origin: 50% 50%;
+/* The sweep is drawn in SVG so it stays aligned with the bearing ticks. It
+ * turns once per minute while a scan or live feed is active, and once every
+ * three minutes when idle, so an idle dial reads as "waiting", not "busy".
+ */
+.radar-sweep-svg {
+  animation-name: radar-turn;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
-.radar-hand {
-  background: linear-gradient(to top, rgba(217, 134, 31, 0), var(--color-amber));
+/* A contact holds a flash for the first quarter-turn after the sweep crosses
+ * it, then decays, which is what a real scope leaves behind.
+ */
+.radar-contact {
+  animation-name: radar-contact-decay;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
-.radar-wash {
-  background: conic-gradient(
-    from 0deg,
-    rgba(217, 134, 31, 0.28) 0deg,
-    rgba(217, 134, 31, 0.10) 26deg,
-    rgba(217, 134, 31, 0) 60deg,
-    rgba(217, 134, 31, 0) 360deg
-  );
-  mask-image: radial-gradient(circle at 50% 50%, transparent 0, black 12%);
+.radar-idle .radar-sweep-svg,
+.radar-offline .radar-sweep-svg {
+  opacity: 0.4;
 }
 
-.radar-idle .radar-sweep,
-.radar-offline .radar-sweep {
-  animation-duration: 180s;
+.radar-offline .radar-contact {
   opacity: 0.45;
 }
 
 @keyframes radar-turn {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@keyframes radar-contact-decay {
+  0%   { opacity: 1; }
+  18%  { opacity: 0.85; }
+  55%  { opacity: 0.3; }
+  90%  { opacity: 0.12; }
+  100% { opacity: 0.12; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -147,5 +158,6 @@
     scroll-behavior: auto !important;
   }
   .settle { opacity: 1; transform: none; }
-  .radar-sweep { animation: none; }
+  .radar-sweep-svg, .radar-contact { animation: none; }
+  .radar-contact { opacity: 0.9; }
 }

@@ -112,6 +112,12 @@ export function OverviewView({
           className="mx-auto lg:mx-0"
           size={176}
           state={radarState}
+          contacts={channels.map((c) => ({
+            platform: c.platform,
+            volume: c.buzzVolume,
+            strength: c.signalStrength,
+          }))}
+          rangeLabel={`outer ring = ${fmt(60)} mentions per channel; inner ring = stronger signal`}
           label={
             radarState === "scanning"
               ? "scanning"
