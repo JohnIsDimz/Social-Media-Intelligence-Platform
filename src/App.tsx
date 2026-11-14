@@ -886,7 +886,14 @@ export default function App() {
 
       <footer className="border-t border-hair">
         <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-1 px-5 py-5 text-[12px] text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <span>S.M.I.P — public conversation monitoring</span>
+          {/* Build stamp: the fastest way to answer "is my phone running the new
+              version?" without opening dev tools on it. */}
+          <span>
+            S.M.I.P — public conversation monitoring
+            <span className="ml-2 rounded border border-hair px-1.5 py-0.5 text-[10px] tracking-wide text-ink-3 tnum">
+              build {__APP_VERSION__}
+            </span>
+          </span>
           <span className="tnum">{jakartaTime || "—"}</span>
         </div>
       </footer>

@@ -33,7 +33,7 @@ const SWEEP_SECONDS = 60;
  * Ring spacing, in viewBox units. The outer ring is the scope edge; a contact
  * closer to the hub is a stronger signal.
  */
-const OUTER_RADIUS = 44;
+const OUTER_RADIUS = 46;
 
 /**
  * Inner radius floor, so the centre stays readable: the readout sits there.
@@ -125,7 +125,11 @@ export function RadarDial({
       });
   }, [contacts]);
 
-  const sweepSeconds = state === "idle" || state === "offline" ? SWEEP_SECONDS * 3 : SWEEP_SECONDS;
+  // The sweep spins in every state, offline included. A frozen dial is
+  // indistinguishable from a crashed page, and "still working" is exactly what an
+  // empty dashboard has to show. Only the speed changes: slower when there is
+  // nothing to find, so it reads as searching rather than as busy.
+  const sweepSeconds = state === "live" ? SWEEP_SECONDS : state === "scanning" ? SWEEP_SECONDS / 2 : SWEEP_SECONDS * 2;
 
   return (
     <figure
@@ -169,7 +173,8 @@ export function RadarDial({
 
           <circle cx="100" cy="100" r={OUTER_RADIUS + 4} fill="url(#scopeFloor)" />
 
-          {/* Bearing ticks: every 5 degrees, longer every 30 */}
+          {/* Bearing ticks: every 5 degrees, longer every 30. Drawn thicker than a
+              hairline because at 176px on a phone a 0.45px stroke disappears. */}
           {minuteTicks.map((i) => {
             const deg = (i / 72) * 360;
             const major = i % 6 === 0;
@@ -184,8 +189,9 @@ export function RadarDial({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                stroke={major ? "var(--color-ink-3)" : "var(--color-hair)"}
-                strokeWidth={major ? 0.8 : 0.45}
+                stroke={major ? "var(--color-ink-2)" : "var(--color-ink-3)"}
+                strokeWidth={major ? 1.1 : 0.6}
+                opacity={major ? 0.9 : 0.55}
                 strokeLinecap="round"
               />
             );
@@ -199,8 +205,9 @@ export function RadarDial({
               cy="100"
               r={OUTER_RADIUS * f}
               fill="none"
-              stroke="var(--color-hair)"
-              strokeWidth={i === rings.length - 1 ? 0.7 : 0.45}
+              stroke="var(--color-ink-3)"
+              strokeWidth={i === rings.length - 1 ? 0.9 : 0.5}
+              opacity={i === rings.length - 1 ? 0.7 : 0.45}
               strokeDasharray={i === rings.length - 1 ? undefined : "1.5 2.5"}
             />
           ))}
@@ -215,9 +222,9 @@ export function RadarDial({
                 y={p.y}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize="6.5"
-                fontWeight="600"
-                fill="var(--color-ink-3)"
+                fontSize="7.5"
+                fontWeight="700"
+                fill={n === "N" ? "var(--color-teal)" : "var(--color-ink-2)"}
                 style={{ fontFamily: "Instrument Sans, sans-serif" }}
               >
                 {n}

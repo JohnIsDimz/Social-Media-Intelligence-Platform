@@ -1091,3 +1091,78 @@ pengukuran.
 Total setelah dua perbaikan ini: `npm test` **205 lulus**, `tsc` bersih,
 `npm run build` ok, `npm audit` 0 kerentanan.
 
+
+## 20. Kenapa HP masih menampilkan UI lama — akar masalah dan perbaikannya
+
+Keluhan: "kenapa radar masih begitu ... dan bar scroll putih masih ada". Screenshot
+dari perangkat memuat label derajat `060 / 48 / 15 / 130` di sekitar radar. Label
+itu **tidak ada** di `src/components/RadarDial.tsx` — kode sekarang hanya menggambar
+`N / E / S / W`. Jadi yang dirender perangkat bukan kode di repositori. Tiga sebab
+terpisah ditemukan, dan ketiganya diperbaiki, bukan dijelaskan.
+
+### 20.1 Service worker menyajikan build beku
+
+`public/sw.js` memakai strategi cache-first untuk semua `destination === 'script'`,
+`'style'`, dan `'document'`, ditambah regex `\.(js|css|...)`. Pola itu menangkap
+`/src/*.tsx` dan `/src/index.css` yang disajikan Vite, sehingga modul yang
+pertama kali dilihat perangkat tersimpan permanen. HTML datang dari jaringan,
+modul datang dari disk: campuran dua versi. Perbaikan:
+
+- `CACHE_NAME` `smip-static-v4`.
+- `/src/`, `/@vite/`, `/@react-refresh`, `/node_modules/` tidak pernah disajikan
+  worker (`return` tanpa cache).
+- Cache hanya untuk image dan font; dokumen **network-only**.
+- Precaching dokumen dihapus — yang tersisa hanya `/favicon.png`.
+- Setelah `activate`, worker memanggil `client.navigate()` untuk setiap tab
+  terbuka. Ini bagian yang benar-benar memulihkan perangkat yang sudah terlanjur
+  beku: `sw.js` diambil browser lewat pemeriksaan update dari jaringan, sedangkan
+  halaman lama tidak bisa memperbaiki dirinya sendiri karena kode yang memuat
+  perbaikannya justru kode yang tidak sedang dijalankan. Navigasi terjadi sekali
+  per versi worker, dan dilayani worker yang tidak pernah mengembalikan dokumen
+  dari cache — jadi tidak bisa berulang.
+- Registrasi ditolak saat `import.meta.env.DEV`, dan worker lama di-unregister
+  plus seluruh cache dihapus di lingkungan dev.
+
+### 20.2 Palet gelap bukan tema, tapi *force-dark* Android
+
+Tidak ada satu pun `prefers-color-scheme` di CSS hasil build dan `--color-paper`
+adalah `#f4f7fa`. Warna gelap muncul karena Chrome Android menjalankan filter
+force-dark pada halaman yang tidak mendeklarasikan skema warna. Perbaikan:
+
+- `color-scheme: light only` di `:root` (lewat `html` pada `@layer base`) dan meta
+  `<meta name="color-scheme" content="light only">` di `index.html`.
+- `supported-color-schemes` = `light`, `accent-color` = teal, dan `theme-color`
+  kedua untuk skema terang agar bilah alamat tidak kontras dengan kanvas.
+
+### 20.3 Bar scroll putih
+
+`src/index.css` hanya punya `scrollbar-width` dan `scrollbar-color` — keduanya
+diabaikan Blink/WebKit, jadi Chrome Android menggambar rail bawaan berwarna putih
+di panel yang bisa di-scroll. Perbaikan: aturan `::-webkit-scrollbar`,
+`-track`, `-thumb`, `-corner` global, track transparan, thumb
+`color-mix(--color-ink-3 42%)` dengan `background-clip: content-box`, dan hover
+teal.
+
+### 20.4 Bukti versi di layar
+
+Kalau masalah yang sama terulang, penyebabnya harus bisa dibaca dari perangkat
+tanpa dev tools. Footer kini mencetak `build <versi>` yang di-inject
+`vite.config.ts` dari `package.json` (`__APP_VERSION__`, dideklarasikan di
+`src/vite-env.d.ts`). Versi dinaikkan ke **1.0.1**. Screenshot berikutnya otomatis
+menyatakan build mana yang sedang berjalan.
+
+### 20.5 Verifikasi
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| `npx tsc --noEmit` | bersih |
+| `npm test` | 205 lulus, 0 gagal (11 berkas) |
+| `npm run build` | ok, `dist/assets/index-*.css` memuat `color-scheme:light only` dan `::-webkit-scrollbar-thumb` |
+| `node --check public/sw.js` | lolos |
+| `curl` dist lokal | `name="color-scheme" content="light only"`, `sw.js` versi v4 tanpa precache dokumen |
+| Render SVG dial dari komponen asli | `docs/preview/radar-current.png` — kardinal N/E/S/W, tick tebal, 5 kontak |
+
+Batas yang tetap ada: perangkat yang sudah memasang worker `v3` tidak bisa
+diperbaiki dari sisi server pada kunjungan pertama — worker lama masih melayani
+dokumen dari cache. `navigate()` pada `activate` memperbaikinya pada kunjungan
+berikutnya; menghapus data situs sekali menyelesaikannya seketika.

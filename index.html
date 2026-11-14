@@ -4,7 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="S.M.I.P — public conversation intelligence: sentiment, emotion, hashtags and brand monitoring, built only on collected data." />
+    <!-- `light only` is what stops Android/Chrome force-dark from inverting the
+         porcelain canvas; `theme-color` still tints the browser chrome navy. -->
+    <meta name="color-scheme" content="light only" />
+    <meta name="supported-color-schemes" content="light" />
+    <!-- Chrome on Android tints the address bar from theme-color, but the media
+         query keeps a matching white status bar when the page is at the top. -->
     <meta name="theme-color" content="#0e3f4a" />
+    <meta name="theme-color" content="#f4f7fa" media="(prefers-color-scheme: light)" />
+
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="manifest" href="/manifest.json" />

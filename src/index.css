@@ -45,8 +45,21 @@
 }
 
 @layer base {
+  /* Declare the colour scheme.
+   *
+   * Without this, Chrome on Android runs its force-dark filter over the page and
+   * inverts the porcelain canvas to near-black — the app looked like it had a
+   * dark theme it does not ship. `color-scheme: light` tells the browser the page
+   * is authored light, so it stops repainting it, and it also fixes form
+   * controls, the caret and the default scrollbar rail. `dark` is deliberately
+   * absent: there is no dark theme in this codebase to hand over to.
+   */
   html {
     -webkit-text-size-adjust: 100%;
+    color-scheme: light only;
+    background-color: var(--color-paper);
+    accent-color: var(--color-teal);
+    overscroll-behavior-y: none;
   }
 
   body {
@@ -83,10 +96,45 @@
     color: var(--color-petrol-deep);
   }
 
-  /* Quiet, product-appropriate scrollbars. */
+  /* Scrollbars.
+   *
+   * `scrollbar-color` alone only tints the thumb on Firefox; Blink and WebKit
+   * ignore it entirely, so every scrollable panel drew the browser's default
+   * light rail — the white bar that showed up on the left edge of the drawer and
+   * inside the tables. The ::-webkit-scrollbar rules below are what actually
+   * paints it, and the track is transparent so no seam appears on a dark surface.
+   */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-hair) transparent;
+    scrollbar-color: color-mix(in oklab, var(--color-ink-3) 45%, transparent) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--color-ink-3) 42%, transparent);
+    border-radius: 999px;
+    /* A thin inset border keeps the thumb off the panel edge. */
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--color-teal) 60%, transparent);
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
@@ -216,6 +264,14 @@
   100% { opacity: 0.12; }
 }
 
+/* Reduced motion stops decoration, not status.
+ *
+ * The blanket rule below used to freeze the radar sweep as well, so on a phone
+ * with "remove animations" switched on (very common on Android) the dial looked
+ * like a dead circle. The sweep is the one animation that communicates "the app
+ * is working"; it is slowed right down instead of stopped, which keeps the
+ * meaning without flashing anything at anyone.
+ */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -223,7 +279,15 @@
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
+
+  .radar-sweep-svg {
+    animation: radar-turn 24s linear infinite !important;
+    opacity: 0.65;
+  }
   .settle { opacity: 1; transform: none; }
-  .radar-sweep-svg, .radar-contact { animation: none; }
-  .radar-contact { opacity: 0.9; }
+  /* Contacts stay visible but static: their position is the information. */
+  .radar-contact {
+    animation: none !important;
+    opacity: 0.9;
+  }
 }

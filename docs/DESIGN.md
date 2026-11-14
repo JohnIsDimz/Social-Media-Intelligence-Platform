@@ -157,13 +157,19 @@ State is told, not implied:
 
 | State | Readout | Motion |
 |---|---|---|
-| `scanning` | "scanning / model reading" | one turn per minute |
 | `live` | "N mentions / n channels reporting" | one turn per minute |
-| `idle` | "standing by / nothing collected" | one turn per three minutes, dimmed |
-| `offline` | "no source / set AI_API_KEY" | one turn per three minutes, dimmed |
+| `scanning` | "scanning / model reading" | one turn per 30 s |
+| `idle` | "standing by / nothing collected" | one turn per two minutes, dimmed |
+| `offline` | "no source / set AI_API_KEY" | one turn per two minutes, dimmed |
 
-The caption under the dial says how many contacts are plotted, or "quiet scope:
-nothing collected". `prefers-reduced-motion` stops the animation and leaves the
-contacts visible at full opacity. The dial replaced the thin amber sweep band
+The sweep never stops. A frozen dial is indistinguishable from a crashed page, and
+"still working" is exactly what a dashboard with no data yet has to communicate —
+so every state keeps turning and only the speed and opacity change. Ticks are
+drawn at 1.1/0.6 px rather than hairlines because at 176 px on a phone a 0.45 px
+stroke simply disappears; cardinal letters are set at 7.5 px and `N` is teal.
+
+`prefers-reduced-motion` slows the sweep to one turn per 24 s instead of stopping
+it — decoration is suppressed, but status is not — and leaves the contacts visible
+at static positions. The dial replaced the thin amber sweep band
 that used to slide across the command strip — one motion in the product, not two
 competing ones.
