@@ -84,14 +84,6 @@ export function velocityMark(v: number): string {
   return "↘";
 }
 
-/** Time in Indonesian, short form. */
-export function clockTime(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-}
-
 export function shortDate(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);

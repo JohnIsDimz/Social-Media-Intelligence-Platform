@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn, channelLabel, fmt } from "../lib/ui";
 import { Menu, Radio, Wifi, WifiOff } from "lucide-react";
 import { PlatformMark } from "./PlatformMark";
@@ -8,7 +8,6 @@ export interface StripSignal {
   buzzVolume: number;
   sentimentScore: number;
   velocity: number;
-  isSimulated?: boolean;
 }
 
 interface CommandStripProps {
@@ -21,38 +20,6 @@ interface CommandStripProps {
   onOpenMenu: () => void;
 }
 
-/** Eight small bars: the room's pulse, one per channel. */
-interface CommandStripProps {
-  trackers: { id: string; query: string; type: string }[];
-  totalSignals: number;
-  signals: StripSignal[];
-  connection: "connected" | "connecting" | "disconnected" | "polling";
-  clock: string;
-  activeChannels: number;
-  onOpenMenu: () => void;
-}
-
-/** Eight small bars: the room's pulse, one per channel. */
-function Beats({ value }: { value: number }) {
-  // Height is derived from the channel's collected volume, so the pulse is a
-  // real reading rather than a decorative animation.
-  const peak = Math.max(1, value);
-  const bars = [0.35, 0.6, 0.45, 0.9, 0.55, 0.75, 0.4, 0.65].map((m) =>
-    Math.max(2, Math.round(peak * m))
-  );
-  const max = Math.max(...bars);
-  return (
-    <span className="inline-flex h-3 items-end gap-[2px]" aria-hidden="true" title={`${value} mentions`}>
-      {bars.map((b, i) => (
-        <span
-          key={i}
-          className={cn("w-[2px] rounded-[1px]", value > 0 ? "bg-amber/80" : "bg-white/20")}
-          style={{ height: `${Math.max(18, (b / max) * 100)}%` }}
-        />
-      ))}
-    </span>
-  );
-}
 
 export function CommandStrip({
   trackers,

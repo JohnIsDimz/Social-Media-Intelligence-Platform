@@ -1,5 +1,4 @@
-import React from "react";
-import { cn, channelLabel } from "../lib/ui";
+import { cn } from "../lib/ui";
 import { brandMark } from "../lib/brandMarks";
 
 /**
@@ -67,24 +66,6 @@ export function PlatformMark({
       >
         <path d={mark.path} />
       </svg>
-    </span>
-  );
-}
-
-/** Platform name preceded by its real mark, for table cells and record lines. */
-export function PlatformTag({
-  platform,
-  className,
-  compact,
-}: {
-  platform: string;
-  className?: string;
-  compact?: boolean;
-}) {
-  return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
-      <PlatformMark platform={platform} size={16} />
-      {!compact && <span className="truncate">{channelLabel(platform)}</span>}
     </span>
   );
 }

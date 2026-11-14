@@ -1,8 +1,0 @@
-{
-  "name": "Social Media Intelligence Platform",
-  "description": "Sebuah platform kecerdasan digital untuk menganalisis sentimen, emosi, tagar, dan memantau penyebaran brand di platform TikTok, Instagram, Facebook, dan WhatsApp dengan Google Search Grounding.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_AI_API"
-  ]
-}

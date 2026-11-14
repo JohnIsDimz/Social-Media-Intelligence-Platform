@@ -1,12 +1,11 @@
 import express from "express";
 import path from "path";
 import { timingSafeEqual } from "node:crypto";
-import fs from "fs";
 import dotenv from "dotenv";
 
 import { createServer as createViteServer } from "vite";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocketServer } from "ws";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -20,9 +19,6 @@ import {
 import {
   dbConfigSummary,
   dbStatus,
-  listTrackers,
-  listAnalyzedPosts,
-  listMentions,
   loadDatabase,
   pingDatabase,
   pruneHistories,
@@ -69,7 +65,6 @@ const PORT = Number(process.env.PORT) || 3000;
 // ---------------------------------------------------------------------------
 // Security hardening
 // ---------------------------------------------------------------------------
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 // Trust the platform proxy (Vercel/Railway/Cloud Run) so rate limiting sees the
 // real client IP instead of the load balancer's. Configurable to avoid the
@@ -1347,7 +1342,7 @@ app.get("/api/channel-health", async (req, res) => {
   res.status(anyDown ? 503 : 200).json(health);
 });
 
-app.get("/api/health", async (req, res) => {
+app.get("/api/health", async (_req, res) => {
   // A health check that says "ok" while the database is unreachable is worse
   // than no health check, so the database state is part of the answer.
   const db = dbStatus();
@@ -1378,7 +1373,7 @@ app.get("/api/health", async (req, res) => {
 });
 
 // 1. Get Trackers
-app.get("/api/trackers", async (req, res) => {
+app.get("/api/trackers", async (_req, res) => {
   const db = await getDB();
   if (!db.ok) {
     // Empty data with a reason, never fabricated rows.
@@ -1411,7 +1406,6 @@ app.post("/api/trackers", async (req, res) => {
     .filter((p: any) => typeof p === "string" && ALLOWED_PLATFORMS.includes(p.toLowerCase()))
     .map((p: string) => p.toLowerCase());
 
-  const db = await getDB();
   const newTracker = {
     id: `t-${Date.now()}`,
     type,
@@ -1435,7 +1429,7 @@ app.delete("/api/trackers/:id", async (req, res) => {
 });
 
 // 4. Get Analyzed Posts
-app.get("/api/analyzed-posts", async (req, res) => {
+app.get("/api/analyzed-posts", async (_req, res) => {
   const db = await getDB();
   res.json(db.analyzedPosts);
 });
@@ -1550,7 +1544,6 @@ app.post("/api/analyze-url", async (req, res) => {
       };
     }
 
-    const db = await getDB();
     const newAnalysis = {
       id: `ap-${Date.now()}`,
       url: url || `manual-text-${Date.now()}`,
@@ -1615,16 +1608,6 @@ const lastScanAt = new Map<string, number>();
 app.get("/api/social-signals", async (req, res) => {
   const db = await getDB();
   const { trackerId } = req.query;
-
-  let targetQuery = "Global Intel";
-  let activeTracker: any = null;
-  if (trackerId) {
-    const trackers = db.trackers || [];
-    activeTracker = trackers.find((t: any) => t.id === trackerId);
-    if (activeTracker) {
-      targetQuery = activeTracker.query;
-    }
-  }
 
   const allAnalyzed = db.analyzedPosts || [];
   const allMonitored = db.monitorResults || [];
@@ -1935,7 +1918,7 @@ app.get("/api/dashboard-stats", async (req, res) => {
  *   - no AI key / model fail -> 503 with an explanation, never a canned forecast
  *     dressed up as a prediction
  */
-app.get("/api/predict-trends", async (req, res) => {
+app.get("/api/predict-trends", async (_req, res) => {
   const db = await getDB();
   const combined = [...(db.analyzedPosts || []), ...(db.monitorResults || [])];
 
@@ -2223,7 +2206,7 @@ async function startServer() {
           },
         })
       );
-      app.get("*", (req, res) => {
+      app.get("*", (_req, res) => {
         res.setHeader("Cache-Control", "no-cache");
         res.sendFile(path.join(distPath, "index.html"));
       });

@@ -1,4 +1,3 @@
-import React from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { cn } from "../lib/ui";
 import type { AIPredictionReport } from "../types";

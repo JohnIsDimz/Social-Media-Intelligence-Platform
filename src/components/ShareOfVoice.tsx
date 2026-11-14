@@ -1,4 +1,3 @@
-import React from "react";
 import { cn, fmt, Rule } from "../lib/ui";
 import type { DashboardStats } from "../types";
 

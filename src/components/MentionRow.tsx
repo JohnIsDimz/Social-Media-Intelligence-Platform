@@ -1,4 +1,3 @@
-import React from "react";
 import {
   cn,
   channelLabel,
@@ -75,7 +74,6 @@ export function AnalyzedRow({
     hashtags: string[];
     analyzedAt: string;
     url?: string;
-    isSimulated?: boolean;
   };
   onOpen?: (url?: string) => void;
 }) {

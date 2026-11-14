@@ -11,7 +11,6 @@
  *     never fabricated rows.
  */
 import http from "node:http";
-import { createClient } from "@supabase/supabase-js";
 
 /* ------------------------------------------------------------------ harness */
 

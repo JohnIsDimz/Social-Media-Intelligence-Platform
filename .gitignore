@@ -7,12 +7,6 @@ coverage/
 .env*
 !.env.example
 
-# Local SQLite database (runtime cache, never commit)
-src/data/
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-
 # Local env overrides
 .env
 .env.local

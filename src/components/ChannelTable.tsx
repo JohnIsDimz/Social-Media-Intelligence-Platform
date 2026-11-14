@@ -1,4 +1,3 @@
-import React from "react";
 import { cn, channelLabel, channelKind, velocityMark, signed, fmt, NoDataTag } from "../lib/ui";
 import { PlatformMark } from "./PlatformMark";
 
@@ -9,7 +8,6 @@ export interface ChannelRow {
   velocity: number;
   signalStrength: number;
   activeUsersCount: number;
-  isSimulated?: boolean;
 }
 
 /**

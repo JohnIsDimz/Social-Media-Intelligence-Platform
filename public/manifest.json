@@ -4,8 +4,8 @@
   "description": "Public conversation intelligence: sentiment, emotion, hashtags and brand monitoring, built only on collected data.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#6366f1",
+  "background_color": "#f2f4f3",
+  "theme_color": "#0e3f4a",
   "lang": "en",
   "icons": [
     {

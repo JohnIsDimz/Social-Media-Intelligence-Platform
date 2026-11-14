@@ -61,65 +61,6 @@ const samplePredictions: AIPredictionReport = {
   actionableInsights: [],
 };
 
-const platformStyles: Record<string, { bg: string, text: string, border: string, color: string, badge: string }> = {
-  instagram: {
-    bg: "from-pink-50 to-rose-50/30",
-    text: "text-rose-700",
-    border: "border-pink-200",
-    color: "#E1306C",
-    badge: "bg-rose-100 text-rose-800"
-  },
-  tiktok: {
-    bg: "from-slate-50 to-slate-100/30",
-    text: "text-slate-900",
-    border: "border-slate-300",
-    color: "#0f172a",
-    badge: "bg-slate-200 text-slate-800"
-  },
-  facebook: {
-    bg: "from-blue-50 to-blue-50/20",
-    text: "text-blue-700",
-    border: "border-blue-200",
-    color: "#1877F2",
-    badge: "bg-blue-100 text-blue-800"
-  },
-  whatsapp: {
-    bg: "from-emerald-50 to-emerald-50/20",
-    text: "text-emerald-700",
-    border: "border-emerald-200",
-    color: "#25D366",
-    badge: "bg-emerald-100 text-emerald-800"
-  },
-  twitter: {
-    bg: "from-sky-50 to-sky-100/30",
-    text: "text-sky-700",
-    border: "border-sky-200",
-    color: "#1DA1F2",
-    badge: "bg-sky-100 text-sky-800"
-  },
-  youtube: {
-    bg: "from-red-50 to-red-100/30",
-    text: "text-red-700",
-    border: "border-red-200",
-    color: "#FF0000",
-    badge: "bg-red-100 text-red-800"
-  },
-  linkedin: {
-    bg: "from-indigo-50 to-indigo-100/30",
-    text: "text-indigo-700",
-    border: "border-indigo-200",
-    color: "#0A66C2",
-    badge: "bg-indigo-100 text-indigo-800"
-  },
-  reddit: {
-    bg: "from-orange-50 to-orange-100/30",
-    text: "text-orange-700",
-    border: "border-orange-200",
-    color: "#FF4500",
-    badge: "bg-orange-100 text-orange-800"
-  }
-};
-
 export default function App() {
   const [view, setView] = useState<View>("overview");
   const [sources, setSources] = useState<DataSources | null>(null);
@@ -144,7 +85,7 @@ export default function App() {
   );
   const databaseUnset = Boolean(sources?.database && !sources.database.configured);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [timeRange, setTimeRange] = useState<'7' | '30' | '90'>('7');
+  const [timeRange] = useState<'7' | '30' | '90'>('7');
   
   // Data State
   const [trackers, setTrackers] = useState<Tracker[]>([]);
@@ -155,13 +96,9 @@ export default function App() {
   // Interaction State
   const [urlInput, setUrlInput] = useState("");
   const [textInput, setTextInput] = useState("");
-  const [manualPlatform, setManualPlatform] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other'>('tiktok');
+  const [manualPlatform] = useState<'tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit' | 'other'>('tiktok');
   const [selectedTrackerId, setSelectedTrackerId] = useState<string>("");
   
-  // New Tracker Form State
-  const [newTrackerQuery, setNewTrackerQuery] = useState("");
-  const [newTrackerType, setNewTrackerType] = useState<'brand' | 'hashtag'>('brand');
-  const [newTrackerPlatforms, setNewTrackerPlatforms] = useState<('tiktok' | 'instagram' | 'facebook' | 'whatsapp' | 'twitter' | 'youtube' | 'linkedin' | 'reddit')[]>(["tiktok", "instagram"]);
   const [showAddTrackerModal, setShowAddTrackerModal] = useState(false);
   
   // Loading & Error States
@@ -291,38 +228,7 @@ export default function App() {
     }
   };
 
-  const fetchInitialDataSilent = async () => {
-    try {
-      const signalsUrl = selectedTrackerIdRef.current
-        ? `/api/social-signals?trackerId=${selectedTrackerIdRef.current}`
-        : "/api/social-signals";
-      const [trackersData, analyzedData, statsData, allMonitoredData, signalsData] = await Promise.all([
-        api.get<Tracker[]>("/api/trackers"),
-        api.get<AnalyzedPost[]>("/api/analyzed-posts"),
-        api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
-        api.get<MonitorResult[]>("/api/monitor-results"),
-        api.get<any>(signalsUrl).catch(() => null)
-      ]);
 
-      setTrackers(trackersData);
-      setAnalyzedPosts(analyzedData);
-      setStats(statsData);
-      if (signalsData) {
-        setSocialSignals(signalsData);
-      }
-
-      if (selectedTrackerIdRef.current) {
-        try {
-          const data = await api.get<MonitorResult[]>(`/api/monitor-results?trackerId=${selectedTrackerIdRef.current}`);
-          setMonitorResults(data);
-        } catch (innerErr) {
-          console.error("Background monitor refresh failed:", innerErr);
-        }
-      }
-    } catch (err) {
-      console.error("Gagal melakukan sinkronisasi latar belakang:", err);
-    }
-  };
 
   // WebSocket Integration for Real-time Synchronization with Fail-Safe Auto-Polling Fallback
   const retryCountRef = React.useRef(0);
@@ -366,9 +272,9 @@ export default function App() {
               retryCountRef.current = 0;
             } else if (message.type === "SYNC") {
               console.log("[WebSocket] Sync event triggered:", message.data?.event);
-              fetchInitialDataSilent();
+              fetchInitialData({ quiet: true });
             } else if (message.type === "LIVE_POST_INGESTED") {
-              const { post, tracker } = message.data;
+              const { post } = message.data;
               
               // 1. Add to active monitorResults list if matches current selected tracker ID
               if (post.trackerId === selectedTrackerIdRef.current) {
@@ -455,13 +361,12 @@ export default function App() {
     
     // Periodically fetch if in polling mode or if websocket fails to establish
     if (webSocketStatus === 'polling' || webSocketStatus === 'disconnected') {
-      console.log("[Real-time Fallback] Auto-polling activated every 8 seconds");
-      
-      // Initial silent sync
-      fetchInitialDataSilent();
+      console.log("[Real-time Fallback] WebSocket unavailable; polling every 8 seconds");
 
+      // The interval below fires immediately, so there is no separate first call.
+      fetchInitialData({ quiet: true });
       pollingInterval = setInterval(() => {
-        fetchInitialDataSilent();
+        fetchInitialData({ quiet: true });
         
         // NOTE: previously this block fabricated a random post and fired an
         // OS-level "negative sentiment spike" notification every 8 seconds.
@@ -506,41 +411,51 @@ export default function App() {
   }, [timeRange]);
 
 
-  const fetchInitialData = async () => {
-    setIsLoading(true);
+  /**
+   * Loads the dashboard. `quiet` keeps the initial skeleton off the screen for
+   * background refreshes; everything else is identical, so there is one loader
+   * instead of two copies that could drift apart.
+   */
+  const fetchInitialData = async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    if (!quiet) setIsLoading(true);
     setError(null);
     try {
-      const signalsUrl = selectedTrackerId
-        ? `/api/social-signals?trackerId=${selectedTrackerId}`
+      const activeId = selectedTrackerIdRef.current;
+      const signalsUrl = activeId
+        ? `/api/social-signals?trackerId=${activeId}`
         : "/api/social-signals";
-      const [trackersData, analyzedData, statsData, allMonitoredData, signalsData] = await Promise.all([
+      const [trackersData, analyzedData, statsData, signalsData] = await Promise.all([
         api.get<Tracker[]>("/api/trackers"),
         api.get<AnalyzedPost[]>("/api/analyzed-posts"),
         api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`),
-        api.get<MonitorResult[]>("/api/monitor-results"),
         api.get<any>(signalsUrl).catch(() => null)
       ]);
 
       setTrackers(trackersData);
       setAnalyzedPosts(analyzedData);
       setStats(statsData);
-      // Keep the channels view populated without an extra round-trip.
-      setMonitorResults((prev) => (prev.length > 0 ? prev : allMonitoredData));
       if (signalsData) {
         setSocialSignals(signalsData);
       }
 
-      if (trackersData.length > 0) {
-        setSelectedTrackerId(trackersData[0].id);
-        fetchMonitorResults(trackersData[0].id);
+      // Keep the selection stable across refreshes: only pick a tracker when
+      // none is selected yet, otherwise a background poll would reset it.
+      const targetId = activeId || trackersData[0]?.id;
+      if (targetId) {
+        if (!activeId) setSelectedTrackerId(targetId);
+        const mentions = await api
+          .get<MonitorResult[]>(`/api/monitor-results?trackerId=${targetId}`)
+          .catch(() => [] as MonitorResult[]);
+        setMonitorResults(mentions);
       }
-      
-      // Load AI predictions in the background
-      fetchPredictions();
+
+      // A forecast costs an AI call, so it is only requested on a real load or
+      // when the user presses recompute — never on every background poll.
+      if (!quiet) fetchPredictions();
     } catch (err: any) {
       setError(err.message || "Lost connection to the server.");
     } finally {
-      setIsLoading(false);
+      if (!quiet) setIsLoading(false);
     }
   };
 
@@ -611,7 +526,6 @@ export default function App() {
       setTrackers((prev) => [...prev, newTracker]);
       setSelectedTrackerId(newTracker.id);
       setShowAddTrackerModal(false);
-      setNewTrackerQuery("");
       setView("channels");
 
       showNotification(`Tracker "${newTracker.query}" added.`);
@@ -833,7 +747,6 @@ export default function App() {
       velocity: s.velocity,
       signalStrength: s.signalStrength,
       activeUsersCount: s.activeUsersCount,
-      isSimulated: s.isSimulated,
     })) ?? [];
 
   const activeChannelCount = channelRows.filter((r) => r.buzzVolume > 0).length;
@@ -950,7 +863,6 @@ export default function App() {
               activeQuery={activeTracker?.query ?? ""}
               activePlatforms={activeChannelCount}
               platformCount={channelRows.length || CHANNELS.length}
-              clock={jakartaTime}
               onOpenSources={() => setShowSources(true)}
             />
           ) : view === "analyzer" ? (
@@ -986,9 +898,6 @@ export default function App() {
         open={showAddTrackerModal}
         onClose={() => setShowAddTrackerModal(false)}
         onCreate={async ({ type, query, platforms }) => {
-          setNewTrackerType(type);
-          setNewTrackerQuery(query);
-          setNewTrackerPlatforms(platforms as any);
           await createTrackerDirect(type, query, platforms);
         }}
       />

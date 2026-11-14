@@ -1,4 +1,3 @@
-import React from "react";
 import { Button, cn, fmt, channelLabel } from "../lib/ui";
 import { MentionRow } from "../components/MentionRow";
 import type { MonitorResult, Tracker } from "../types";

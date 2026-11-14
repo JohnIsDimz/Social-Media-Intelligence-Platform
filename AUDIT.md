@@ -2,8 +2,15 @@
 
 **Repo:** `JohnIsDimz/Social-Media-Intelligence-Platform`
 **Branch diaudit:** `arena/ce031f31-social-media-intelligence-plat` (base: `ed68011` = `main` HEAD)
-**Tanggal audit:** 14 November 2026
-**Status working tree:** clean saat audit dimulai (hanya file audit ini yang ditambahkan)
+**Tanggal audit awal:** 14 November 2026 (terhadap `ed68011` = `main`)
+**Audit ulang:** 14 November 2026 (terhadap HEAD branch ini, setelah semua perbaikan)
+
+> **Cara membaca dokumen ini.** Bagian 0-8 adalah audit **awal** terhadap kode
+> yang di-`main`, jadi banyak temuannya sudah tidak berlaku. Setiap temuan yang
+> sudah diperbaiki diberi status **DONE** di tabel status (§10). **§11 adalah
+> audit ulang** terhadap kode hari ini: apa yang masih tertinggal, apa yang
+> ternyata sudah mati, dan apa yang perlu dikerjakan berikutnya. Kalau Anda
+> hanya punya waktu membaca satu bagian, baca §11.
 
 ---
 
@@ -13,7 +20,7 @@
 |---|---|---|
 | Build & Type-check | PARTIAL — 6/10 | `tsc --noEmit` & `vite build` **lolos**, tapi hanya karena type-safety praktis dimatikan |
 | Keamanan | FAIL 2/10 | 0 autentikasi, 0 rate limit, SSRF pada scraper, Firestore `allow write: if true`, API key publik |
-| Kualitas kode | FAIL 3/10 | 2 file monolitik (`App.tsx` 2.633 baris, `server.ts` 2.308 baris), duplikasi, dead code |
+| Kualitas kode | FAIL 3/10 → **DONE sebagian** | 2 file monolitik (`App.tsx` 2.633 baris, `server.ts` 2.308 baris), duplikasi, dead code. Hari ini: 916 / 2.236 baris, dead code dibersihkan (§11) |
 | Integritas data / "real-time" | FAIL 2/10 | Mayoritas data adalah **hasil random generator**, disajikan sebagai "live intel" |
 | DevOps / Repo hygiene | PARTIAL — 4/10 | 1 commit untuk 13.882 baris, tanpa CI, tanpa test, 2 lockfile, tanpa LICENSE |
 | Dokumentasi | PARTIAL — 5/10 | README bagus secara naratif tapi faktanya banyak yang salah (React 18, db.json, dsb.) |
@@ -28,7 +35,7 @@
 Commit total : 1  (ed68011 "fix: resolve Firebase config path issues")
 Tanggal      : 2026-07-16
 File tracked : 29
-Baris kode   : server.ts 2.308 | App.tsx 2.633 | sisanya ~1.000
+Baris kode   : server.ts 2.308 | App.tsx 2.633 | sisanya ~1.000  (saat audit awal; hari ini 2.236 / 916)
 .gitignore   : node_modules, build, dist, coverage, *.log, .env*
 Remote       : origin → github.com/JohnIsDimz/Social-Media-Intelligence-Platform
 PR terbuka   : #1 "Security: restrict Firestore and URL scraping" (DRAFT, branch security/harden-firestore-ssrf)
@@ -189,15 +196,15 @@ npm run dev (tsx server.ts) → gagal di sandbox ini karena better-sqlite3 nativ
 ## 6. Rencana Perbaikan (berurutan prioritas)
 
 ### Fase 0 — Sebelum menyentuh kode (hari ini)
-1. **Merge PR #1** (`security/harden-firestore-ssrf`). Ia sudah menutup C2, C3, H2 dengan benar (allowlist host + HTTPS + `redirect: "manual"` + `express.json({limit})`). Setelah merge, review ulang: allowlist-nya cukup, tapi perlu juga menolak IP literal & memvalidasi hasil redirect.
-2. **Rotate/restrict Firebase**: set rules `allow read, write: if false` untuk semua koleksi (akses hanya lewat Admin SDK di server), lalu pastikan aplikasi masih jalan. Kunci API key di Google Cloud Console ke domain produksi (HTTP referrer restriction).
-3. **Hapus dependency `firebase` (client)** → hilangkan 3 HIGH vulnerability.
+1. **Merge PR #1** (`security/harden-firestore-ssrf`). **Tidak perlu lagi** — perbaikannya sudah diterapkan langsung di branch ini (allowlist host, tolak IP literal, `redirect: manual`, body limit). Ia sudah menutup C2, C3, H2 dengan benar (allowlist host + HTTPS + `redirect: "manual"` + `express.json({limit})`). Setelah merge, review ulang: allowlist-nya cukup, tapi perlu juga menolak IP literal & memvalidasi hasil redirect.
+2. ~~**Rotate/restrict Firebase**~~ — **tidak berlaku lagi**: Firebase sudah dihapus dari kode, digantikan Supabase. Langkah ini diganti `docs/SUPABASE.md` §2 (jalankan `schema.sql`, RLS aktif tanpa policy).
+3. **Hapus dependency `firebase` (client)** → hilangkan 3 HIGH vulnerability. **DONE** — juga `firebase-admin`.
 
 ### Fase 1 — Keamanan (1-2 hari)
 4. Tambahkan `helmet`, `cors` (allowlist origin), `express-rate-limit` khusus endpoint Gemini (`10 req/menit/IP`), body limit 64 KB, dan batas panjang `query` (mis. 200 karakter).
 5. Hapus `+ err.message` dari respons 500; log internal saja dengan request ID.
 6. Ganti semua `console.error` menjadi `originalError`; hapus sanitizer "error"→"err-info" — ini anti-pattern fatal untuk produksi.
-7. Hapus `microphone` dari `metadata.json` (tidak dipakai).
+7. Hapus `microphone` dari `metadata.json` (tidak dipakai). **DONE** — file itu sudah dihapus seluruhnya.
 8. Batasi `/api/dashboard-stats?range` ke rentang 1-90.
 
 ### Fase 2 — Kejujuran data (2-3 hari)
@@ -331,8 +338,94 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 
 ##  Sebelum publik
 
-1. **Firestore rules harus di-deploy.** File `firestore.rules` di repo baru berlaku setelah dijalankan: `firebase deploy --only firestore:rules`.
-2. **Kunci API key** di Google Cloud Console (HTTP referrer restriction) karena key-nya publik di repo.
-3. **Set `GEMINI_API_KEY`** — tanpa itu fitur AI nonaktif (`geminiConfigured: false` di health check).
-4. **Sediakan minimal satu sumber data nyata** (`GEMINI_API_KEY`, `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`); tanpa itu dashboard memang kosong — itu perilaku yang benar.
+1. ~~**Firestore rules harus di-deploy**~~ — file `firestore.rules` sudah dihapus. Padanannya sekarang: jalankan `supabase/schema.sql` sekali di SQL Editor.
+2. ~~**Kunci API key** di Google Cloud Console~~ — kunci Firebase sudah tidak ada di repo. Untuk Supabase: `service_role` hanya di `.env` server, jangan pernah di frontend.
+3. **Set `AI_API_KEY`** (gateway Sakelar, model `glm-5.3-flash`) — tanpa itu fitur AI nonaktif (`ai.enabled: false` di `/api/health`).
+4. **Sediakan minimal satu sumber data nyata** (`AI_API_KEY`, `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`); tanpa itu dashboard memang kosong — itu perilaku yang benar.
 5. **Autentikasi belum ada (C1).** Endpoint masih terbuka untuk umum, sekarang dibatasi rate limit. Jika ini akan diakses publik luas, tambahkan login (Firebase Auth / API key header) sebelum promosi.
+
+---
+
+## 10. Status semua temuan (per HEAD branch ini)
+
+Ringkasan apa yang sudah tertutup. Angka baris di §2-§5 adalah posisi **saat
+audit awal** dan sengaja dibiarkan apa adanya sebagai jejak; kode hari ini sudah
+berbeda.
+
+| Temuan | Status |
+|---|---|
+| C1 tanpa autentikasi API | DONE — `API_AUTH_TOKEN` + bearer constant-time pada semua mutasi |
+| C2 Firestore rules terbuka | DONE — Firebase dihapus; Supabase RLS aktif tanpa policy |
+| C3 SSRF pada scraper | DONE — allowlist host + HTTPS saja + tolak IP literal + `redirect: manual` |
+| C4 API key Firebase di repo | DONE — file konfigurasi dihapus; kunci Supabase hanya di `.env` server |
+| C5 tanpa rate limit | DONE — dua limiter (umum + endpoint mahal) |
+| B1 penghitungan kegagalan WebSocket | DONE — hanya `onclose`, backoff eksponensial |
+| B2 `writeDB()` tulis ulang seluruh tabel | DONE — penulisan terarah per baris + index (lalu digantikan Supabase) |
+| B3 `syncToFirestore` tulis ulang semua dokumen | DONE — lalu digantikan Supabase sepenuhnya |
+| B4, B8 | DONE — `process.env.PORT`, timezone/locale tunggal |
+| Data simulasi / `Math.random()` | DONE — seluruh jalur simulasi dihapus; tidak ada angka karangan |
+| `three`, `d3`, `firebase`, `framer-motion` | DONE — dependency dihapus |
+| CI, Docker, graceful shutdown, health check | DONE — `docs/ci.yml`, Dockerfile 3-stage, SIGTERM, `/api/health` |
+| Test | DONE — `tests/supabase.test.ts`, 25 kasus, tanpa jaringan |
+| `aria-label` tombol ikon, fokus dialog, tablist | DONE |
+| Emoji di kode & dokumen | DONE — nol |
+| LICENSE | TODO — belum ada |
+| Pemecahan `server.ts` jadi modul | TODO — masih 2.236 baris (lihat §11) |
+
+---
+
+## 11. Audit ulang (HEAD sekarang)
+
+Dijalankan ulang setelah migrasi Supabase, dengan metode yang bisa direproduksi:
+`tsc --noEmit --noUnusedLocals --noUnusedParameters`, pencarian simbol yang tidak
+pernah dirujuk, penelusuran setiap endpoint terhadap pemanggilnya, dan
+perbandingan klaim README dengan kode.
+
+### 11.1 Yang ditemukan dan sudah diperbaiki dalam audit ulang ini
+
+| # | Temuan | Bukti | Perbaikan |
+|---|---|---|---|
+| R1 | `src/lib/utils.ts` berisi salinan `cn()` yang identik dengan `src/lib/ui.tsx`, dan **tidak pernah diimpor** | `grep -rn "lib/utils"` kosong | file dihapus |
+| R2 | `PlatformTag` (komponen) tidak pernah dipakai | 0 referensi | dihapus |
+| R3 | `clockTime()` tidak pernah dipakai | 0 referensi | dihapus |
+| R4 | `Beats` di `CommandStrip` tidak pernah dirender | 0 referensi | dihapus |
+| R5 | `platformStyles` (tabel warna platform) tidak pernah dipakai | 0 referensi | dihapus |
+| R6 | State mati: `newTrackerQuery/Type/Platforms` hanya di-set lalu dibuang; `setTimeRange`, `setManualPlatform` tak pernah dipanggil | `--noUnusedLocals` | dihapus, dialog mengirim nilainya sendiri |
+| R7 | `isSimulated` masih diteruskan di 5 tempat padahal tidak ada satu pun jalur yang menghasilkannya (sisa era data palsu) | grep | dihapus dari tipe & komponen |
+| R8 | `POST /api/trackers` dan `POST /api/analyze-url` memanggil `getDB()` (3 query Supabase) hasilnya tidak dipakai | kode | panggilan dihapus — hemat 3 round trip per aksi |
+| R9 | `targetQuery` / `activeTracker` di `/api/social-signals` dihitung lalu tidak pernah dikirim | kode | dihapus |
+| R10 | `fake-supabase.mjs` (harness uji saya sendiri) ikut ter-commit | `git ls-files` | dihapus; tes sejenis ada di `tests/` |
+| R11 | `metadata.json` adalah deskriptor proyek AI Studio, tidak dibaca aplikasi, dan menyebut "Google Search Grounding" | grep | dihapus |
+| R12 | `.gitignore` masih mengabaikan `src/data/` dan `*.sqlite*` padahal SQLite sudah tidak ada | file | dibersihkan |
+| R13 | `index.html` + `manifest.json` memakai `theme-color #6366f1` dan `background #0f172a` (indigo) — tidak cocok dengan palet petrol yang dipakai UI | file | diselaraskan (`#0e3f4a`, `#f2f4f3`) |
+| R14 | Komentar `vite.config.ts` masih menyebut AI Studio | file | ditulis ulang |
+| R15 | Dua loader dashboard hampir identik (`fetchInitialData` & `fetchInitialDataSilent`) — risiko drift | kode | digabung jadi satu dengan opsi `{ quiet }` |
+| R16 | **Bug**: saat WebSocket gagal, polling 8 detik memanggil loader dua kali (langsung + langsung dari `setInterval`) | kode | panggilan ganda dihapus |
+| R17 | **Bug**: setiap polling latar menimpa tracker yang sedang dipilih dengan tracker pertama | kode | seleksi dipertahankan (`activeId`), hanya diisi bila masih kosong |
+| R18 | **Bug**: `/api/dashboard-stats` dipanggil dua kali per load, dan forecast AI ikut dipanggil setiap 8 detik saat polling (biaya AI berulang tanpa aksi pengguna) | kode | duplikat dihapus; forecast hanya saat load nyata atau tombol recompute |
+| R19 | `noUnusedLocals` / `noUnusedParameters` mati, sehingga kode mati bisa menumpuk tanpa terdeteksi | tsconfig | **diaktifkan permanen** — sekarang `npm run lint` gagal bila ada kode mati |
+
+### 11.2 Yang ditemukan tapi **belum** diperbaiki (perlu keputusan Anda)
+
+| # | Temuan | Kenapa belum |
+|---|---|---|
+| L1 | `src/components/CommandStrip.tsx` mendefinisikan `StripSignal`/`connection`/`signals` yang sebagian tidak dirender lagi setelah pita sweep dihapus; masih ada sisa parameter | perlu keputusan desain: kembalikan pita kanal atau sederhanakan komponennya |
+| L2 | `server.ts` masih 2.236 baris: kolektor (9 fungsi), health probe, rute, dan bootstrap dalam satu file | pemecahan menyentuh hampir seluruh file; sebaiknya PR terpisah agar mudah di-review |
+| L3 | `/api/social-signals` mengembalikan `globalBuzzIndex`, `crossPlatformCoherence`, dan `dominantPlatform` yang **tidak dipakai UI mana pun** | endpoint masih masuk akal sebagai API publik; alternatifnya menyederhanakan respons |
+| L4 | `samplePredictions` di `App.tsx` masih ada sebagai kerangka tata letak saat forecast belum berjalan | disengaja: diberi label "sample" dan `confidenceScore: 0`, bukan angka karangan — namun tetap perlu ditinjau apakah mau dipakai sama sekali |
+| L5 | Belum ada LICENSE | perlu keputusan lisensi |
+| L6 | `README` §"Catatan hasil audit di sandbox" menyebut egress sandbox | masih akurat untuk lingkungan dev ini; hapus saat deploy nyata |
+
+### 11.3 Metode & hasil
+
+```bash
+npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # 0 error (setelah perbaikan)
+npm test                                                 # 25/25 lulus
+npm audit --omit=dev                                     # 0 vulnerabilities
+# file tak terimpor / simbol tak terujuk: 0 (sebelum audit: 5 simbol + 1 file)
+# emoji di seluruh repo: 0
+# referensi firebase/firestore/sqlite di kode: 0
+```
+
+Ukuran sekarang: `server.ts` 2.236 baris, `App.tsx` 916 (dari 2.633), 16
+dependency produksi, bundle `index` ~342 kB + `charts` ~377 kB.

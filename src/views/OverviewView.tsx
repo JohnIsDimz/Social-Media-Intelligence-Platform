@@ -1,4 +1,3 @@
-import React from "react";
 import {
   cn,
   fmt,
@@ -8,7 +7,6 @@ import {
   Rule,
   Button,
   NoDataTag,
-  channelLabel,
 } from "../lib/ui";
 import type { DashboardStats, AIPredictionReport } from "../types";
 import { ChannelTable, type ChannelRow } from "../components/ChannelTable";
@@ -28,7 +26,6 @@ interface OverviewViewProps {
   activeQuery: string;
   activePlatforms: number;
   platformCount: number;
-  clock: string;
   onOpenSources: () => void;
 }
 
@@ -43,7 +40,6 @@ export function OverviewView({
   activeQuery,
   activePlatforms,
   platformCount,
-  clock,
   onOpenSources,
 }: OverviewViewProps) {
   const overall = stats?.overallSentiment ?? "neutral";

@@ -1,4 +1,3 @@
-import React from "react";
 import { cn, channelLabel, shortDate } from "../lib/ui";
 import type { Tracker } from "../types";
 import { BarChart3, ScanLine, Radar, Plus, X, Bell, BellOff, Activity } from "lucide-react";
