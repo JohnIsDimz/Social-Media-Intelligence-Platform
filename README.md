@@ -94,7 +94,12 @@ Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya ter
 
 Deteksi egress: sebelum menyalahkan API, server memeriksa apakah host-nya sendiri punya internet (dua host independen). Kalau tidak ada internet, semua kanal ditandai `unverified` — bukan `down`, karena itu masalah hosting, bukan API yang mati.
 
-**Catatan hasil audit di sandbox pengembangan ini:** egress HTTP keluar dari sandbox hanya diizinkan untuk domain tertentu (allowlist sandbox menolak `api.sakelar.web.id` saat TLS handshake), sehingga `reddit.com`, `hn.algolia.com`, `news.google.com`, `public.api.bsky.app`, `stackexchange.com`, `dev.to`, dan lainnya mengembalikan `ECONNRESET`; `api.github.com` mengembalikan `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (intercept TLS). Artinya **di sandbox ini dashboard tetap kosong**, sedangkan di host biasa (VPS, Cloud Run, Railway, laptop) kolektor publik akan langsung berjalan tanpa kunci API apa pun.
+**Kenapa dashboard bisa kosong di mesin pengembangan:** kalau host-nya tidak
+punya akses internet keluar (firewall, allowlist egress, intercept TLS), semua
+kolektor publik gagal dan setiap kanal dilaporkan `unverified` — bukan `down`.
+Cek dengan `curl -s localhost:3000/api/data-sources | jq .egress`. Di host biasa
+(VPS, Cloud Run, Railway, laptop) kolektor publik langsung berjalan tanpa kunci
+API apa pun.
 
 **Titik mati yang ditemukan dan sudah diperbaiki:**
 * Database lokal membuat container stateful: file harus di-volume, di-backup, dan hilang saat host diganti. Seluruh penyimpanan kini di Supabase, jadi satu proses Node tanpa state apa pun sudah cukup.
@@ -172,3 +177,12 @@ npm run lint     # type-check saja
 `tests/server-routes.test.ts` mengimpor `server.ts` (tanpa `listen`, lewat `SMIP_NO_LISTEN=1`) dan memastikan seluruh 13 rute API terdaftar, middleware rate-limit/auth berjalan sebelum rute, dan catch-all `/api` berada di urutan terakhir — bug yang pernah membuat rute asli tertelan.
 
 Unit test di `tests/supabase.test.ts` menjalankan kode `src/lib/supabaseDb.ts` terhadap server PostgREST tiruan di localhost: bentuk baris camelCase vs kolom snake_case, upsert yang idempoten, hapus tracker beserta mention-nya, penggantian hasil scan, pemangkasan riwayat, pemecahan 450 baris menjadi 3 permintaan, serta empat kondisi gagal (belum dikonfigurasi, tidak terjangkau, tabel belum ada, normal).
+
+## Lisensi
+
+Dirilis di bawah Apache License 2.0 — lihat [`LICENSE`](LICENSE). Pemegang hak
+cipta: JohnIsDimz. Ringkasnya: Anda boleh memakai, memodifikasi, dan
+mendistribusikan kode ini, termasuk untuk keperluan komersial, selama Anda
+menyertakan salinan lisensi, mempertahankan pemberitahuan hak cipta, dan
+menyatakan perubahan yang Anda buat. Lisensi ini juga memuat pemberian paten
+eksplisit dari setiap kontributor.

@@ -131,7 +131,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
           body: responseBodyText
         });
         throw new ApiError(
-          `Gagal mengurai respons sebagai JSON: ${err.message}. Potongan konten: "${responseBodyText.substring(0, 100)}"`,
+          `Could not parse the response as JSON: ${err.message}. Content snippet: "${responseBodyText.substring(0, 100)}"`,
           response.status,
           response.statusText,
           responseBodyText

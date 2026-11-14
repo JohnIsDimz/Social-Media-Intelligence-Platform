@@ -11,7 +11,7 @@ Database setup lives in [`SUPABASE.md`](SUPABASE.md).
 
 | Check | Why | How |
 |---|---|---|
-| `API_AUTH_TOKEN` set | Without it, anyone on the internet can create trackers and spend your AI credit. `POST/PUT/PATCH/DELETE` stay public otherwise. | `openssl rand -hex 32` |
+| `API_AUTH_TOKEN` set | Without it, anyone on the internet can create trackers and spend your AI credit. `POST/PUT/PATCH/DELETE` and the dashboard itself stay public otherwise. | `openssl rand -hex 32` |
 | `AI_API_KEY` set | Without it there is no sentiment analysis, no forecast, and no search-grounded channels. The dashboard will be honestly empty. | Sakelar console |
 | `.env` not in git | It holds keys. `.gitignore` already covers it. | `git check-ignore -v .env` |
 | Port not exposed publicly | The app speaks plain HTTP. nginx/Caddy terminates TLS. | bind `127.0.0.1:3000` |
@@ -36,6 +36,8 @@ Verify:
 
 ```bash
 curl -s localhost:3000/api/health | jq
+# dashboard: open http://<host>/ and sign in with API_AUTH_TOKEN once
+# scripts:   curl -H "Authorization: Bearer $TOKEN" -X POST ...
 # expect: status ok, ai.enabled true, collectors.grounding true
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/api/nope   # 404, JSON
 ```

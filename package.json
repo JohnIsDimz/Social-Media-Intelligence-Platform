@@ -11,8 +11,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "audit": "npm audit --omit=dev --audit-level=high",
-    "test": "tsx tests/supabase.test.ts && tsx tests/server-routes.test.ts",
-    "verify": "tsc --noEmit && tsx tests/supabase.test.ts && tsx tests/server-routes.test.ts && npm run build"
+    "test": "tsx tests/supabase.test.ts && tsx tests/server-routes.test.ts && tsx tests/auth-session.test.ts",
+    "verify": "tsc --noEmit && npm test && npm run build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",
@@ -49,6 +49,6 @@
   "engines": {
     "node": ">=22"
   },
-  "description": "S.M.I.P \u2014 social media intelligence platform (sentiment, emotion, hashtag and brand monitoring).",
-  "license": "UNLICENSED"
+  "description": "S.M.I.P — social media intelligence platform (sentiment, emotion, hashtag and brand monitoring).",
+  "license": "Apache-2.0"
 }

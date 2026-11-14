@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { cn, channelLabel, fmt } from "../lib/ui";
-import { Menu, Radio, Wifi, WifiOff } from "lucide-react";
+import { Menu, Radio } from "lucide-react";
 import { PlatformMark } from "./PlatformMark";
 
 export interface StripSignal {
@@ -14,8 +14,6 @@ interface CommandStripProps {
   trackers: { id: string; query: string; type: string }[];
   totalSignals: number;
   signals: StripSignal[];
-  connection: "connected" | "connecting" | "disconnected" | "polling";
-  clock: string;
   activeChannels: number;
   onOpenMenu: () => void;
 }
@@ -25,8 +23,6 @@ export function CommandStrip({
   trackers,
   totalSignals,
   signals,
-  connection,
-  clock,
   activeChannels,
   onOpenMenu,
 }: CommandStripProps) {
@@ -45,17 +41,6 @@ export function CommandStrip({
     );
     return () => clearInterval(id);
   }, [headlines.length]);
-
-  const connectionLabel =
-    connection === "connected"
-      ? "live feed"
-      : connection === "polling"
-        ? "periodic sync"
-        : connection === "connecting"
-          ? "connecting"
-          : "disconnected";
-
-  const isLive = connection === "connected" || connection === "polling";
 
   return (
     <section
@@ -90,19 +75,8 @@ export function CommandStrip({
           </div>
         </div>
 
-        {/* live state + pulse + clock */}
+        {/* collection state */}
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]">
-          <span className="inline-flex items-center gap-2">
-            {isLive ? (
-              <Wifi size={13} aria-hidden="true" className="text-amber" />
-            ) : (
-              <WifiOff size={13} aria-hidden="true" className="text-white/40" />
-            )}
-            <span className={cn("font-medium", isLive ? "text-amber" : "text-white/50")}>
-              {connectionLabel}
-            </span>
-          </span>
-
           <span className="hidden items-center gap-2 text-white/55 md:inline-flex">
             <span className="tnum text-white/85">{fmt(totalSignals)}</span>
             <span>mentions collected</span>
@@ -139,7 +113,6 @@ export function CommandStrip({
             <span>channels reporting</span>
           </span>
 
-          <span className="tnum hidden text-white/55 sm:inline">{clock}</span>
         </div>
       </div>
     </section>

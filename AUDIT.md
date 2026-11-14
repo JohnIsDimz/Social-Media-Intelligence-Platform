@@ -486,8 +486,65 @@ Uji runtime bundle produksi:
 | `src/server/logger.ts` | 33 | filter level + timestamp |
 | `src/server/scan-state.ts` | 22 | waktu scan terakhir (dipakai rute + loop latar) |
 
-### 12.4 Sisa yang masih terbuka
+### 12.4 Status sisa temuan
 
-L1 (sisa parameter `CommandStrip`), L3 (field `/api/social-signals` tak dipakai),
-L4 (`samplePredictions`), L5 (LICENSE), L6 (catatan egress sandbox di README).
-L2 sudah selesai.
+L1 sudah selesai (lihat §13). L2 selesai. L3, L4, L5, L6 selesai di §13.
+
+---
+
+## 13. Audit putaran keempat — menutup sisa temuan L1-L6 + temuan baru
+
+Dijalankan 2026-11-14 di branch `arena/a53ac00c-...`, basis `6eca3d6`.
+
+### 13.1 Temuan L yang ditutup
+
+| Kode | Tindakan |
+|---|---|
+| L1 | `CommandStrip` menerima prop `connection` dan `clock` yang tidak pernah dirender setelah pita sweep dihapus. Keduanya dibuang dari props, dari `App.tsx`, dan ikon `Wifi`/`WifiOff` yang tinggal mati ikut dihapus. Jam tetap tampil di rail, jadi tidak ada informasi yang hilang. |
+| L3 | `/api/social-signals` tidak lagi mengembalikan `globalBuzzIndex`, `globalSentimentIndex`, `crossPlatformCoherence`, dan `dominantPlatform`. Dua di antaranya bukan pengukuran melainkan normalisasi karangan (pembagian tetap 350). Yang tersisa hanya yang dipakai UI: `platformSignals`, `totalSignalsDetected`, `platformCount`, `activePlatformCount`, `lastAggregatedAt`. Tipe di `App.tsx` disesuaikan. |
+| L4 | `samplePredictions` dihapus seluruhnya (37 baris). Panel forecast sekarang menerima `AIPredictionReport \| null` dan menampilkan keadaan kosong yang menyebut sebabnya: "belum ada yang dikumpulkan" bila API menjawab 422 `no-data`, atau pesan kegagalan yang sebenarnya. Tidak ada lagi tabel berisi baris karangan berlabel "sample". |
+| L5 | `LICENSE` ditambahkan: Apache License 2.0, pemegang hak cipta JohnIsDimz. Teks diambil utuh dari salinan kanonik di `node_modules/@opentelemetry/api/LICENSE` (201 baris, termasuk lampiran) — bukan ditulis ulang dari ingatan — lalu placeholder `[yyyy]` diisi. Field `license` di `package.json` diubah dari `UNLICENSED` menjadi `Apache-2.0` agar tidak bertentangan, dan README mendapat bagian ringkas "Lisensi". |
+| L6 | Paragraf "Catatan hasil audit di sandbox pengembangan ini" dihapus dari README. Penggantinya menjelaskan hal yang berguna untuk pembaca mana pun: bila host tidak punya egress, setiap kanal dilaporkan `unverified` (bukan `down`), dan cara memeriksanya lewat `/api/data-sources`. |
+
+### 13.2 Temuan baru
+
+| Kode | Temuan | Bukti | Perbaikan |
+|---|---|---|---|
+| R25 | **Dashboard tidak bisa dipakai bila `API_AUTH_TOKEN` diset** — guard mewajibkan Bearer pada semua POST, tetapi UI browser tidak pernah mengirim header itu. Di VPS yang mengikuti `docs/VPS.md`, membuat tracker selalu gagal 401. | `grep -rn "Authorization" src/` hanya menemukan pemakaian server-side di `aiProvider.ts` | Ditambahkan sesi dashboard: `GET /login` (form token), `POST /login` (rate limit 10/10 menit), cookie `smip_session` berisi **HMAC-SHA256** token (bukan token asli), `HttpOnly`, `SameSite=Strict`, `Secure` mengikuti `req.secure`, `Max-Age` 7 hari, dan `GET /logout`. Guard `/api` menerima cookie **atau** Bearer. SPA juga digerbangi agar pengunjung anonim diarahkan ke `/login`, bukan disuguhi shell kosong yang gagal 401. Flag `Secure` sengaja diturunkan dari request, bukan `NODE_ENV`, karena browser membuang cookie `Secure` di atas HTTP dan itu akan membuat VPS yang belum TLS terjebak login-loop. |
+| R26 | Token API berisiko masuk bundle browser | diperiksa dengan `grep -E "AI_API_KEY\|API_AUTH_TOKEN\|SUPABASE_SERVICE_ROLE_KEY\|sakelar" dist/assets/*.js`: hanya muncul sebagai **teks petunjuk UI**, tidak ada nilai atau akses `process.env` | Tidak ada perubahan kode; hasilnya dicatat sebagai verifikasi. Desain R25 memastikan token tetap tidak perlu dikirim ke klien. |
+| R27 | Bahasa Indonesia tersisa di kode yang dilihat pengguna | 4 `console.error`, 1 pesan `ApiError`, 1 string fallback di kolektor | Diterjemahkan ke Bahasa Inggris; produk tetap konsisten satu bahasa. |
+
+### 13.3 Verifikasi
+
+```bash
+npx tsc --noEmit    # 0 error
+npm test            # 25 storage + 6 route + 15 auth = 46 lulus, 0 gagal
+npm run build       # vite + esbuild ok
+npm run audit       # 0 vulnerabilities
+```
+
+Uji `tests/auth-session.test.ts` (server sungguhan, port efemeral, `API_AUTH_TOKEN` diset) membuktikan:
+
+| Asersi | Hasil |
+|---|---|
+| `GET /` anonim → 302 ke `/login` | PASS |
+| Halaman login memuat form token dan **tidak** memuat tokennya | PASS |
+| Token salah ditolak, tanpa cookie | PASS |
+| Token benar → cookie `smip_session`, `HttpOnly`, `SameSite=Strict`, tidak memuat token asli | PASS |
+| Dengan sesi: dashboard 200 dan POST diizinkan (503 = database, bukan 401) | PASS |
+| Bearer tetap bekerja untuk skrip | PASS |
+| POST tanpa kredensial → 401 `reason: "unauthorized"` | PASS |
+| Cookie palsu → 401 | PASS |
+| `GET /api/health` tetap publik | PASS |
+| `GET /logout` mengakhiri sesi (`Max-Age=0`) | PASS |
+
+Uji manual `curl` pada bundle produksi juga dijalankan untuk sepuluh skenario yang sama.
+
+### 13.4 Status akhir temuan
+
+| Kode | Status |
+|---|---|
+| L1, L2, L3, L4, L5, L6 | selesai |
+| R1-R27 | selesai (lihat §11 dan §12 untuk R1-R24) |
+
+Tidak ada temuan audit yang masih terbuka. Yang tetap berupa **keputusan produk** (bukan cacat) hanya: apakah `GET /login` perlu kustomisasi tampilan lebih lanjut, dan apakah ingin menambah `NOTICE` bila nanti menerima kontribusi pihak ketiga.

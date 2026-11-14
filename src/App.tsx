@@ -23,43 +23,7 @@ import { ChannelsView } from "./views/ChannelsView";
  * it is never mistaken for a live prediction. This is presentational copy, not
  * an invented data reading — it disappears the moment /api/predict-trends works.
  */
-const samplePredictions: AIPredictionReport = {
-  summary:
-    "No live forecast has run yet. The figures below are a layout sample: set AI_API_KEY (Sakelar) and press recompute to generate a forecast from the mentions you have collected.",
-  predictions: [
-    {
-      day: "Day 1 (tomorrow)",
-      dateLabel: new Date(Date.now() + 86400000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
-      predictedSentiment: "neutral",
-      confidenceScore: 0,
-      expectedPosPct: 33,
-      expectedNeuPct: 34,
-      expectedNegPct: 33,
-      primaryDriver: "Sample row — not a prediction.",
-    },
-    {
-      day: "Day 2",
-      dateLabel: new Date(Date.now() + 172800000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
-      predictedSentiment: "neutral",
-      confidenceScore: 0,
-      expectedPosPct: 33,
-      expectedNeuPct: 34,
-      expectedNegPct: 33,
-      primaryDriver: "Sample row — not a prediction.",
-    },
-    {
-      day: "Day 3",
-      dateLabel: new Date(Date.now() + 259200000).toLocaleDateString("en-GB", { day: "numeric", month: "long" }),
-      predictedSentiment: "neutral",
-      confidenceScore: 0,
-      expectedPosPct: 33,
-      expectedNeuPct: 34,
-      expectedNegPct: 33,
-      primaryDriver: "Sample row — not a prediction.",
-    },
-  ],
-  actionableInsights: [],
-};
+
 
 export default function App() {
   const [view, setView] = useState<View>("overview");
@@ -110,6 +74,9 @@ export default function App() {
 
   // AI Prediction State
   const [predictions, setPredictions] = useState<AIPredictionReport | null>(null);
+  // Why no forecast is on screen. "Nothing collected yet" is a different answer
+  // from "the model call failed", and the panel shows which one applies.
+  const [predictionsError, setPredictionsError] = useState<string | null>(null);
   const [isLoadingPredictions, setIsLoadingPredictions] = useState(false);
 
   // Universal Social Signal Aggregator State
@@ -124,14 +91,10 @@ export default function App() {
       sampleSize?: number;
       activeUsersCount: number;
     }[];
-    aggregateIndex: {
-      globalBuzzIndex: number;
-      globalSentimentIndex: number;
-      crossPlatformCoherence: number;
-      dominantPlatform: string;
-      totalSignalsDetected: number;
-      lastAggregatedAt: string;
-    };
+    totalSignalsDetected: number;
+    platformCount: number;
+    activePlatformCount: number;
+    lastAggregatedAt: string;
   } | null>(null);
 
   // Real-Time WebSocket and Live Telemetry State
@@ -187,7 +150,7 @@ export default function App() {
         showNotification("Notification permission was denied.");
       }
     } catch (err) {
-      console.error("Gagal meminta izin notifikasi:", err);
+      console.error("Failed to request notification permission:", err);
     }
   };
 
@@ -224,7 +187,7 @@ export default function App() {
       const statsData = await api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`);
       setStats(statsData);
     } catch (err) {
-      console.error("Gagal memperbarui stats secara latar belakang:", err);
+      console.error("Failed to refresh stats in the background:", err);
     }
   };
 
@@ -385,11 +348,26 @@ export default function App() {
 
   const fetchPredictions = async () => {
     setIsLoadingPredictions(true);
+    setPredictionsError(null);
     try {
       const data = await api.get<AIPredictionReport>("/api/predict-trends");
       setPredictions(data);
-    } catch (err) {
-      console.error("Gagal memuat prediksi tren AI:", err);
+    } catch (err: any) {
+      // A 422 with reason "no-data" is an answer, not a failure: it means there
+      // is nothing collected to forecast from yet.
+      setPredictions(null);
+      let reason: string | null = null;
+      try {
+        reason = JSON.parse(err?.bodyText || "{}")?.reason ?? null;
+      } catch {
+        reason = null;
+      }
+      setPredictionsError(
+        reason === "no-data"
+          ? "Nothing has been collected yet, so there is nothing to forecast."
+          : err?.message || "The forecast could not be computed."
+      );
+      console.error("Failed to load the AI trend forecast:", err);
     } finally {
       setIsLoadingPredictions(false);
     }
@@ -403,7 +381,7 @@ export default function App() {
           const data = await api.get<DashboardStats>(`/api/dashboard-stats?range=${timeRange}`);
           setStats(data);
         } catch (err) {
-          console.error("Gagal mengambil data statistik filter:", err);
+          console.error("Failed to load the filtered statistics:", err);
         }
       };
       fetchStatsForRange();
@@ -751,8 +729,7 @@ export default function App() {
 
   const activeChannelCount = channelRows.filter((r) => r.buzzVolume > 0).length;
   const totalSignals =
-    socialSignals?.aggregateIndex?.totalSignalsDetected ??
-    (stats?.totalAnalyzed ?? 0);
+    socialSignals?.totalSignalsDetected ?? (stats?.totalAnalyzed ?? 0);
 
   const toastKind: Toast["kind"] = error ? "fail" : "ok";
   const toastMessage = error ?? successMessage;
@@ -765,8 +742,6 @@ export default function App() {
     setError(null);
     setSuccessMessage(null);
   };
-
-  const connectionForStrip = webSocketStatus;
 
   const railProps = {
     trackers,
@@ -793,8 +768,6 @@ export default function App() {
         trackers={trackers}
         totalSignals={totalSignals}
         signals={channelRows}
-        connection={connectionForStrip}
-        clock={jakartaTime}
         activeChannels={activeChannelCount}
         onOpenMenu={() => setIsDrawerOpen(true)}
       />
@@ -855,8 +828,9 @@ export default function App() {
             <OverviewView
               stats={stats}
               channels={channelRows}
-              predictions={predictions ?? samplePredictions}
+              predictions={predictions}
               predictionsLive={Boolean(predictions)}
+              forecastError={predictionsError}
               isLoadingPredictions={isLoadingPredictions}
               onRefreshPredictions={fetchPredictions}
               onExport={exportDashboardReport}

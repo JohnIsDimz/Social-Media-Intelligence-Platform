@@ -18,8 +18,9 @@ import { RadarDial } from "../components/RadarDial";
 interface OverviewViewProps {
   stats: DashboardStats | null;
   channels: ChannelRow[];
-  predictions: AIPredictionReport;
+  predictions: AIPredictionReport | null;
   predictionsLive: boolean;
+  forecastError: string | null;
   isLoadingPredictions: boolean;
   onRefreshPredictions: () => void;
   onExport: () => void;
@@ -34,6 +35,7 @@ export function OverviewView({
   channels,
   predictions,
   predictionsLive,
+  forecastError,
   isLoadingPredictions,
   onRefreshPredictions,
   onExport,
@@ -192,6 +194,7 @@ export function OverviewView({
           predictions={predictions}
           isLive={predictionsLive}
           loading={isLoadingPredictions}
+          unavailableReason={forecastError}
           onRefresh={onRefreshPredictions}
         />
       </div>
