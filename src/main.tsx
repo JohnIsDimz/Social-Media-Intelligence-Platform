@@ -16,7 +16,7 @@ if (typeof window !== "undefined" && 'serviceWorker' in navigator) {
           if (newWorker) {
             newWorker.addEventListener('statechange', () => {
               if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                console.log('[Service Worker] Konten baru tersedia. Silakan segarkan halaman untuk pembaruan.');
+                console.log('[Service Worker] A new version is available. Refresh to update.');
               }
             });
           }

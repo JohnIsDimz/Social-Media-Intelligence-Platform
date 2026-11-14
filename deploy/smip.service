@@ -1,0 +1,41 @@
+# systemd unit for running S.M.I.P without Docker.
+#
+#   sudo cp deploy/smip.service /etc/systemd/system/smip.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now smip
+#
+# Assumes the repository lives at /opt/smip, Node 22 is installed, and
+# `npm ci && npm run build` has been run there once.
+
+[Unit]
+Description=S.M.I.P social media intelligence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smip
+Group=smip
+WorkingDirectory=/opt/smip
+EnvironmentFile=/opt/smip/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/node dist/server.cjs
+Restart=always
+RestartSec=5
+
+# Hardening: the app writes nothing to disk — storage is Supabase over HTTPS.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LimitNOFILE=65535
+
+# Logs go to the journal: journalctl -u smip -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

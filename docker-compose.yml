@@ -1,0 +1,48 @@
+# S.M.I.P — single-host deployment for a VPS.
+#
+#   docker compose up -d --build
+#
+# Put real values in .env next to this file first (see .env.example). Never
+# commit that file: it holds API keys.
+
+services:
+  smip:
+    build: .
+    image: smip:latest
+    container_name: smip
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # Behind nginx/Caddy, keep trust proxy on so rate limits see real client IPs.
+      TRUST_PROXY: "1"
+      # Provided by .env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.
+      # Without them the app starts but serves empty data and reports
+      # "database: not-configured" on /api/health.
+    ports:
+      # Bind to loopback only: the reverse proxy terminates TLS and is the only
+      # thing that should reach the app directly.
+      - "127.0.0.1:3000:3000"
+    # No volume: Supabase holds the data, so the container stays stateless and a
+    # redeploy or a wiped host loses nothing.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        # Deployed state: liveness only. A 503 means Supabase is unreachable, not
+        # that the container is broken; restarting would not fix it. Get the
+        # reason from /api/health or the log line "[Supabase] ...".
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.status<600?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true

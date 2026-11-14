@@ -67,9 +67,9 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
       try {
         responseBodyText = await response.text();
       } catch (e: any) {
-        console.error(`[API ERROR] Gagal membaca teks respons dari ${url}:`, e);
+        console.error(`[API ERROR] Could not read the response body from ${url}:`, e);
         throw new ApiError(
-          `Gagal membaca teks respons dari server: ${e.message}`,
+          `Could not read the response body from the server: ${e.message}`,
           response.status,
           response.statusText,
           ""
@@ -78,7 +78,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
 
       // Handle non-2xx successful responses
       if (!response.ok) {
-        let errorMessage = `Permintaan API gagal dengan status ${response.status} (${response.statusText})`;
+        let errorMessage = `Request failed with status ${response.status} (${response.statusText})`;
         
         if (isJson && responseBodyText) {
           try {
@@ -114,7 +114,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
         const snippet = responseBodyText.substring(0, 150).trim();
         const errorMsg = `Server mengembalikan format '${contentType || "text/plain"}' bukan JSON. Potongan respons: "${snippet}"`;
         
-        console.error(`[API VALIDATION ERROR] Mengharapkan JSON dari ${url} tetapi menerima:`, {
+        console.error(`[API VALIDATION ERROR] Expected JSON from ${url} but received:`, {
           contentType,
           snippet,
           fullBody: responseBodyText
@@ -127,7 +127,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
       try {
         return JSON.parse(responseBodyText) as T;
       } catch (err: any) {
-        console.error(`[API PARSE ERROR] Gagal mengurai respons JSON dari ${url}:`, err, {
+        console.error(`[API PARSE ERROR] Could not parse the JSON response from ${url}:`, err, {
           body: responseBodyText
         });
         throw new ApiError(
@@ -144,7 +144,7 @@ async function request<T>(url: string, options: FetchOptions = {}): Promise<T> {
       // Determine if it was a timeout abort
       if (err.name === 'AbortError') {
         err = new ApiError(
-          `Permintaan dibatalkan karena melebihi batas waktu (timeout ${timeout}ms)`,
+          `Request cancelled: it exceeded the ${timeout}ms timeout`,
           408,
           "Request Timeout",
           "Timeout"

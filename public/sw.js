@@ -1,8 +1,8 @@
-const CACHE_NAME = 'smip-static-v2';
+const CACHE_NAME = 'smip-static-v3';
 const PRE_CACHE_RESOURCES = [
   '/',
   '/index.html',
-  '/favicon.ico'
+  '/favicon.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -47,6 +47,23 @@ self.addEventListener('fetch', (event) => {
     event.request.destination === 'image' ||
     event.request.destination === 'font' ||
     url.pathname.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf|json)$/);
+
+  // Network-first for documents so a new deployment is picked up immediately
+  // instead of being pinned to an old cached index.html.
+  if (event.request.destination === 'document') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || caches.match('/')))
+    );
+    return;
+  }
 
   if (isStaticAsset) {
     event.respondWith(
@@ -94,8 +111,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
-      icon: '/favicon.ico',
-      badge: '/favicon.ico',
+      icon: '/favicon.png',
+      badge: '/favicon.png',
       vibrate: [200, 100, 200],
       tag: data.tag || 'smip-alert',
       data: { url: data.url || '/' }

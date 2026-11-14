@@ -1,0 +1,17 @@
+{
+  "name": "Social Media Intelligence Platform (S.M.I.P)",
+  "short_name": "S.M.I.P",
+  "description": "Public conversation intelligence: sentiment, emotion, hashtags and brand monitoring, built only on collected data.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f2f4f3",
+  "theme_color": "#0e3f4a",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    }
+  ]
+}
