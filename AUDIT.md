@@ -806,3 +806,36 @@ npm run audit      # 0 vulnerabilities
 - Guard kredensial memeriksa nama field, bukan entropi nilai. Nilai acak yang
   dikirim lewat field bernama netral tetap lolos — tetapi nilai itu tidak pernah
   dipakai, karena seluruh kode membaca kunci hanya dari `process.env`.
+
+## 17. Rencana peningkatan penangkapan sinyal
+
+`docs/SIGNAL-RECOMMENDATIONS.md` memuat rencana lengkap. Ringkasnya, temuan yang
+paling penting dari pembacaan ulang jalur kolektor:
+
+- **L1** — `replaceTrackerMentions` membuat satu siklus buruk menghapus riwayat
+  siklus yang baik (`src/server/routes/analysis.ts:166`).
+- **L2** — setiap kolektor API dibatasi 3–5 baris, jauh di bawah yang diizinkan
+  endpoint-nya.
+- **L3** — kanal berbasis pencarian dijalankan **berurutan**, satu panggilan model
+  per kanal, 8 hasil, disimpan 4.
+- **L4** — bahasa pencarian tetap `en`; brand Indonesia kehilangan percakapan
+  berbahasa Indonesia.
+- **L5** — hitungan engagement dibuang setelah diubah menjadi label
+  `High|Medium|Low`, jadi peringkat sinyal tidak punya angka.
+
+Dua bug yang sudah pasti, bukan sekadar optimasi:
+
+1. `TWITTER_BEARER_TOKEN` collector memakai `max_results=4`, padahal endpoint
+   menerima 10–100. Permintaan itu ditolak, sehingga kanal X selalu kosong
+   walaupun token sudah diisi.
+2. `mastodon.social` membatasi `v2/search?type=statuses` di balik autentikasi;
+   tanpa token hasilnya `statuses: []`. Hashtag timeline tetap publik, jadi
+   kolektor Mastodon seharusnya memakai `/api/v1/timelines/tag/:tag`.
+
+Selain itu `medium` dan `vimeo` dideklarasikan `kind: "api"` di `src/channels.ts`
+tetapi **tidak punya fetcher** di `collectors.ts` — status kesehatan mereka
+mengklaim kemampuan yang tidak ada di kode. Ini harus diperbaiki (tambah
+kolektornya) atau diturunkan ke `none`.
+
+Belum ada perubahan kode dari rencana ini; dokumen tersebut adalah urutan kerja
+yang diusulkan, bukan klaim bahwa sudah dikerjakan.
