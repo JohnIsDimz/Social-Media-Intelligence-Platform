@@ -309,6 +309,9 @@ Semua temuan **critical** dan mayoritas **high** sudah diperbaiki dan **diverifi
 | — | Tanpa CI, health check, Docker, graceful shutdown | 🟡 **Sebagian** — health check, Docker, graceful shutdown ✅; pipeline CI ada di `docs/ci.yml` (butuh izin `workflows` untuk dipindah ke `.github/workflows/`) |
 | — | README faktanya salah | ✅ **Diperbaiki** + bagian keamanan/transparansi baru |
 | — | `favicon.ico` & manifest hilang | ✅ **Ditambahkan** (`favicon.png` + `manifest.json`) |
+| — | AI terkunci ke SDK Gemini (vendor lock-in, satu kunci untuk satu vendor) | ✅ **Fixed** — semua jalur AI lewat gateway OpenAI-compatible (`src/lib/aiProvider.ts`), default Sakelar `glm-5.3-flash`; SDK `@google/genai` dihapus dari dependensi |
+| — | Output model dipercaya mentah-mentah / bisa menyisipkan data tak relevan | ✅ **Fixed** — jawaban wajib lolos JSON (`chatJson`), mention hasil grounding difilter harus memuat kata kunci, kegagalan provider diklasifikasikan (`auth`/`rate-limit`/`unavailable`/`bad-response`) dan tidak pernah masuk database |
+| — | Forecast mengarang angka saat API gagal | ✅ **Fixed** — `422` bila belum ada data, `503` + `reason` bila AI mati; blok "fallback engine" berisi angka statis dihapus |
 | B2 | `writeDB()` full rewrite | ⬜ Belum (perbaikan performa, bukan blocker live) |
 | B3 | `syncToFirestore` tulis ulang semua dokumen | ⬜ Belum (biaya, bukan blocker live) |
 | — | `App.tsx` 2.633 baris / tanpa code splitting | ⬜ Belum (refactor) |

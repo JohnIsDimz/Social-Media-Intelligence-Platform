@@ -24,7 +24,7 @@ import { ChannelsView } from "./views/ChannelsView";
  */
 const samplePredictions: AIPredictionReport = {
   summary:
-    "No live forecast has run yet. The figures below are a layout sample: add GEMINI_API_KEY and press recompute to generate a forecast from the mentions you have collected.",
+    "No live forecast has run yet. The figures below are a layout sample: set AI_API_KEY (Sakelar) and press recompute to generate a forecast from the mentions you have collected.",
   predictions: [
     {
       day: "Day 1 (tomorrow)",

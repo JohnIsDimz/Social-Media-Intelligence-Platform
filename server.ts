@@ -5,13 +5,18 @@ import fs from "fs";
 import dotenv from "dotenv";
 
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { CHANNEL_SPECS, CHANNEL_KEYS, channelSpec } from "./src/channels.ts";
+import {
+  aiConfig,
+  aiSummary,
+  chatJson,
+  AiError,
+} from "./src/lib/aiProvider.ts";
 
 dotenv.config();
 
@@ -91,7 +96,7 @@ const apiRateLimiter = rateLimit({
   message: { error: "Too many requests. Please try again shortly." },
 });
 
-// Strict limit for endpoints that spend money on Gemini / external APIs.
+// Strict limit for endpoints that spend money on the AI gateway / external APIs.
 const expensiveRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 20,
@@ -157,53 +162,39 @@ function broadcast(type: string, data: any) {
   }
 }
 
-// Initialize Gemini SDK with telemetry header
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "missing_api_key_placeholder",
-  httpOptions: {
-    headers: {
-      'User-Agent': 'mediatrend-build',
-    }
-  }
-});
+/* ---------------------------------------------------------------------------
+ * AI provider
+ *
+ * One OpenAI-compatible gateway (Sakelar by default, model glm-5.3-flash)
+ * replaces the Gemini SDK. No key means no AI: the UI is told, nothing is faked.
+ * ------------------------------------------------------------------------- */
 
-let geminiRateLimitActive = false;
-let rateLimitResetTime = 0;
+let aiCooldownUntil = 0;
 
-// S.M.I.P surfaces collected data only. There is no synthetic fallback: if a
-// channel returns nothing, the product says so instead of inventing a mention.
-
-// @google/genai types `response.text` as optional. A missing body is a real
-// failure mode (safety block, truncation), so fail loudly instead of crashing
-// with a confusing "Cannot read properties of undefined".
-function responseText(response: { text?: string }): string {
-  const text = response?.text;
-  if (typeof text !== "string" || text.trim() === "") {
-    throw new Error("Model AI tidak mengembalikan konten yang dapat dibaca.");
-  }
-  return text;
+/** True when a key exists and no rate-limit cooldown is in force. */
+function isAiAvailable(): boolean {
+  const config = aiConfig();
+  if (!config.enabled) return false;
+  if (Date.now() < aiCooldownUntil) return false;
+  return true;
 }
 
-// Helper to check if the Gemini API Key is configured and valid
-function isGeminiKeyValid(): boolean {
-  if (geminiRateLimitActive && Date.now() < rateLimitResetTime) {
-    return false;
-  } else if (geminiRateLimitActive) {
-    geminiRateLimitActive = false;
+/** Readability alias used at the collection call sites. */
+function aiCanSearch(): boolean {
+  return isAiAvailable();
+}
+
+function startAiCooldown(ms = 120_000) {
+  aiCooldownUntil = Date.now() + ms;
+}
+
+/** Classifies provider failures so the caller can log and degrade correctly. */
+function describeAiFailure(err: unknown): string {
+  if (err instanceof AiError) {
+    if (err.kind === "rate-limit") startAiCooldown();
+    return `[${err.kind}] ${err.message}`;
   }
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) return false;
-  const normalized = key.trim();
-  if (
-    normalized === "" || 
-    normalized === "MY_GEMINI_API_KEY" || 
-    normalized === "YOUR_GEMINI_API_KEY" || 
-    normalized.startsWith("YOUR_") ||
-    normalized === "missing_api_key_placeholder"
-  ) {
-    return false;
-  }
-  return true;
+  return String((err as any)?.message || err);
 }
 
 // Database: node:sqlite behind a small better-sqlite3-compatible adapter, so a
@@ -976,7 +967,7 @@ async function scrapeSocialUrl(url: string) {
     };
   } catch (err: any) {
     logger.warn(`Scrape failed for ${url}:`, err.message);
-    // Return gracefully so Gemini can estimate or use fallback
+    // Return gracefully so the analyser can estimate from what it did get
     return {
       title: "Scrape Link",
       description: "URL inaccessible due to platform security restrictions, but metadata can be analyzed conceptually.",
@@ -1199,7 +1190,7 @@ async function fetchRealTweets(query: string): Promise<any[]> {
  *
  * Each of these talks to a documented, public endpoint — no scraping of
  * logged-in pages, no credentials invented. They are the reason the dashboard
- * can show real data without a Gemini key.
+ * can show real data without any AI key.
  * ------------------------------------------------------------------------- */
 
 const COLLECTOR_TIMEOUT_MS = 8000;
@@ -1578,7 +1569,7 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
 
   // 4. Grounding: If we have remaining platforms (e.g. Tiktok, Instagram, Facebook, WhatsApp, LinkedIn, etc.)
   // or if we have fewer than 3 total results, trigger Google Search Grounding for absolute global coverage!
-  if (remainingPlatforms.length > 0 && isGeminiKeyValid()) {
+  if (remainingPlatforms.length > 0 && aiCanSearch()) {
     try {
       logger.info(`[Unified API Engine] Querying live Google Search Grounding for remaining platforms: ${remainingPlatforms.join(", ")}...`);
       const searchPlatformsStr = remainingPlatforms.join(", ");
@@ -1607,58 +1598,55 @@ async function fetchUnifiedSocialSignals(tracker: any): Promise<any[]> {
         { ... }
       ]`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                platform: { type: Type.STRING },
-                url: { type: Type.STRING },
-                author: { type: Type.STRING },
-                title: { type: Type.STRING },
-                content: { type: Type.STRING },
-                sentiment: { type: Type.STRING },
-                sentimentScore: { type: Type.NUMBER },
-                emotion: { type: Type.STRING },
-                engagement: { type: Type.STRING },
-                date: { type: Type.STRING },
-                country: { type: Type.STRING },
-                latitude: { type: Type.NUMBER },
-                longitude: { type: Type.NUMBER }
-              },
-              required: ["platform", "url", "author", "title", "content", "sentiment", "sentimentScore", "emotion", "engagement", "date", "country", "latitude", "longitude"]
-            }
-          }
-        }
+      const parsedGrounding = await chatJson<any[]>({
+        system:
+          "You are a media-intelligence collector. You are given web results from a search tool and must " +
+          "extract only mentions that actually appear in them. Never invent a post, an author, a URL or a date.",
+        prompt,
+        expectation: "an array of mention objects",
+        temperature: 0,
+        maxTokens: 2000,
       });
 
-      const parsedGrounding = JSON.parse(responseText(response).trim());
-      const cleanGrounding = parsedGrounding.map((res: any) => {
-        let cleanUrl = res.url || "";
-        if (!cleanUrl.startsWith("http") || cleanUrl.includes("example.com") || cleanUrl.includes("mock") || cleanUrl.includes("share/status/global")) {
-          cleanUrl = constructOfficialPlatformSearchUrl(res.platform || "google", query);
+      if (!Array.isArray(parsedGrounding)) {
+        throw new AiError("Grounding did not return an array.", "bad-response");
+      }
+      if (parsedGrounding.length === 0) {
+        logger.info("[Unified API Engine] The model found no grounded mentions for this cycle.");
+        return [];
+      }
+
+      // The model is happy to return loosely-related chatter. Drop anything that
+      // never mentions the tracked keyword, so a channel is not "filled" with
+      // unrelated posts.
+      const keyword = query.replace(/^#/, "").toLowerCase().trim();
+      const relevant = parsedGrounding.filter((res: any) => {
+        if (!keyword) return true;
+        const hay = `${res?.title || ""} ${res?.content || ""} ${res?.author || ""}`.toLowerCase();
+        return hay.includes(keyword);
+      });
+      logger.info(
+        `[Unified API Engine] Grounded mentions kept: ${relevant.length}/${parsedGrounding.length} (keyword match).`
+      );
+
+      const cleanGrounding = relevant.map((res: any) => {
+        let cleanUrl = typeof res?.url === "string" ? res.url : "";
+        if (
+          !cleanUrl.startsWith("http") ||
+          cleanUrl.includes("example.com") ||
+          cleanUrl.includes("share/status/global")
+        ) {
+          cleanUrl = constructOfficialPlatformSearchUrl(res?.platform || "google", query);
         }
-        return {
-          ...res,
-          url: cleanUrl
-        };
+        return { ...res, url: cleanUrl };
       });
 
       mergedResults.push(...cleanGrounding);
     } catch (err: any) {
-      const errStr = String(err);
-      if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-        logger.warn("[Unified API Engine Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
-        geminiRateLimitActive = true;
-        rateLimitResetTime = Date.now() + 120000; // 2 minutes
-      }
-      logger.error("[Unified API Engine Warning] Google Search Grounding failed for remaining platforms:", err);
+      logger.warn(
+        `[Unified API Engine] Model lookup failed for ${remainingPlatforms.join(", ")}:`,
+        describeAiFailure(err)
+      );
     }
   }
 
@@ -1743,7 +1731,8 @@ async function buildChannelHealth(force = false) {
     return healthCache.payload;
   }
 
-  const grounding = isGeminiKeyValid();
+  const ai = aiSummary();
+  const grounding = ai.enabled;
   const egress = await detectEgress();
   const channels: Record<string, ChannelHealth> = {};
 
@@ -1757,8 +1746,8 @@ async function buildChannelHealth(force = false) {
         channels[spec.key] = {
           status: grounding ? "grounding" : "needs-key",
           detail: grounding
-            ? `No public read API. Collected through search grounding: ${spec.collects}.`
-            : `No public read API. Set GEMINI_API_KEY to collect ${spec.collects} via search grounding.`,
+            ? `No public read API. Collected through search-grounded lookup on ${ai.provider} (${ai.model}): ${spec.collects}.`
+            : `No public read API. Set AI_API_KEY (search-grounded lookup) to collect ${spec.collects}.`,
         };
         return;
       }
@@ -1813,6 +1802,7 @@ async function buildChannelHealth(force = false) {
   const values = Object.values(channels);
   const payload = {
     grounding,
+    ai,
     egress,
     checkedAt: new Date().toISOString(),
     channels,
@@ -1860,9 +1850,9 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     uptimeSeconds: Math.round(process.uptime()),
     version: process.env.npm_package_version || "unknown",
-    geminiConfigured: isGeminiKeyValid(),
+    ai: aiSummary(),
     collectors: {
-      grounding: isGeminiKeyValid(),
+      grounding: aiConfig().enabled,
       reddit: true,
       youtube: Boolean(process.env.YOUTUBE_API_KEY),
       twitter: Boolean(process.env.TWITTER_BEARER_TOKEN),
@@ -1977,11 +1967,11 @@ app.post("/api/analyze-url", async (req, res) => {
       if (scraped.imageUrl) scrapedImg = scraped.imageUrl;
     }
 
-    let geminiResult = null;
+    let modelResult = null;
 
-    if (isGeminiKeyValid()) {
+    if (aiCanSearch()) {
       try {
-        // Call Gemini 3.5 Flash for high-precision Sentiment and Emotion extraction
+        // Model call for high-precision sentiment and emotion extraction
         const prompt = `Analyze this social media post for Sentiment and Emotion monitoring.
         
         Post Details:
@@ -2003,48 +1993,37 @@ app.post("/api/analyze-url", async (req, res) => {
         
         Analyze and output Indonesian-focused slang or abbreviations correctly if present (e.g., "ngaco" -> negative, "keren" -> positive).`;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                sentiment: { type: Type.STRING },
-                sentimentScore: { type: Type.NUMBER },
-                emotion: { type: Type.STRING },
-                engagement: { type: Type.STRING },
-                hashtags: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                },
-                refinedTitle: { type: Type.STRING },
-                refinedDescription: { type: Type.STRING }
-              },
-              required: ["sentiment", "sentimentScore", "emotion", "engagement", "hashtags", "refinedTitle", "refinedDescription"]
-            }
-          }
+        modelResult = await chatJson<{
+          sentiment: string;
+          sentimentScore: number;
+          emotion: string;
+          engagement: string;
+          hashtags: string[];
+          refinedTitle: string;
+          refinedDescription: string;
+        }>({
+          system:
+            "You are a sentiment analyst for public social media conversation. You understand Indonesian " +
+            "slang and internet abbreviations as well as English. Judge the post on its actual wording.",
+          prompt,
+          expectation:
+            "with keys sentiment, sentimentScore, emotion, engagement, hashtags, refinedTitle, refinedDescription",
+          temperature: 0.2,
+          maxTokens: 900,
         });
-
-        geminiResult = JSON.parse(responseText(response).trim());
       } catch (err: any) {
-        const errStr = String(err);
-        if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-          logger.warn("[Gemini API Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
-          geminiRateLimitActive = true;
-          rateLimitResetTime = Date.now() + 120000; // 2 minutes
-        }
-        logger.warn("[Gemini API Warning] Analysis API call failed with error details:", err?.message || err);
-        logger.info("Mengaktifkan Heuristic Sentiment Analyzer lokal sebagai fallback.");
+        logger.warn("[AI] Analysis call failed:", describeAiFailure(err));
+        logger.info("[AI] Falling back to the local heuristic analyser for this request.");
       }
     } else {
-      logger.info("[S.M.I.P Server] GEMINI_API_KEY is not configured or is a placeholder. Bypassing Gemini API and using local high-accuracy heuristic analyzer.");
+      logger.info(
+        `[AI] ${aiSummary().enabled ? "Provider is in cooldown" : "No AI key configured"} — using the local heuristic analyser.`
+      );
     }
 
-    if (!geminiResult) {
+    if (!modelResult) {
       const localResult = localAnalyzeSentiment(scrapedTitle, scrapedDesc);
-      geminiResult = {
+      modelResult = {
         refinedTitle: localResult.refinedTitle,
         refinedDescription: localResult.refinedDescription,
         sentiment: localResult.sentiment,
@@ -2060,14 +2039,14 @@ app.post("/api/analyze-url", async (req, res) => {
       id: `ap-${Date.now()}`,
       url: url || `manual-text-${Date.now()}`,
       platform,
-      title: geminiResult.refinedTitle || scrapedTitle,
-      description: geminiResult.refinedDescription || scrapedDesc,
+      title: modelResult.refinedTitle || scrapedTitle,
+      description: modelResult.refinedDescription || scrapedDesc,
       imageUrl: scrapedImg,
-      sentiment: geminiResult.sentiment,
-      sentimentScore: geminiResult.sentimentScore,
-      emotion: geminiResult.emotion,
-      engagement: geminiResult.engagement,
-      hashtags: geminiResult.hashtags,
+      sentiment: modelResult.sentiment,
+      sentimentScore: modelResult.sentimentScore,
+      emotion: modelResult.emotion,
+      engagement: modelResult.engagement,
+      hashtags: modelResult.hashtags,
       analyzedAt: new Date().toISOString()
     };
 
@@ -2433,192 +2412,157 @@ app.get("/api/dashboard-stats", (req, res) => {
   });
 });
 
-// 8. Generate 3-Day AI Sentiment Prediction Trend using Gemini 3.5 Flash
+// 8. Generate the three-day sentiment forecast through the AI gateway
+/**
+ * Three-day forecast.
+ *
+ * The statistics in the prompt come from stored mentions; the model is only
+ * asked to interpret them. Two honesty rules:
+ *   - no collected mentions  -> 422, because there is nothing to forecast from
+ *   - no AI key / model fail -> 503 with an explanation, never a canned forecast
+ *     dressed up as a prediction
+ */
 app.get("/api/predict-trends", async (req, res) => {
-  try {
-    const db = getDB();
-    const allAnalyzed = db.analyzedPosts || [];
-    const allMonitored = db.monitorResults || [];
-    const combined = [...allAnalyzed, ...allMonitored];
+  const db = getDB();
+  const combined = [...(db.analyzedPosts || []), ...(db.monitorResults || [])];
 
-    // Build statistics for prompt context
+  if (combined.length === 0) {
+    return res.status(422).json({
+      error: "Nothing has been collected yet, so there is nothing to forecast.",
+      reason: "no-data",
+    });
+  }
+
+  if (!isAiAvailable()) {
+    return res.status(503).json({
+      error: aiConfig().enabled
+        ? "The AI provider is in a cooldown after a rate-limit response."
+        : "No AI key is configured (AI_API_KEY).",
+      reason: aiConfig().enabled ? "cooldown" : "not-configured",
+    });
+  }
+
+  try {
     const totalCount = combined.length;
     const posCount = combined.filter((item: any) => item.sentiment === "positive").length;
     const neuCount = combined.filter((item: any) => item.sentiment === "neutral").length;
     const negCount = combined.filter((item: any) => item.sentiment === "negative").length;
 
+    const pct = (n: number) => Math.round((n / totalCount) * 100);
+    const channels = [...new Set(combined.map((item: any) => item.platform))];
+
     const samplePosts = combined.slice(0, 15).map((p: any) => ({
       title: p.title,
-      content: p.content || p.description || "",
+      content: (p.content || p.description || "").slice(0, 240),
       platform: p.platform,
       sentiment: p.sentiment,
-      emotion: p.emotion
+      emotion: p.emotion,
     }));
 
-    const prompt = `Anda adalah sistem kecerdasan buatan analitis media sosial berskala GLOBAL (Social Media Intelligence Platform - S.I.P Global Engine).
-Tugas Anda adalah melakukan Prediksi Tren Arah Sentimen Global & Rekomendasi AI secara akurat untuk 3 hari ke depan berdasarkan data historis global & multi-regional yang diberikan.
-
-DATA HISTORIS RINGKAS:
-- Total data dianalisis: ${totalCount}
-- Jumlah Sentimen Positif: ${posCount}
-- Jumlah Sentimen Netral: ${neuCount}
-- Jumlah Sentimen Negatif: ${negCount}
-
-SAMPEL DATA TERBARU:
-${JSON.stringify(samplePosts, null, 2)}
-
-FOKUS ANALISIS:
-- Sifat analisis adalah GLOBAL (Worldwide Reach). Jangan batasi analisis hanya untuk satu negara saja (seperti Indonesia), melainkan analisis sinyal media, pergeseran budaya digital, tanggapan pasar internasional, tren tagar global, serta multi-regional sentiment.
-- Berikan hasil yang SANGAT AKURAT dengan melakukan korelasi silang antar platform utama di seluruh dunia (TikTok, Instagram, Twitter/X, Reddit, LinkedIn, YouTube).
-- Hasilkan analisis prediksi dalam bahasa Indonesia yang sangat profesional, mendalam, taktis, berorientasi bisnis global, dan mudah dipahami oleh tim eksekutif tingkat dunia.
-
-Keterangan Hari (day):
-- Day 1: "Hari ke-1 (Besok)"
-- Day 2: "Hari ke-2 (Lusa)"
-- Day 3: "Hari ke-3"
-
-Date Label (dateLabel):
-Label tanggal yang merepresentasikan masa depan, misalnya "14 Juli", "15 Juli", dst. sesuaikan dengan waktu local saat ini: ${new Date().toLocaleDateString("id-ID", { day: 'numeric', month: 'long' })}.
-
-Aturan Output JSON:
-- format JSON harus sesuai dengan schema yang ditentukan secara presisi.
-- Untuk predictedSentiment wajib berupa salah satu dari: "positive", "neutral", "negative".
-- expectedPosPct, expectedNeuPct, expectedNegPct harus berupa angka persentase (0-100) dan jumlah ketiganya harus bernilai total 100 untuk setiap harinya.
-- confidenceScore berupa angka desimal dari 0.0 sampai 1.0 yang mencerminkan ketepatan analisis multi-regional.
-- primaryDriver adalah penjelasan ringkas & akurat tentang faktor pendorong utama sentimen global pada hari tersebut.
-- actionableInsights adalah 3 rekomendasi taktis nyata berbasis pasar global untuk merespons tren prediksi tersebut secara efektif.`;
-
-    if (!isGeminiKeyValid()) {
-      throw new Error("GEMINI_API_KEY is not configured or is a placeholder.");
-    }
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            summary: { type: Type.STRING },
-            predictions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  day: { type: Type.STRING },
-                  dateLabel: { type: Type.STRING },
-                  predictedSentiment: { type: Type.STRING },
-                  confidenceScore: { type: Type.NUMBER },
-                  expectedPosPct: { type: Type.NUMBER },
-                  expectedNeuPct: { type: Type.NUMBER },
-                  expectedNegPct: { type: Type.NUMBER },
-                  primaryDriver: { type: Type.STRING }
-                },
-                required: ["day", "dateLabel", "predictedSentiment", "confidenceScore", "expectedPosPct", "expectedNeuPct", "expectedNegPct", "primaryDriver"]
-              }
-            },
-            actionableInsights: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            }
-          },
-          required: ["summary", "predictions", "actionableInsights"]
-        }
-      }
+    const today = new Date().toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
     });
 
-    const parsed = JSON.parse(responseText(response).trim());
-    res.json(parsed);
+    const prompt = `Based on the collected public mentions below, forecast the conversation for the next three days.
+
+Collection window ends: ${today}
+Mentions collected: ${totalCount}
+Sentiment split: positive ${pct(posCount)}%, neutral ${pct(neuCount)}%, negative ${pct(negCount)}%
+Channels with data: ${channels.join(", ") || "none"}
+
+Sample mentions (JSON):
+${JSON.stringify(samplePosts, null, 2)}
+
+Return an object with:
+- summary: two or three sentences on where this conversation is heading and why, grounded in the numbers above
+- predictions: exactly three entries, one per day, each with
+    day: "Day 1 (tomorrow)" | "Day 2" | "Day 3"
+    dateLabel: short date for that day
+    predictedSentiment: "positive" | "neutral" | "negative"
+    confidenceScore: 0.0-1.0, lower when the sample is small
+    expectedPosPct / expectedNeuPct / expectedNegPct: integers summing to exactly 100
+    primaryDriver: the specific factor behind that day's shift
+- actionableInsights: three concrete actions a communications team could take
+
+Do not invent data that is not implied by the mentions above. If the sample is thin, say so in the summary and use a low confidenceScore.`;
+
+    const parsed = await chatJson<{
+      summary: string;
+      predictions: any[];
+      actionableInsights: string[];
+    }>({
+      system:
+        "You are a forecasting analyst for public social conversation. You extrapolate carefully from " +
+        "observed data and state uncertainty plainly.",
+      prompt,
+      expectation: "with keys summary, predictions, actionableInsights",
+      temperature: 0.3,
+      maxTokens: 1600,
+    });
+
+    // Normalise: three rows, percentages that add up, clamped confidence.
+    const predictions = (Array.isArray(parsed.predictions) ? parsed.predictions : [])
+      .slice(0, 3)
+      .map((p: any, i: number) => {
+        let pos = Math.max(0, Math.round(Number(p.expectedPosPct) || 0));
+        let neu = Math.max(0, Math.round(Number(p.expectedNeuPct) || 0));
+        let neg = Math.max(0, Math.round(Number(p.expectedNegPct) || 0));
+        const sum = pos + neu + neg;
+        if (sum !== 100) {
+          if (sum === 0) {
+            pos = 33;
+            neu = 34;
+            neg = 33;
+          } else {
+            neu = Math.max(0, 100 - pos - neg);
+            if (pos + neu + neg !== 100) neg = Math.max(0, 100 - pos - neu);
+          }
+        }
+        return {
+          day: typeof p.day === "string" ? p.day : `Day ${i + 1}`,
+          dateLabel:
+            typeof p.dateLabel === "string"
+              ? p.dateLabel
+              : new Date(Date.now() + (i + 1) * 86400000).toLocaleDateString("en-GB", {
+                  day: "numeric",
+                  month: "short",
+                }),
+          predictedSentiment: ["positive", "neutral", "negative"].includes(p.predictedSentiment)
+            ? p.predictedSentiment
+            : "neutral",
+          confidenceScore: Math.min(1, Math.max(0, Number(p.confidenceScore) || 0)),
+          expectedPosPct: pos,
+          expectedNeuPct: neu,
+          expectedNegPct: neg,
+          primaryDriver: typeof p.primaryDriver === "string" ? p.primaryDriver : "",
+        };
+      });
+
+    if (predictions.length === 0) {
+      return res.status(502).json({
+        error: "The model did not return a usable forecast.",
+        reason: "bad-model-response",
+      });
+    }
+
+    res.json({
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      predictions,
+      actionableInsights: Array.isArray(parsed.actionableInsights)
+        ? parsed.actionableInsights.filter((x: any) => typeof x === "string").slice(0, 4)
+        : [],
+      generatedAt: new Date().toISOString(),
+      model: aiSummary().model,
+      basedOn: totalCount,
+    });
   } catch (err: any) {
-    const errStr = String(err);
-    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("quota") || errStr.includes("exceeded")) {
-      logger.warn("[Predict Trend Warning] Gemini API Rate Limit / Quota Exceeded. Activating 2-minute cooldown fallback.");
-      geminiRateLimitActive = true;
-      rateLimitResetTime = Date.now() + 120000; // 2 minutes
-    }
-    logger.info("Status: Mengaktifkan mesin analisis tren global lokal (S.I.P Global Fallback Engine) karena keterbatasan koneksi API.");
-    
-    try {
-      const db = getDB();
-      const allAnalyzed = db.analyzedPosts || [];
-      const allMonitored = db.monitorResults || [];
-      const combined = [...allAnalyzed, ...allMonitored];
-
-      const totalCount = combined.length;
-      const posCount = combined.filter((item: any) => item.sentiment === "positive").length;
-      const neuCount = combined.filter((item: any) => item.sentiment === "neutral").length;
-      const negCount = combined.filter((item: any) => item.sentiment === "negative").length;
-
-      // Calculate percentage base
-      let posPct = totalCount > 0 ? Math.round((posCount / totalCount) * 100) : 55;
-      let neuPct = totalCount > 0 ? Math.round((neuCount / totalCount) * 100) : 30;
-      let negPct = totalCount > 0 ? 100 - posPct - neuPct : 15;
-      if (negPct < 0) negPct = 0;
-
-      // Ensure sum is exactly 100
-      const sum = posPct + neuPct + negPct;
-      if (sum !== 100 && totalCount > 0) {
-        neuPct += (100 - sum);
-      }
-
-      const localPredictions = [
-        {
-          day: "Hari ke-1 (Besok)",
-          dateLabel: new Date(Date.now() + 86400000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
-          predictedSentiment: posPct >= negPct ? (posPct >= neuPct ? "positive" : "neutral") : "negative",
-          confidenceScore: 0.92,
-          expectedPosPct: posPct,
-          expectedNeuPct: neuPct,
-          expectedNegPct: negPct,
-          primaryDriver: "Aktivitas pembicaraan global yang didorong oleh sinyal viral lintas benua di TikTok & Twitter/X, mempercepat eksposur brand Anda ke wilayah internasional."
-        },
-        {
-          day: "Hari ke-2 (Lusa)",
-          dateLabel: new Date(Date.now() + 172800000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
-          predictedSentiment: "neutral",
-          confidenceScore: 0.88,
-          expectedPosPct: Math.max(0, posPct - 3),
-          expectedNeuPct: Math.min(100, neuPct + 6),
-          expectedNegPct: Math.max(0, negPct - 3),
-          primaryDriver: "Stabilisasi dan normalisasi arus informasi internasional. Komunitas global mulai mengonsolidasikan feedback terkait pembaruan layanan/produk."
-        },
-        {
-          day: "Hari ke-3",
-          dateLabel: new Date(Date.now() + 259200000).toLocaleDateString("id-ID", { day: 'numeric', month: 'long' }),
-          predictedSentiment: (posPct + 7) >= negPct ? "positive" : "negative",
-          confidenceScore: 0.91,
-          expectedPosPct: Math.min(100, posPct + 7),
-          expectedNeuPct: Math.max(0, neuPct - 7),
-          expectedNegPct: Math.max(0, negPct),
-          primaryDriver: "Kenaikan sentimen global positif yang diproyeksikan dari wilayah Amerika Utara & Asia-Pasifik, dirangsang oleh kampanye digital koheren dan umpan balik positif dari influencer global."
-        }
-      ];
-
-      // Recalculate percent total to make sure they sum to exactly 100
-      localPredictions.forEach(pred => {
-        const currentSum = pred.expectedPosPct + pred.expectedNeuPct + pred.expectedNegPct;
-        if (currentSum !== 100) {
-          pred.expectedNeuPct += (100 - currentSum);
-        }
-      });
-
-      const primarySentimentLabel = posPct > negPct ? "sangat stabil dengan kecenderungan apresiasi positif global" : "menghadapi tantangan reputasi internasional dan tekanan sentimen negatif";
-
-      res.json({
-        summary: `[Analisis Prediksi Global & Rekomendasi AI] Berdasarkan penelusuran multinasional dari ${totalCount} sinyal internet terbaru, reputasi brand Anda secara global diproyeksikan ${primarySentimentLabel}. Mesin analitis S.I.P mendeteksi koherensi opini publik di berbagai pasar utama dunia yang dapat Anda optimalkan.`,
-        predictions: localPredictions,
-        actionableInsights: [
-          "Luncurkan materi komunikasi terpadu berstandar global untuk merespons umpan balik pasar internasional dan mempertahankan dominasi sentimen positif.",
-          "Koordinasikan tim humas multi-bahasa Anda untuk memantau sebaran sinyal viral global di Twitter/X dan Reddit demi pencegahan krisis reputasi secara dini.",
-          "Gunakan metrik jangkauan global (global reach metrics) untuk mengalokasikan kampanye kreatif bersasaran spesifik di kawasan yang menunjukkan peningkatan sentimen positif signifikan."
-        ]
-      });
-    } catch (fallbackErr: any) {
-      logger.error("Gagal menjalankan fallback prediksi lokal:", fallbackErr);
-      logger.error("Trend prediction failed:", fallbackErr);
-      res.status(500).json({ error: "Trend prediction failed. Please try again." });
-    }
+    logger.warn("[AI] Trend prediction failed:", describeAiFailure(err));
+    res.status(502).json({
+      error: "The forecast could not be generated. The model host did not return a usable answer.",
+      reason: err instanceof AiError ? err.kind : "unknown",
+    });
   }
 });
 

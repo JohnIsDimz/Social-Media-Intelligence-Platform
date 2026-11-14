@@ -25,9 +25,9 @@ Aplikasi S.M.I.P dibangun menggunakan arsitektur modern berkinerja tinggi yang m
 
 ### 3. Mesin Kecerdasan Buatan & Google Search Grounding (Bebas Kredensial API Ribet)
 *   **Tanpa API Key Sosial Media Tambahan**: Mendapatkan API resmi (seperti Twitter Developer, Meta Graph API, TikTok API, dll) sangatlah sulit, mahal, dan membutuhkan verifikasi badan hukum. S.M.I.P memecahkan masalah ini secara revolusioner dengan **tidak mewajibkan** kunci API pihak ketiga tersebut!
-*   **Google GenAI SDK (Gemini 3.5-Flash)**: Mesin AI utama untuk ekstraksi teks, analisis sentimen bernilai numerik (-1 hingga 1), klasifikasi emosi dominan, dan pembuatan laporan otomatis.
+*   **AI gateway (OpenAI-compatible)**: default ke [Sakelar](https://app.sakelar.web.id) dengan model `glm-5.3-flash` — satu kunci untuk semua model. Dipakai untuk analisis sentimen bernilai numerik (-1..1), klasifikasi emosi dominan, dan laporan forecast. Konfigurasi: `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FORMAT`.
 *   **Google Search Grounding (Alternatif Utama API Resmi)**: 
-    *   Sinyal sosial media ditangkap secara global dan riil menggunakan fitur **Google Search Grounding** bawaan Gemini API. Cukup menggunakan kunci `GEMINI_API_KEY` (yang sudah otomatis tersedia di dalam workspace), S.M.I.P akan menelusuri web secara dinamis untuk mengambil diskusi riil teranyar di seluruh platform sasaran.
+    *   Untuk kanal yang tidak punya API publik, S.M.I.P meminta model menelusuri web (search-grounded) dan **hanya menyimpan mention yang benar-benar memuat kata kunci** serta datang dengan URL sumber. Tanpa `AI_API_KEY`, kanal tersebut tetap kosong dan dilaporkan `needs-key` — tidak ada data karangan.
     *   **Anti-404 URL Generator**: Sistem secara dinamis menyaring dan menyusun ulang URL hasil pencarian. Jika tautan mati/tidak valid terdeteksi, sistem secara otomatis mengonstruksi URL pencarian resmi yang valid untuk platform target (seperti pencarian filter X/Twitter, tag Instagram, hasil pencarian YouTube, dll) sehingga pengguna tidak akan menemui halaman kosong atau error 404.
 *   **Reddit Public API (Bebas Autentikasi)**: S.M.I.P memanfaatkan endpoint publik Reddit (`.json`) secara dinamis tanpa kredensial sama sekali untuk menarik postingan teranyar secara instan dan riil.
 
@@ -60,6 +60,24 @@ S.M.I.P dilengkapi dengan integrasi **Browser Notifications API** dan **Service 
 *   **Firestore tertutup**: `firestore.rules` menolak semua akses dari klien (`allow read, write: if false`). Semua akses lewat Admin SDK di server.
 *   **Tanpa dependency rentan**: `npm audit --omit=dev` → **0 vulnerabilities**.
 
+### Penyedia AI
+
+S.M.I.P tidak memakai SDK vendor. Semua fitur AI lewat satu gateway OpenAI-compatible:
+
+| Variabel | Default | Keterangan |
+|---|---|---|
+| `AI_API_KEY` | *(kosong)* | Kunci dari console Sakelar. Tanpa ini semua fitur AI mati dan UI mengatakannya. |
+| `AI_BASE_URL` | `https://api.sakelar.web.id/v1` | `POST /chat/completions`, kompatibel OpenAI |
+| `AI_MODEL` | `glm-5.3-flash` | Slug model apa pun di katalog Sakelar |
+| `AI_FORMAT` | `openai` | `openai` (`/chat/completions`) atau `anthropic` (`/messages`) |
+
+Tiga jalur memakai gateway ini: analisis sentimen per kiriman, forecast tiga hari, dan lookup search-grounded untuk kanal tanpa API publik. Semua berbagi aturan yang sama:
+
+* **Tanpa kunci = fitur mati, bukan hasil palsu.** `/api/predict-trends` menjawab `503` + `reason: "not-configured"`, dan `/api/analyze-url` jatuh ke analisis heuristik lokal yang ditandai di log.
+* **Jawaban hanya dipercaya setelah lolos JSON.** Prosa, jawaban terpotong, atau halaman error HTML diklasifikasikan `bad-response` dan tidak pernah masuk database.
+* **Rate limit 429 memicu cooldown 2 menit** untuk seluruh proses, supaya satu model yang sedang limit tidak menghabiskan kuota lewat retry.
+* **`/api/health` → `ai: { enabled, provider, model }`**, sehingga masalah kunci terlihat tanpa membuka log.
+
 ### Jaringan data (25 kanal)
 
 Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya terbuka:
@@ -68,13 +86,13 @@ Setiap kanal punya cara pengumpulan yang berbeda, dan aplikasi menyatakannya ter
 |---|---|---|
 | **API publik langsung** | Reddit, Mastodon, Bluesky, Hacker News, Google News, Lemmy, Stack Overflow, DEV Community, GitHub, Medium, Vimeo | tidak perlu (GitHub opsional `GITHUB_TOKEN`) |
 | **API ber-kunci** | YouTube, X/Twitter, Twitch | `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET` |
-| **Hanya lewat search grounding** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `GEMINI_API_KEY` |
+| **Hanya lewat search grounding** | TikTok, Instagram, Facebook, LinkedIn, Threads, Telegram, Discord, Pinterest, Snapchat, WhatsApp, situs ulasan/forum | `AI_API_KEY` |
 
 **Audit jaringan otomatis.** `GET /api/channel-health` (alias `GET /api/data-sources`) benar-benar memanggil setiap endpoint lalu melaporkan status per kanal: `public`, `configured`, `grounding`, `needs-key`, `closed`, `down`, atau `unverified`. Hasil di-cache 60 detik; panggil dengan `?force=1` untuk menguji ulang. Dialog **Data sources** di UI menampilkan hasil yang sama, lengkap dengan logo tiap platform dan tombol **test all**.
 
 Deteksi egress: sebelum menyalahkan API, server memeriksa apakah host-nya sendiri punya internet (dua host independen). Kalau tidak ada internet, semua kanal ditandai `unverified` — bukan `down`, karena itu masalah hosting, bukan API yang mati.
 
-**Catatan hasil audit di sandbox pengembangan ini:** egress HTTP keluar dari sandbox hanya diizinkan ke domain tertentu, sehingga `reddit.com`, `hn.algolia.com`, `news.google.com`, `public.api.bsky.app`, `stackexchange.com`, `dev.to`, dan lainnya mengembalikan `ECONNRESET`; `api.github.com` mengembalikan `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (intercept TLS). Artinya **di sandbox ini dashboard tetap kosong**, sedangkan di host biasa (VPS, Cloud Run, Railway, laptop) kolektor publik akan langsung berjalan tanpa kunci API apa pun.
+**Catatan hasil audit di sandbox pengembangan ini:** egress HTTP keluar dari sandbox hanya diizinkan untuk domain tertentu (allowlist sandbox menolak `api.sakelar.web.id` saat TLS handshake), sehingga `reddit.com`, `hn.algolia.com`, `news.google.com`, `public.api.bsky.app`, `stackexchange.com`, `dev.to`, dan lainnya mengembalikan `ECONNRESET`; `api.github.com` mengembalikan `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (intercept TLS). Artinya **di sandbox ini dashboard tetap kosong**, sedangkan di host biasa (VPS, Cloud Run, Railway, laptop) kolektor publik akan langsung berjalan tanpa kunci API apa pun.
 
 **Titik mati yang ditemukan dan sudah diperbaiki:**
 * Database gagal boot bila native binding `better-sqlite3` tidak tersedia untuk versi Node yang dipakai (persis yang terjadi di produksi/container baru). Diganti adapter `node:sqlite` (`src/lib/sqlite.ts`) yang mengimplementasikan `prepare/run/all/get/exec/pragma/transaction/close`, jadi server tidak lagi bergantung pada build native.
@@ -95,16 +113,16 @@ Konsekuensinya:
 | Sumber mengembalikan hasil | Hanya mention yang benar-benar tersimpan yang dihitung |
 | `/api/predict-trends` tidak tersedia | UI menandai forecast sebagai *sample*, bukan prediksi |
 
-`GET /api/data-sources` menjelaskan sumber mana yang aktif, sehingga tampilan kosong tidak pernah salah diartikan sebagai aplikasi rusak. Untuk melihat data, setidaknya satu sumber harus berfungsi: `GEMINI_API_KEY` (Google Search grounding, mencakup kanal tertutup), `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, atau akses jaringan ke Reddit.
+`GET /api/data-sources` menjelaskan sumber mana yang aktif, sehingga tampilan kosong tidak pernah salah diartikan sebagai aplikasi rusak. Untuk melihat data, setidaknya satu sumber harus berfungsi: `AI_API_KEY` (search-grounded lookup untuk kanal tertutup), `YOUTUBE_API_KEY`, `TWITTER_BEARER_TOKEN`, atau akses jaringan ke Reddit.
 
 ### Autentikasi API (opsional, wajib saat deploy)
 Set `API_AUTH_TOKEN` untuk mewajibkan header `Authorization: Bearer <token>` pada setiap `POST`/`PUT`/`PATCH`/`DELETE` di bawah `/api`. Rute `GET` tetap publik agar dashboard dan uptime check tidak perlu menyimpan token. Perbandingan token memakai `timingSafeEqual`. Bila variabel kosong (mode pengembangan lokal), auth dimatikan.
 
 ### Variabel lingkungan
-Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (Gemini, port, CORS, trust proxy, Firestore, dan sumber data opsional).
+Lihat [`.env.example`](.env.example) — semua variabel terdokumentasi di sana (AI gateway, port, CORS, trust proxy, Firestore, dan sumber data opsional).
 
 ### Health check
-`GET /api/health` → `{ status, uptimeSeconds, version, geminiConfigured, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
+`GET /api/health` → `{ status, uptimeSeconds, version, ai, channels, collectors }`, dengan `collectors` = `{ grounding, reddit, youtube, twitter }`.
 `GET /api/channel-health` → status per kanal (lihat bagian *Jaringan data*); mengembalikan `503` hanya bila ada kanal `down` sementara host-nya sendiri punya internet. Cocok untuk load balancer dan uptime monitor.
 
 ## 💻 Cara Menjalankan Secara Lokal (Local Development)
@@ -115,8 +133,8 @@ Jika Anda ingin mencoba menjalankan atau memodifikasi aplikasi ini di komputer l
 # 1. Pasang semua dependensi
 npm install
 
-# 2. Buat file .env di folder utama dan isi kunci API Gemini
-# GEMINI_API_KEY=Kunci_API_Anda_Di_Sini
+# 2. Buat file .env dan isi kunci AI gateway (Sakelar)
+# AI_API_KEY=kunci-api-anda
 
 # 3. Jalankan server lokal dalam mode pengembangan
 npm run dev

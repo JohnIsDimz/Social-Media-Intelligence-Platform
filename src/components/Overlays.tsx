@@ -245,8 +245,17 @@ export interface ChannelHealth {
   detail: string;
 }
 
+export interface AiInfo {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  baseUrl?: string;
+  format?: string;
+}
+
 export interface DataSources {
   grounding: boolean;
+  ai?: AiInfo;
   /** Whether this host can reach the internet at all. */
   egress?: boolean;
   channels: Record<string, ChannelHealth>;
@@ -369,6 +378,22 @@ export function DataSourcesDialog({
           </div>
         </div>
 
+        {sources?.ai && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-hair bg-paper-2/50 px-5 py-2.5 text-[12px]">
+            <span className="font-medium text-ink-2">AI</span>
+            {sources.ai.enabled ? (
+              <>
+                <span className="text-ink">{sources.ai.model}</span>
+                <span className="text-ink-3">via {sources.ai.provider}</span>
+              </>
+            ) : (
+              <span className="text-amber">
+                no key set — AI analysis and search-grounded lookup are off
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-4 border-b border-hair px-5 py-2" role="tablist" aria-label="Filter by status">
           {(
             [
@@ -436,7 +461,7 @@ export function DataSourcesDialog({
             <p>
               No data is ever invented. A channel shows zero until a source above actually returns
               something. “search only” means the platform has no public read API and is reachable
-              only through Google Search grounding (<code>GEMINI_API_KEY</code>).
+              only through the AI provider’s search-grounded lookup (<code>AI_API_KEY</code>).
             </p>
           </div>
         </div>
